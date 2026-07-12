@@ -1,5 +1,6 @@
 using System;
 using Halo.Interop;
+using Halo.Rendering;
 using Halo.Shell;
 
 namespace Halo;
@@ -9,8 +10,25 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        var window = new NotchWindow();
-        window.Show();
-        Win32.RunMessageLoop();
+        try
+        {
+            var window = new NotchWindow();
+            window.Show();
+
+            var host = new CompositionHost(window.Hwnd);
+            var pill = new GlassPill(host.Compositor);
+            pill.SetSize(220, 34);
+            pill.SetCornerRadius(17);
+            host.Root.Children.InsertAtTop(pill.Visual);
+
+            Win32.RunMessageLoop();
+        }
+        catch (Exception ex)
+        {
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-crash.log"),
+                ex.ToString());
+            throw;
+        }
     }
 }
