@@ -19,8 +19,10 @@ internal static class Program
             var pill = new GlassPill(host.Compositor);
             pill.SetSize(460, 140);
             pill.SetCornerRadius(30);
-            pill.SetGlass(0.4f);
+            pill.SetGlass(0.15f);
             host.Root.Children.InsertAtTop(pill.Visual);
+
+            window.ShapeToPill(50, 0, 460, 140, 30);
 
             Win32.RunMessageLoop();
         }

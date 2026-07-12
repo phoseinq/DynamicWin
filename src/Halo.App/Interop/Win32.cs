@@ -92,6 +92,46 @@ internal static class Win32
     [DllImport("kernel32.dll")]
     public static extern IntPtr GetModuleHandle(string? name);
 
+    public const int WCA_ACCENT_POLICY = 19;
+    public const int ACCENT_ENABLE_ACRYLICBLURBEHIND = 4;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct AccentPolicy
+    {
+        public int AccentState;
+        public int AccentFlags;
+        public uint GradientColor;
+        public int AnimationId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WindowCompositionAttributeData
+    {
+        public int Attribute;
+        public IntPtr Data;
+        public int SizeOfData;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateRoundRectRgn(int left, int top, int right, int bottom, int widthEllipse, int heightEllipse);
+
+    [DllImport("user32.dll")]
+    public static extern int SetWindowRgn(IntPtr hwnd, IntPtr hRgn, bool redraw);
+
+    public static void EnableAcrylic(IntPtr hwnd, uint gradientColor)
+    {
+        var accent = new AccentPolicy { AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND, GradientColor = gradientColor };
+        int size = Marshal.SizeOf(accent);
+        IntPtr ptr = Marshal.AllocHGlobal(size);
+        Marshal.StructureToPtr(accent, ptr, false);
+        var data = new WindowCompositionAttributeData { Attribute = WCA_ACCENT_POLICY, Data = ptr, SizeOfData = size };
+        SetWindowCompositionAttribute(hwnd, ref data);
+        Marshal.FreeHGlobal(ptr);
+    }
+
     public static void RunMessageLoop()
     {
         while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)

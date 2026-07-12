@@ -47,6 +47,13 @@ internal sealed class NotchWindow
         Win32.ShowWindow(Hwnd, Win32.SW_SHOWNOACTIVATE);
     }
 
+    public void ShapeToPill(int left, int top, int w, int h, int radius)
+    {
+        var rgn = Win32.CreateRoundRectRgn(left, top, left + w, top + h, radius * 2, radius * 2);
+        Win32.SetWindowRgn(Hwnd, rgn, true);
+        Win32.EnableAcrylic(Hwnd, 0x400A0A0A);
+    }
+
     private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == Win32.WM_DESTROY)
