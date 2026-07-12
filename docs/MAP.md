@@ -15,6 +15,11 @@ Each doc is small and self-contained. Don't load them all. Use this table to jum
 | [08-config-packaging.md](08-config-packaging.md) | Config file, autostart, single-instance, packaging, comment-strip-before-push | P6, or shipping |
 | [09-reference-dynamicwin.md](09-reference-dynamicwin.md) | DynamicWin findings: why it's low-res (Skia), widget model, media done right, verified toolchain | Before P5 media, or "why WinUI not Skia" |
 
+## Plans (executable, step-by-step)
+| Plan | Covers |
+|------|--------|
+| [plans/2026-07-13-p0-p1-shell.md](plans/2026-07-13-p0-p1-shell.md) | P0+P1: layered window, system-Composition host, glass pill, springs, anti-banding |
+
 ## Routing shortcuts
 - **"Make it smoother / glassier"** → 04, then 02.
 - **"Add an app"** → 03 (contract), 07 (which phase).

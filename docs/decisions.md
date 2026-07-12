@@ -1,9 +1,15 @@
 # Decisions
 
 ## Locked
-- **Stack:** C# + WinUI 3 (Windows App SDK) + **Composition API** for shell animation and glass.
+- **Stack:** C# + .NET 9 + **Composition API** for shell animation and glass.
   Chosen because compositor-thread animation runs at the monitor's real refresh rate and real
-  acrylic blur fixes the "not smooth / low-res LED look / not glassy" complaints about DynamicWin.
+  backdrop blur fixes the "not smooth / low-res LED look / not glassy" complaints about DynamicWin.
+- **Shell compositor = system `Windows.UI.Composition` on a Win32 layered tool-window** (via
+  `CreateDesktopWindowTarget` + `CreateHostBackdropBrush`), NOT a WinUI 3 XAML `Window`. Reason: a
+  XAML Window can't do clean per-pixel transparency around the pill; the layered-window + system
+  Composition path is the proven way to get a transparent frosted-glass overlay. WinUI 3 XAML is
+  used later only as **XAML Islands** for rich widget content (bars/labels/buttons), if needed.
+  Toolchain (WinUI build) already verified working on this machine anyway — see 09.
 - **Claude Code bar scope:** *Everything* — account usage limit (5h + weekly), session context,
   live activity, and Cancel.
 - **Cancel = real stop.** The button interrupts the running Claude Code prompt, not just closes the
