@@ -17,8 +17,9 @@ internal static class Program
 
             var host = new CompositionHost(window.Hwnd);
             var pill = new GlassPill(host.Compositor);
-            pill.SetSize(220, 34);
-            pill.SetCornerRadius(17);
+            pill.SetSize(460, 140);
+            pill.SetCornerRadius(30);
+            pill.SetGlass(0.4f);
             host.Root.Children.InsertAtTop(pill.Visual);
 
             Win32.RunMessageLoop();
