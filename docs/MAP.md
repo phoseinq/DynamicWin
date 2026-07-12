@@ -13,6 +13,7 @@ Each doc is small and self-contained. Don't load them all. Use this table to jum
 | [06-claude-code-hooks.md](06-claude-code-hooks.md) | `status.json` schema, hook events, script sketches, settings snippet | Wiring the CC side (hooks + status file) |
 | [07-build-phases.md](07-build-phases.md) | P0→P6 order + done-criteria per phase | "Where are we / what's next" |
 | [08-config-packaging.md](08-config-packaging.md) | Config file, autostart, single-instance, packaging, comment-strip-before-push | P6, or shipping |
+| [09-reference-dynamicwin.md](09-reference-dynamicwin.md) | DynamicWin findings: why it's low-res (Skia), widget model, media done right, verified toolchain | Before P5 media, or "why WinUI not Skia" |
 
 ## Routing shortcuts
 - **"Make it smoother / glassier"** → 04, then 02.
