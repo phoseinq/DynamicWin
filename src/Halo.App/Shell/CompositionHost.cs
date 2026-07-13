@@ -24,7 +24,7 @@ internal sealed class CompositionHost
         try
         {
             var iid = typeof(ICompositorDesktopInterop).GUID;
-            int hr = Marshal.QueryInterface(inspectable, ref iid, out var interopPtr);
+            int hr = Marshal.QueryInterface(inspectable, in iid, out var interopPtr);
             if (hr < 0)
                 throw new InvalidOperationException($"QI ICompositorDesktopInterop failed 0x{hr:X8}");
 

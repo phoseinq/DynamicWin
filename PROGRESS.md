@@ -14,12 +14,16 @@ Goal: smooth glass notch for Windows (Dynamic Island for desktop). C# + .NET 9 +
   - **Real frosted acrylic = `ACCENT_ENABLE_ACRYLICBLURBEHIND` + rounded `SetWindowRgn`** — verified
     against a colorful backdrop (desktop genuinely blurred inside the pill). User chose this path.
 
-## Next (remaining P1)
-- Refactor to **window = pill** model: window sized to current pill rect, rounded region, acrylic on.
-- Task 5: state machine (Idle/Peek/Expanded) + hover hit-test (WndProc WM_MOUSEMOVE / WM_MOUSELEAVE).
-- Task 6: animated expand/collapse (window bounds + region + composition tint per frame). Tune the
-  spring feel live on the 144Hz panel; watch for SetWindowRgn flicker (fallback in decisions.md).
-- Task 7: grain (LoadedImageSurface noise) to kill banding; top highlight already in.
+- P1 DONE: **window = pill** model. Hover (GetCursorPos polling, robust to resize churn) → spring
+  expand/collapse via `SetWindowPos` + rounded region each frame (DispatcherQueueTimer 8ms).
+  `SetWindowRgn`-shrink ghost fixed by animating window bounds instead. Tint 0.9→0.2 with progress.
+  **Top corners square + flush to screen top, bottom corners rounded** (CombineRgn RGN_OR); acrylic
+  gradient set to 0 (no dark halo). Both states verified by screenshot over a colorful backdrop.
+
+## Next
+- Live-tune spring feel on the 144Hz panel (EaseOutBack c1, DurationSeconds in NotchController).
+- Task 7 grain (LoadedImageSurface noise) — deferred; acrylic frosting already looks clean, add only
+  if banding shows.
 
 Then P2 widgets → P3/P4 Claude Code → P5 more widgets → P6 ship. See `docs/07-build-phases.md`.
 
