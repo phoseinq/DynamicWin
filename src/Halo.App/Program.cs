@@ -9,6 +9,9 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
+        using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
+        if (!created) return;
+
         try
         {
             var notch = new LayeredNotch();
