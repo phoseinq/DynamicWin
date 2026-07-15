@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Halo.App", "src\Halo.App\Ha
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Halo.Tests", "tests\Halo.Tests\Halo.Tests.csproj", "{5F246822-CC7C-4909-A80D-FDD271F7308D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Halo.Hooks", "src\Halo.Hooks\Halo.Hooks.csproj", "{9FA9150C-C7E3-4E31-958D-C86419F89182}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,6 +45,18 @@ Global
 		{5F246822-CC7C-4909-A80D-FDD271F7308D}.Release|x64.Build.0 = Release|Any CPU
 		{5F246822-CC7C-4909-A80D-FDD271F7308D}.Release|x86.ActiveCfg = Release|Any CPU
 		{5F246822-CC7C-4909-A80D-FDD271F7308D}.Release|x86.Build.0 = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|x64.Build.0 = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Debug|x86.Build.0 = Debug|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|x64.ActiveCfg = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|x64.Build.0 = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|x86.ActiveCfg = Release|Any CPU
+		{9FA9150C-C7E3-4E31-958D-C86419F89182}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -50,5 +64,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{B2DA8E05-575B-410A-ACA1-AA881D1574CF} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{5F246822-CC7C-4909-A80D-FDD271F7308D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{9FA9150C-C7E3-4E31-958D-C86419F89182} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

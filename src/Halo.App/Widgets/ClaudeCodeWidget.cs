@@ -75,12 +75,15 @@ internal sealed class ClaudeCodeWidget : IWidget
         int barW = w - pad * 2;
         double ctx = ContextFrac(st);
         DrawBar(g, pad, y, barW, "Session context", $"{ctx * 100:0}%", ctx, Blue, a, body, small);
-        y += 42;
-        double five = st?.Usage?.FiveHourPct ?? 0;
-        DrawBar(g, pad, y, barW, "5-hour limit", ResetLabel(five, st?.Usage?.FiveHourResetsAt), five, LimitColor(five), a, body, small);
-        y += 42;
-        double week = st?.Usage?.WeeklyPct ?? 0;
-        DrawBar(g, pad, y, barW, "Weekly limit", $"{week * 100:0}%", week, LimitColor(week), a, body, small);
+        if (st?.Usage != null)
+        {
+            y += 42;
+            double five = st.Usage.FiveHourPct;
+            DrawBar(g, pad, y, barW, "5-hour limit", ResetLabel(five, st.Usage.FiveHourResetsAt), five, LimitColor(five), a, body, small);
+            y += 42;
+            double week = st.Usage.WeeklyPct;
+            DrawBar(g, pad, y, barW, "Weekly limit", $"{week * 100:0}%", week, LimitColor(week), a, body, small);
+        }
 
         DrawCancel(g, w, h, a, body);
     }
