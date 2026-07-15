@@ -20,13 +20,22 @@ architecture truth is `docs/decisions.md` (it supersedes the older Composition-b
 - P1 glass + hover-spring expand/collapse; square top flush to screen, rounded bottom; no dark halo.
 - **P2 pivot (2026-07-15):** dropped `Windows.UI.Composition` (couldn't host bitmap content without
   the missing `LoadedImageSurface` / heavy D2D). Rewrote shell as `UpdateLayeredWindow` + GDI+.
-  Verified: real acrylic frosts the desktop through ULW, and content renders **crisp** — high-quality
-  **Segoe Fluent Icons** glyphs + Segoe UI text. Both states screenshot-verified.
+  Real acrylic frosts the desktop through ULW; content renders **crisp** (Segoe Fluent Icons + text).
+- **P3 Claude Code panel + hooks (2026-07-15):** DONE, verified end-to-end.
+  - Notch side: `Widgets/IWidget.cs` contract; `Widgets/ClaudeCodeWidget.cs` (green/amber/dim state
+    dot, "Claude Code" + activity line, Session-context/5h/Weekly bars, top-right Cancel button);
+    `ClaudeCode/Status.cs` (`StatusStore` FileSystemWatcher on `~/.claude/notch/status.json`, version
+    poll → live re-render); click via `GetAsyncKeyState` polling in `NotchController`.
+  - `src/Halo.Hooks/` — helper the CC hooks call: writes status.json per event (state/tool/prompt/
+    context-from-transcript/pid/consolePid), and `cancel <pid>` = AttachConsole + Ctrl+C.
+  - `hooks/install-hooks.ps1` publishes the helper to `%LOCALAPPDATA%\Halo\hooks` and merges 7 hooks
+    into `~/.claude/settings.json`. **User must run it** (their live CC config).
+  - Verified: helper writes status.json; panel reflects state changes **live** (idle→working shot).
 
 ## Next
-- Formalize the widget contract: `IWidget` (collapsed + expanded draw) + `WidgetHost`, so content is
-  pluggable instead of hardcoded in `LayeredNotch.DrawContent`. (docs/03)
-- Then **P3/P4 Claude Code panel** — status file + hooks + usage bars + real Cancel (docs/05, 06).
+- **Run `hooks/install-hooks.ps1`** to wire real Claude Code sessions (not yet installed).
+- **Usage-limit data (5h/weekly)** still best-effort/unpopulated — the one open data source (no clean
+  API). Panel hides those bars when `usage` absent; context bar is real. Refine later.
 - Live-tune spring feel on the 144Hz panel (`EaseOutBack` c1, `DurationSeconds`).
 - P5 Now Playing / Volume / Battery widgets. P6 config + autostart + package + comment-strip.
 
