@@ -10,8 +10,6 @@ namespace Halo.Shell;
 
 internal sealed class LayeredNotch
 {
-    private static readonly string PlayGlyph = char.ConvertFromUtf32(0xE768);
-
     private Win32.WndProc _wndProc = null!;
     private int _workLeft, _workTop, _workWidth;
 
@@ -51,7 +49,7 @@ internal sealed class LayeredNotch
         Win32.EnableAcrylic(Hwnd, 0x00000000);
     }
 
-    public void Render(int w, int h, int radius, int tintAlpha, float contentFade)
+    public void Render(int w, int h, int radius, int tintAlpha, float contentFade, Action<Graphics, int, int, float> drawContent)
     {
         using var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -67,25 +65,9 @@ internal sealed class LayeredNotch
             using (var hl = new Pen(Color.FromArgb(32, 255, 255, 255), 1f))
                 g.DrawLine(hl, radius, 1, w - radius, 1);
 
-            if (contentFade > 0.01f)
-                DrawContent(g, w, h, contentFade);
+            drawContent(g, w, h, contentFade);
         }
         Blit(bmp, w, h);
-    }
-
-    private static void DrawContent(Graphics g, int w, int h, float fade)
-    {
-        int a = (int)(255 * fade);
-        using var iconFont = new Font("Segoe Fluent Icons", 34f, GraphicsUnit.Pixel);
-        using var titleFont = new Font("Segoe UI Semibold", 30f, GraphicsUnit.Pixel);
-        using var subFont = new Font("Segoe UI", 18f, GraphicsUnit.Pixel);
-        using var white = new SolidBrush(Color.FromArgb(a, 255, 255, 255));
-        using var dim = new SolidBrush(Color.FromArgb((int)(a * 0.7f), 255, 255, 255));
-
-        float cx = w / 2f, cy = h / 2f;
-        g.DrawString(PlayGlyph, iconFont, white, cx - 150, cy - 22);
-        g.DrawString("Halo", titleFont, white, cx - 100, cy - 28);
-        g.DrawString(DateTime.Now.ToString("HH:mm"), subFont, dim, cx - 98, cy + 8);
     }
 
     private void Blit(Bitmap bmp, int w, int h)

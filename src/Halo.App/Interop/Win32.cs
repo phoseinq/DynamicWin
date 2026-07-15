@@ -201,6 +201,11 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool GetCursorPos(out POINT p);
 
+    public const int VK_LBUTTON = 0x01;
+
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
     public static void EnableAcrylic(IntPtr hwnd, uint gradientColor)
     {
         var accent = new AccentPolicy { AccentState = ACCENT_ENABLE_ACRYLICBLURBEHIND, GradientColor = gradientColor };

@@ -1,5 +1,7 @@
 using System;
+using Halo.ClaudeCode;
 using Halo.Interop;
+using Halo.Widgets;
 using Windows.System;
 
 namespace Halo.Shell;
@@ -12,14 +14,21 @@ internal sealed class NotchController
     private const float DurationSeconds = 0.28f;
 
     private readonly LayeredNotch _notch;
+    private readonly StatusStore _store;
+    private readonly IWidget _widget;
     private readonly DispatcherQueueTimer _timer;
     private readonly int _cl, _ct, _el, _et;
 
     private float _progress;
+    private int _statusVersion = -1;
+    private bool _lastMouseDown;
 
     public NotchController(LayeredNotch notch)
     {
         _notch = notch;
+        _store = new StatusStore();
+        _widget = new ClaudeCodeWidget(_store, Cancel);
+
         _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
         _ct = notch.WorkTop;
         _el = notch.WorkLeft + (notch.WorkWidth - ExpandedW) / 2;
@@ -45,11 +54,28 @@ internal sealed class NotchController
         int dir = hovered ? 1 : -1;
         float step = 0.008f / DurationSeconds;
         float next = Math.Clamp(_progress + dir * step, 0f, 1f);
-        if (next != _progress)
+
+        PollClick(p);
+
+        if (next != _progress || _store.Version != _statusVersion)
         {
             _progress = next;
+            _statusVersion = _store.Version;
             Apply(_progress);
         }
+    }
+
+    private void PollClick(Win32.POINT p)
+    {
+        bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
+        if (down && !_lastMouseDown && _progress > 0.9f)
+        {
+            var r = _widget.ExpandedButton(ExpandedW, ExpandedH);
+            int bx = _el + (int)r.X, by = _et + (int)r.Y;
+            if (p.X >= bx && p.X < bx + r.Width && p.Y >= by && p.Y < by + r.Height)
+                _widget.ActivateButton();
+        }
+        _lastMouseDown = down;
     }
 
     private static bool InRect(Win32.POINT p, int left, int top, int w, int h)
@@ -62,8 +88,14 @@ internal sealed class NotchController
         int h = (int)Lerp(CollapsedH, ExpandedH, e);
         int r = (int)Lerp(CollapsedR, ExpandedR, e);
         int tint = (int)Lerp(TintCollapsed, TintExpanded, t);
-        float contentFade = Math.Clamp((t - 0.45f) / 0.55f, 0f, 1f);
-        _notch.Render(w, h, r, tint, contentFade);
+        float fade = Math.Clamp((t - 0.45f) / 0.55f, 0f, 1f);
+        _notch.Render(w, h, r, tint, fade, _widget.DrawContent);
+    }
+
+    private void Cancel()
+    {
+        var pid = _store.Current?.Pid ?? 0;
+        if (pid > 0) CcCancel.Request(pid);
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
