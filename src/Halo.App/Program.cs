@@ -1,6 +1,5 @@
 using System;
 using Halo.Interop;
-using Halo.Rendering;
 using Halo.Shell;
 
 namespace Halo;
@@ -12,16 +11,9 @@ internal static class Program
     {
         try
         {
-            var window = new NotchWindow();
-            window.Show();
-
-            var host = new CompositionHost(window.Hwnd);
-            var pill = new GlassPill(host.Compositor);
-            host.Root.Children.InsertAtTop(pill.Visual);
-
-            window.EnableAcrylicGlass();
-            _ = new NotchController(window, pill);
-
+            var notch = new LayeredNotch();
+            notch.Show();
+            _ = new NotchController(notch);
             Win32.RunMessageLoop();
         }
         catch (Exception ex)

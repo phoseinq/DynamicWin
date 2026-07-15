@@ -1,6 +1,5 @@
 using System;
 using Halo.Interop;
-using Halo.Rendering;
 using Windows.System;
 
 namespace Halo.Shell;
@@ -9,27 +8,26 @@ internal sealed class NotchController
 {
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
     private const int ExpandedW = 560, ExpandedH = 220, ExpandedR = 30;
-    private const float TintCollapsed = 0.9f, TintExpanded = 0.2f;
+    private const int TintCollapsed = 235, TintExpanded = 60;
     private const float DurationSeconds = 0.28f;
 
-    private readonly NotchWindow _window;
-    private readonly GlassPill _pill;
+    private readonly LayeredNotch _notch;
     private readonly DispatcherQueueTimer _timer;
     private readonly int _cl, _ct, _el, _et;
 
     private float _progress;
 
-    public NotchController(NotchWindow window, GlassPill pill)
+    public NotchController(LayeredNotch notch)
     {
-        _window = window;
-        _pill = pill;
-        _cl = window.WorkLeft + (window.WorkWidth - CollapsedW) / 2;
-        _ct = window.WorkTop;
-        _el = window.WorkLeft + (window.WorkWidth - ExpandedW) / 2;
-        _et = window.WorkTop;
+        _notch = notch;
+        _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
+        _ct = notch.WorkTop;
+        _el = notch.WorkLeft + (notch.WorkWidth - ExpandedW) / 2;
+        _et = notch.WorkTop;
 
         Apply(0f);
 
+        Dispatcher.Ensure();
         var dq = DispatcherQueue.GetForCurrentThread();
         _timer = dq.CreateTimer();
         _timer.Interval = TimeSpan.FromMilliseconds(8);
@@ -63,8 +61,9 @@ internal sealed class NotchController
         int w = (int)Lerp(CollapsedW, ExpandedW, e);
         int h = (int)Lerp(CollapsedH, ExpandedH, e);
         int r = (int)Lerp(CollapsedR, ExpandedR, e);
-        _window.SetBounds(w, h, r);
-        _pill.SetGlass(Lerp(TintCollapsed, TintExpanded, t));
+        int tint = (int)Lerp(TintCollapsed, TintExpanded, t);
+        float contentFade = Math.Clamp((t - 0.45f) / 0.55f, 0f, 1f);
+        _notch.Render(w, h, r, tint, contentFade);
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;
