@@ -251,6 +251,53 @@ public sealed class CodexRolloutTests
         Assert.Equal("working", store.Current.State);
     }
 
+    [Fact]
+    public void Polling_ExpiresFreshRolloutWithoutFilesystemWork()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteRollout(temp.Sessions, "expiring", "Codex Desktop", now,
+            EventAt(now, "task_started", "\"model_context_window\":353400"));
+        var parseCount = 0;
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false,
+            parseRollout: path =>
+            {
+                Interlocked.Increment(ref parseCount);
+                return CodexRollout.Parse(path);
+            },
+            clock: () => now);
+        var initialVersion = store.Version;
+        var initialParseCount = parseCount;
+
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+
+        now = now.AddSeconds(31);
+
+        Assert.Null(store.Current);
+        Assert.True(store.Version > initialVersion);
+        Assert.Equal(initialParseCount, parseCount);
+    }
+
+    [Fact]
+    public void Polling_FallsBackToCliWhenDesktopProcessExits()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        var livePids = new HashSet<int> { 101, 202 };
+        WriteStatus(temp.Status, "desktop", "working", now.AddMinutes(-5), pid: 101);
+        WriteStatus(temp.Status, "cli", "working", now.AddMinutes(-5), pid: 202);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, livePids.Contains, watchFiles: false,
+            clock: () => now);
+        var initialVersion = store.Version;
+
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+
+        livePids.Remove(101);
+
+        Assert.Equal(CodexSurface.Cli, store.Current!.Source);
+        Assert.True(store.Version > initialVersion);
+    }
+
     private static CodexSnapshot Snapshot(CodexSurface source, DateTimeOffset updatedAt, bool alive) => new(
         source, "working", null, null, null, null, null, 0, 0, 0, 0, 0, null, null, updatedAt, alive);
 

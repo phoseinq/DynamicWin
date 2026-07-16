@@ -282,6 +282,7 @@ internal sealed class CodexStatusStore : IDisposable
     private readonly string _sessionsDirectory;
     private readonly Func<int, bool> _processAlive;
     private readonly Func<string, CodexSnapshot?> _parseRollout;
+    private readonly Func<DateTimeOffset> _clock;
     private readonly object _workGate = new();
     private readonly object _publicationGate = new();
     private readonly object _scheduleGate = new();
@@ -293,24 +294,31 @@ internal sealed class CodexStatusStore : IDisposable
     private CodexSnapshot? _cliStatus;
     private CodexSnapshot? _desktopRollout;
     private CodexSnapshot? _cliRollout;
+    private CodexSnapshot? _desktopCandidate;
+    private CodexSnapshot? _cliCandidate;
     private string? _desktopRolloutPath;
     private string? _cliRolloutPath;
     private DateTime _desktopRolloutWriteTime;
     private DateTime _cliRolloutWriteTime;
     private CodexSnapshot? _current;
     private int _version;
+    private long _publicationGeneration;
     private bool _pendingStatusReload;
     private bool _pendingFullRescan;
     private volatile bool _disposed;
 
     internal CodexSnapshot? Current
     {
-        get { lock (_publicationGate) return _current; }
+        get => ReevaluateCurrent();
     }
 
     internal int Version
     {
-        get { lock (_publicationGate) return _version; }
+        get
+        {
+            ReevaluateCurrent();
+            lock (_publicationGate) return _version;
+        }
     }
 
     internal CodexStatusStore()
@@ -327,12 +335,14 @@ internal sealed class CodexStatusStore : IDisposable
         string sessionsDirectory,
         Func<int, bool> processAlive,
         bool watchFiles,
-        Func<string, CodexSnapshot?>? parseRollout = null)
+        Func<string, CodexSnapshot?>? parseRollout = null,
+        Func<DateTimeOffset>? clock = null)
     {
         _statusDirectory = statusDirectory;
         _sessionsDirectory = sessionsDirectory;
         _processAlive = processAlive;
         _parseRollout = parseRollout ?? CodexRollout.Parse;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
         Directory.CreateDirectory(_statusDirectory);
         Directory.CreateDirectory(_sessionsDirectory);
         _reloadTimer = new Timer(_ => ProcessScheduledReload(), null, Timeout.Infinite, Timeout.Infinite);
@@ -462,17 +472,52 @@ internal sealed class CodexStatusStore : IDisposable
             if (_disposed)
                 return;
 
-            var now = DateTimeOffset.UtcNow;
-            var next = Select(
-                Merge(_desktopStatus, _desktopRollout, now),
-                Merge(_cliStatus, _cliRollout, now),
-                now);
+            var now = _clock();
+            var desktopCandidate = Merge(_desktopStatus, _desktopRollout, now);
+            var cliCandidate = Merge(_cliStatus, _cliRollout, now);
+            var next = Select(desktopCandidate, cliCandidate, now);
             lock (_publicationGate)
             {
                 if (_disposed)
                     return;
+                _desktopCandidate = desktopCandidate;
+                _cliCandidate = cliCandidate;
                 _current = next;
                 _version++;
+                _publicationGeneration++;
+            }
+        }
+    }
+
+    private CodexSnapshot? ReevaluateCurrent()
+    {
+        while (true)
+        {
+            CodexSnapshot? desktop;
+            CodexSnapshot? cli;
+            long generation;
+            lock (_publicationGate)
+            {
+                desktop = _desktopCandidate;
+                cli = _cliCandidate;
+                generation = _publicationGeneration;
+            }
+
+            desktop = RefreshProcessAlive(desktop);
+            cli = RefreshProcessAlive(cli);
+            var next = Select(desktop, cli, _clock());
+
+            lock (_publicationGate)
+            {
+                if (generation != _publicationGeneration)
+                    continue;
+
+                if (!Equals(_current, next))
+                {
+                    _current = next;
+                    _version++;
+                }
+                return _current;
             }
         }
     }
