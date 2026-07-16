@@ -32,12 +32,13 @@ Hook events → fields:
 | `tool-done` | context update from transcript |
 | `notify` | `state=waiting_input`, `message` = what Claude asks (truncated 160) |
 | `pre-compact` | `state=compacting`, `startedAt`=now (drives the elapsed timer) |
+| `post-compact` | `compactedAt`=now; `trigger=auto` → `state=working` (mid-turn), else `state=idle`; context update |
 | `stop` | `state=idle`, clears `currentTool`/`startedAt`/`message`, context update |
 | `session-end` | same as stop |
 
-Compact end has no dedicated hook: Claude Code fires **`SessionStart` with `source=compact`**
-when the session restarts after compaction — the hook exe detects that and writes
-`compactedAt`=now (plus the normal `state=idle`).
+Compact end has two real edges: the **`PostCompact` hook** (Claude Code ≥2.1.x) and
+**`SessionStart` with `source=compact`** on the session restart — both write `compactedAt`.
+A **cancelled** compact (Esc) fires nothing; that's what the widget's 3-minute expiry covers.
 
 Context update parses the CLI transcript (`transcript_path` from hook stdin JSON, JSONL):
 - `contextUsed` = latest `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`
@@ -81,10 +82,12 @@ lookups.
   `api error :(` / `net error :(` and the ring goes red.
 - **Compacting state** (`state=compacting`): verb `compacting…`, ring and panel dot turn
   **blue**, and the whole pill background **breathes blue** — a rounded-rect fill (radius
-  h/2) whose alpha oscillates 0.05→0.16 on a 2.4s cosine loop. The right zone shows
-  `~68% · 46s`: elapsed (from `startedAt`) plus an **estimated** percent — compaction
-  reports no real progress, so it's time-based, `100·(1−e^(−t/40s))` capped at 99% (never
-  claims done). `IWidget.Animating` must be true during it so the pill renders ~30fps.
+  h/2) whose alpha oscillates 0.05→0.16 on a 2.4s cosine loop; the right zone shows the
+  elapsed timer. **No percent**: compaction streams an API response of unknown length —
+  even Claude Code's own spinner only shows a token counter (responseLength/4), which
+  hooks never see. Don't fake one. **Expiry**: an esc-cancelled compact fires no hook, so
+  the widget stops believing `compacting` once `startedAt` is >3 min old (falls back to
+  the idle mood). `IWidget.Animating` must be true while genuinely compacting.
 
 ## Expanded panel (560×220)
 
@@ -154,8 +157,10 @@ collapses back; if another widget was primary it temporarily switches to Claude 
 restores after):
 
 - `state → waiting_input` transition: holds **6s**, panel shows the question in amber.
-- `compacting → anything` transition (compact finished): holds **4s**, pill/panel show
-  `compacted :)` (the mood stays for 20s via `compactedAt`).
+- fresh `compactedAt` (changed and <30s old): holds **4s**, pill/panel show `compacted :)`
+  (the mood stays for 20s). A state transition alone is NOT enough — leaving `compacting`
+  without a new `compactedAt` means the compact was cancelled, and announcing success
+  there would be a lie.
 
 See `NotchController`: `_noticeUntil`, `_lastCcState`, `_noticeRestore`; expand condition is
 `hovered || notice`.

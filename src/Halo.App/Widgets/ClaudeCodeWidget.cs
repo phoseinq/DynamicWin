@@ -34,10 +34,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     public bool IsActive => _store.IsLive;
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => _store.Current is { } status
-        ? new AgentNotice(status.State, null, status.Message)
+        ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
     // text-emerge animation + the compacting pulse both need frames while collapsed
-    public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
+    public bool Animating => _appear < 1f || Compacting(_store.Current);
 
     private string _shownKey = "";
     private float _appear = 1f;
@@ -70,7 +70,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         var st = _store.Current;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        if (st?.State == "compacting") // soft blue breathing across the whole pill = process running
+        if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
             using var pb = new SolidBrush(Mul(Blue, fade * (0.05f + 0.11f * pulse)));
@@ -90,16 +90,15 @@ internal sealed class ClaudeCodeWidget : IWidget
         string verb = OutageText() ?? st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" => "compacting…",
+            "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
         };
         string el = Elapsed(st);
-        if (st?.State == "compacting" && el.Length > 0) el = CompactPct(st) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
-        bool busy = st?.State == "working" || st?.State == "compacting";
+        bool busy = st?.State == "working" || Compacting(st);
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
@@ -135,14 +134,15 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     }
 
-    // ponytail: compaction reports no real progress — time-based estimate, asymptote below 100%
-    private static string CompactPct(CcStatus st)
-    {
-        if (!DateTimeOffset.TryParse(st.StartedAt, null,
-                System.Globalization.DateTimeStyles.RoundtripKind, out var t)) return "";
-        var s = (DateTimeOffset.UtcNow - t).TotalSeconds;
-        return $"~{Math.Min(99, (int)(100 * (1 - Math.Exp(-s / 40.0))))}%";
-    }
+    // no % here: even Claude Code's own spinner can't know compact progress (it streams an
+    // API response of unknown length and only shows a token counter, which hooks never see)
+    private static bool Compacting(CcStatus? st) =>
+        st?.State == "compacting" && ParseTime(st.StartedAt) is { } t
+        && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // a cancelled compact fires no hook
+
+    private static DateTimeOffset? ParseTime(string? s) =>
+        DateTimeOffset.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)
+            ? t : null;
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
     {
@@ -171,7 +171,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
-        var dot = StateColor(st?.State);
+        var dot = StateColor(st?.State == "compacting" && !Compacting(st) ? null : st?.State);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         using (var db = new SolidBrush(Mul(dot, a)))
             g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
@@ -455,7 +455,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static Color RingColor(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : st?.State == "waiting_input" ? Amber
-         : st?.State == "compacting" ? Blue
+         : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
          : White;
 
@@ -486,11 +486,11 @@ internal sealed class ClaudeCodeWidget : IWidget
         string verb = OutageText() ?? st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" => "compacting…",
+            "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
         };
-        if (st?.State != "working" && st?.State != "compacting") return verb;
+        if (st?.State != "working" && !Compacting(st)) return verb;
         var el = Elapsed(st);
         return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
     }
@@ -530,7 +530,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     // how long the current turn (or compact) has been running
     private static string Elapsed(CcStatus? st)
     {
-        if ((st?.State != "working" && st?.State != "compacting") || string.IsNullOrEmpty(st.StartedAt)) return "";
+        if ((st?.State != "working" && !Compacting(st)) || string.IsNullOrEmpty(st?.StartedAt)) return "";
         if (!DateTimeOffset.TryParse(st.StartedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)) return "";
         var d = DateTimeOffset.UtcNow - t;
         if (d.TotalSeconds < 1) return "";

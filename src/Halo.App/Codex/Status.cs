@@ -111,6 +111,7 @@ internal static class CodexRollout
                         case "precompact":
                         case "PreCompact":
                             state = "compacting";
+                            startedAt ??= timestamp; // drives the pill timer + compact expiry
                             break;
                         case "post_compact":
                         case "postcompact":

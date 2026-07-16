@@ -84,9 +84,14 @@ internal static class Program
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
-                    if (!codex) return 0;
-                    status["state"] = "working";
+                    // auto-compact happens mid-turn (the turn resumes); manual /compact goes idle
+                    status["state"] = codex || Field("trigger") == "auto" ? "working" : "idle";
                     status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
+                    if (!codex)
+                    {
+                        if (Field("trigger") != "auto") status["startedAt"] = null;
+                        UpdateContext(status, Field("transcript_path"));
+                    }
                     break;
                 case "notify":
                     status["state"] = "waiting_input";

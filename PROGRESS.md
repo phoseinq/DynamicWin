@@ -110,8 +110,12 @@ Run exe in background, drop a colorful WinForms backdrop behind it, move cursor 
 
 ## Polish round (2026-07-16, post-Codex-merge)
 - **Compacting pill redesign (both widgets):** bottom sweep bar → whole-pill soft blue breathing
-  fill (alpha 0.05→0.16, 2.4s cosine) + right zone `~68% · 46s` (elapsed + time-estimated percent,
-  asymptote 99% — compaction has no real progress signal). Verified live via simulated state.
+  fill (alpha 0.05→0.16, 2.4s cosine) + elapsed timer. Percent was tried and REMOVED (user called
+  it fake — correctly): compact progress isn't knowable, even CC's spinner only shows a token
+  counter hooks can't see. Cancelled compacts (Esc, no hook fires) covered by a 3-min expiry →
+  pill falls back to idle mood; `PostCompact` hook (CC ≥2.1.x) now installed = real end edge
+  (auto→working, manual→idle, +compactedAt +context refresh). "compacted :)" notice now triggers
+  ONLY on a fresh compactedAt (<30s), never on a bare state transition. All three verified live.
 - **Context accuracy:** `session-start` with `source=clear|startup` now drops the stale `session`
   block (user saw 250K after /clear). Verified: piped clear event → session removed.
 - **Claude dual-surface:** hook exe writes `status.json` (terminal ancestor = CLI) or `app.json`

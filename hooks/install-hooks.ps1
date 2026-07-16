@@ -27,6 +27,7 @@ $map = [ordered]@{
     PostToolUse      = 'tool-done'
     Notification     = 'notify'
     PreCompact       = 'pre-compact'
+    PostCompact      = 'post-compact'
     Stop             = 'stop'
     SessionEnd       = 'session-end'
 }

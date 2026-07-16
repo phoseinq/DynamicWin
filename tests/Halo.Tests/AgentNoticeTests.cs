@@ -35,6 +35,29 @@ public sealed class AgentNoticeTests
     }
 
     [Fact]
+    public void CancelledCompact_DoesNotAnnounceCompletion()
+    {
+        var state = new AgentNoticeCoordinator(primary: 0);
+        state.Observe(widgetIndex: 1, new AgentNotice("compacting", null, null), Now);
+
+        // esc-cancelled: state leaves "compacting" but compactedAt never gets written
+        state.Observe(widgetIndex: 1, new AgentNotice("working", null, null), Now);
+
+        Assert.False(state.IsOpen(Now)); // no "compacted :)" notice window
+    }
+
+    [Fact]
+    public void StaleCompactedAt_DoesNotAnnounceAtStartup()
+    {
+        var state = new AgentNoticeCoordinator(primary: 0);
+
+        state.Observe(widgetIndex: 1, new AgentNotice("idle", Now.AddMinutes(-10), null), Now);
+
+        Assert.False(state.IsOpen(Now));
+        Assert.Equal(0, state.Primary);
+    }
+
+    [Fact]
     public void SimultaneousNotices_PreferDesktopCodexWhenCurrentWidgetIsNotAnAgent()
     {
         var state = new AgentNoticeCoordinator(primary: 0);

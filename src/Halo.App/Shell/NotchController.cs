@@ -77,8 +77,9 @@ internal sealed class AgentNoticeCoordinator
 
         bool waiting = notice.State == "waiting_input" && previous.State != "waiting_input";
         bool started = notice.State == "working" && previous.State != "working";
-        bool compacted = notice.State is not null && notice.State != "compacting" &&
-            (previous.State == "compacting" || notice.CompactedAt is not null && notice.CompactedAt != previous.CompactedAt);
+        // only a fresh compactedAt counts — merely leaving "compacting" could be a cancelled compact
+        bool compacted = notice.CompactedAt is { } doneAt && doneAt != previous.CompactedAt &&
+            now - doneAt < TimeSpan.FromSeconds(30);
         if (waiting || compacted)
             _pending[widgetIndex] = new NoticeWindow(now.AddSeconds(waiting ? 6 : 4), desktopBacked, _nextOrder++);
 
