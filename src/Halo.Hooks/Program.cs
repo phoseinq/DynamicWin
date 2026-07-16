@@ -84,6 +84,14 @@ internal static class Program
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
+                    // remember how long it took — the widget paces its % estimate off this
+                    if (!codex && status["state"]?.GetValue<string>() == "compacting"
+                        && DateTimeOffset.TryParse(status["startedAt"]?.GetValue<string>(), null,
+                            System.Globalization.DateTimeStyles.RoundtripKind, out var compactStart))
+                    {
+                        var ms = (long)(DateTimeOffset.UtcNow - compactStart).TotalMilliseconds;
+                        if (ms is > 3000 and < 600_000) status["lastCompactMs"] = ms;
+                    }
                     // auto-compact happens mid-turn (the turn resumes); manual /compact goes idle
                     status["state"] = codex || Field("trigger") == "auto" ? "working" : "idle";
                     status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");

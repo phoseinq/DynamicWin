@@ -125,6 +125,7 @@ internal sealed class CodexWidget : IWidget
             _ => IdleMood(st),
         };
         string el = Elapsed(st);
+        if (Compacting(st) && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
@@ -164,10 +165,17 @@ internal sealed class CodexWidget : IWidget
 
     }
 
-    // no % here: compact progress isn't knowable from outside (see ClaudeCodeWidget note)
+    private static DateTimeOffset? _cancelledCompactKey; // startedAt of a compact the user Esc'd out of
+
+    public static void MarkCompactCancelled(DateTimeOffset? startedAt) => _cancelledCompactKey = startedAt;
+
     private static bool Compacting(CodexSnapshot? st) =>
-        st?.State == "compacting" && st.StartedAt is { } t
-        && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // a cancelled compact fires no event
+        st?.State == "compacting" && st.StartedAt is { } t && t != _cancelledCompactKey
+        && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
+
+    // ponytail: no duration history plumbed for Codex — pace against a 60s typical compact
+    private static string CompactPct(CodexSnapshot st) => st.StartedAt is { } t
+        ? $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / 60, 1, 99)}%" : "";
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
     {

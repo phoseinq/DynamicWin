@@ -32,7 +32,7 @@ Hook events → fields:
 | `tool-done` | context update from transcript |
 | `notify` | `state=waiting_input`, `message` = what Claude asks (truncated 160) |
 | `pre-compact` | `state=compacting`, `startedAt`=now (drives the elapsed timer) |
-| `post-compact` | `compactedAt`=now; `trigger=auto` → `state=working` (mid-turn), else `state=idle`; context update |
+| `post-compact` | `compactedAt`=now, `lastCompactMs`=duration; `trigger=auto` → `state=working` (mid-turn), else `state=idle`; context update |
 | `stop` | `state=idle`, clears `currentTool`/`startedAt`/`message`, context update |
 | `session-end` | same as stop |
 
@@ -82,12 +82,16 @@ lookups.
   `api error :(` / `net error :(` and the ring goes red.
 - **Compacting state** (`state=compacting`): verb `compacting…`, ring and panel dot turn
   **blue**, and the whole pill background **breathes blue** — a rounded-rect fill (radius
-  h/2) whose alpha oscillates 0.05→0.16 on a 2.4s cosine loop; the right zone shows the
-  elapsed timer. **No percent**: compaction streams an API response of unknown length —
-  even Claude Code's own spinner only shows a token counter (responseLength/4), which
-  hooks never see. Don't fake one. **Expiry**: an esc-cancelled compact fires no hook, so
-  the widget stops believing `compacting` once `startedAt` is >3 min old (falls back to
-  the idle mood). `IWidget.Animating` must be true while genuinely compacting.
+  h/2) whose alpha oscillates 0.05→0.16 on a 2.4s cosine loop; the right zone shows
+  `~42% · 31s`. The percent is **openly approximate** (no real signal exists — even Claude
+  Code's spinner only shows a token counter hooks never see): elapsed ÷ the LAST compact's
+  duration (`lastCompactMs`, recorded by the post-compact hook; 60s default), clamped 1–99
+  so it never claims done. **Cancel detection**: an Esc-cancelled compact fires no hook, so
+  the controller watches `GetAsyncKeyState(VK_ESCAPE)` while `state=compacting` and the
+  foreground window belongs to a terminal/agent host — a hit marks that compact (keyed by
+  `startedAt`) cancelled and the pill drops back to the idle mood instantly. A wrong guess
+  self-heals: post-compact still fires on real completion. Backstop: `compacting` older
+  than 3 min is ignored anyway. `IWidget.Animating` true while genuinely compacting.
 
 ## Expanded panel (560×220)
 

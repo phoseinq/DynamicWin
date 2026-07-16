@@ -205,6 +205,7 @@ internal sealed class NotchController
     private void OnTick(DispatcherQueueTimer sender, object args)
     {
         var fg = Win32.GetForegroundWindow();
+        DetectCompactCancel(fg);
         bool fullscreen = _notch.IsFullscreen(fg);
         var active = fullscreen ? [] : ActiveIndices();
         var visibility = NotchVisibility.Decide(fullscreen, active.Length > 0,
@@ -443,6 +444,37 @@ internal sealed class NotchController
         }
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             _widgets[_primary].DrawContent, _widgets[_primary].DrawCollapsed);
+    }
+
+    // a compact cancelled with Esc fires no hook — watch for the keystroke ourselves while the
+    // agent's host window is foreground. Wrong guesses self-heal: post-compact still fires on a
+    // real completion and brings the "compacted :)" notice with it.
+    private void DetectCompactCancel(IntPtr fg)
+    {
+        if ((Win32.GetAsyncKeyState(Win32.VK_ESCAPE) & 0x8000) == 0) return;
+        bool claude = _claudeStore.Current?.State == "compacting";
+        bool codex = _codexStore.Current?.State == "compacting";
+        if (!claude && !codex || !ForegroundIsAgentHost(fg)) return;
+        if (claude) ClaudeCodeWidget.MarkCompactCancelled(_claudeStore.Current?.StartedAt);
+        if (codex) CodexWidget.MarkCompactCancelled(_codexStore.Current?.StartedAt);
+    }
+
+    private static bool ForegroundIsAgentHost(IntPtr fg)
+    {
+        try
+        {
+            Win32.GetWindowThreadProcessId(fg, out uint pid);
+            if (pid == 0) return false;
+            using var proc = System.Diagnostics.Process.GetProcessById((int)pid);
+            var name = proc.ProcessName.ToLowerInvariant();
+            return name is "windowsterminal" or "wt" or "conhost" or "openconsole" or "powershell"
+                or "pwsh" or "cmd" or "bash" or "wsl" or "alacritty" or "wezterm-gui" or "code"
+                or "chatgpt" or "codex" || name.Contains("claude");
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void CancelClaude()

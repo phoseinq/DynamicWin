@@ -116,6 +116,12 @@ Run exe in background, drop a colorful WinForms backdrop behind it, move cursor 
   pill falls back to idle mood; `PostCompact` hook (CC ≥2.1.x) now installed = real end edge
   (auto→working, manual→idle, +compactedAt +context refresh). "compacted :)" notice now triggers
   ONLY on a fresh compactedAt (<30s), never on a bare state transition. All three verified live.
+- **Round 2 (user feedback):** percent is BACK but paced honestly — elapsed / the LAST compact's
+  real duration (`lastCompactMs`, recorded by post-compact; 60s default; clamp 1-99). Esc-cancel
+  now detected live: controller polls VK_ESCAPE while state=compacting and foreground is a
+  terminal/claude/chatgpt host -> marks that compact (keyed by startedAt) cancelled -> pill drops
+  to idle instantly; wrong guesses self-heal via post-compact. Verified: ~35% at 31s/90s expected,
+  post-compact wrote lastCompactMs=31700. Esc path needs a real-compact hand test by the user.
 - **Context accuracy:** `session-start` with `source=clear|startup` now drops the stale `session`
   block (user saw 250K after /clear). Verified: piped clear event → session removed.
 - **Claude dual-surface:** hook exe writes `status.json` (terminal ancestor = CLI) or `app.json`

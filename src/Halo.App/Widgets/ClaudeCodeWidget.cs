@@ -95,6 +95,7 @@ internal sealed class ClaudeCodeWidget : IWidget
             _ => IdleMood(st),
         };
         string el = Elapsed(st);
+        if (Compacting(st) && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
@@ -134,11 +135,23 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     }
 
-    // no % here: even Claude Code's own spinner can't know compact progress (it streams an
-    // API response of unknown length and only shows a token counter, which hooks never see)
+    private static string? _cancelledCompactKey; // startedAt of a compact the user Esc'd out of
+
+    public static void MarkCompactCancelled(string? startedAt) => _cancelledCompactKey = startedAt;
+
     private static bool Compacting(CcStatus? st) =>
-        st?.State == "compacting" && ParseTime(st.StartedAt) is { } t
-        && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // a cancelled compact fires no hook
+        st?.State == "compacting" && st.StartedAt != _cancelledCompactKey
+        && ParseTime(st.StartedAt) is { } t
+        && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
+
+    // deliberately approximate: % of the LAST compact's duration (post-compact hook records it),
+    // capped at 99 — no real progress signal exists, this is honest pacing, not ground truth
+    private static string CompactPct(CcStatus st)
+    {
+        if (ParseTime(st.StartedAt) is not { } t) return "";
+        double expect = st.LastCompactMs is > 3000 and < 600_000 ? st.LastCompactMs / 1000.0 : 60;
+        return $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / expect, 1, 99)}%";
+    }
 
     private static DateTimeOffset? ParseTime(string? s) =>
         DateTimeOffset.TryParse(s, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)

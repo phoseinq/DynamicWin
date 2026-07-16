@@ -239,9 +239,13 @@ internal static class Win32
     public static extern bool GetCursorPos(out POINT p);
 
     public const int VK_LBUTTON = 0x01;
+    public const int VK_ESCAPE = 0x1B;
 
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
 
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
