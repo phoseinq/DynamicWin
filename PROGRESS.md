@@ -107,3 +107,11 @@ Run exe in background, drop a colorful WinForms backdrop behind it, move cursor 
   no widgets are active and reappears when one becomes active.
 - Verification: Release build 0 warnings/errors, 56/56 tests, deployed to `%LOCALAPPDATA%\Halo\app`;
   hooks installed with backup at `~/.codex/hooks.json.halo-bak`; live Desktop screenshots captured.
+
+## Codex capsule accuracy and controls (2026-07-16) — design approved
+- User approved both tracks: creative model-aware capsule/context data and working dual-surface Stop
+  with anti-spam Weekly refresh/cache behavior.
+- Root causes verified: Desktop Stop was intentionally disabled; context had an unsafe cumulative
+  fallback; manual refresh rescanned twice; repeated rendering could save unchanged cache values.
+- Design spec: `docs/superpowers/specs/2026-07-16-codex-capsule-accuracy-controls-design.md`.
+- Next: user review of the committed spec, then TDD implementation plan and execution.
