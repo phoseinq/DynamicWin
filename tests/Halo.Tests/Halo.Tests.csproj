@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Halo.App\Halo.App.csproj" />
+    <ProjectReference Include="..\..\src\Halo.Hooks\Halo.Hooks.csproj" />
   </ItemGroup>
 
 </Project>

@@ -11,16 +11,19 @@ namespace Halo.Hooks;
 
 internal static class Program
 {
-    private static readonly string Dir = Path.Combine(
+    private static readonly string ClaudeDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch");
-    private static readonly string StatusPath = Path.Combine(Dir, "status.json");
+    private static readonly string ClaudeStatusPath = Path.Combine(ClaudeDir, "status.json");
+    private static readonly string CodexDir = Environment.GetEnvironmentVariable("HALO_CODEX_STATUS_DIR")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "notch");
 
     private static int Main(string[] args)
     {
         try
         {
             if (args.Length == 0) return 0;
-            var cmd = args[0];
+            var codex = args.Length >= 2 && args[0] == "codex";
+            var cmd = codex ? args[1] : args[0];
 
             if (cmd == "cancel")
             {
@@ -29,11 +32,20 @@ internal static class Program
                 return 0;
             }
 
-            Directory.CreateDirectory(Dir);
+            CodexSurface? surface = codex ? DetectCodexSurface() : null;
+            var dir = codex ? CodexDir : ClaudeDir;
+            var path = codex ? CodexStatusPath(surface!.Value) : ClaudeStatusPath;
+            Directory.CreateDirectory(dir);
             var input = ReadInput();
-            var status = LoadOrNew();
+            var status = LoadOrNew(path);
 
             string? Field(string name) => input?[name]?.GetValue<string>();
+
+            if (codex)
+            {
+                status["source"] = surface == CodexSurface.Desktop ? "desktop" : "cli";
+                if (Field("cwd") is { } cwd) status["cwd"] = cwd;
+            }
 
             switch (cmd)
             {
@@ -43,7 +55,7 @@ internal static class Program
                     status["state"] = "idle";
                     if (Field("source") == "compact") // session restarting after a compact = it finished
                         status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
-                    RecordProcess(status);
+                    RecordProcess(status, codex);
                     break;
                 case "pre-compact":
                     status["state"] = "compacting";
@@ -56,7 +68,7 @@ internal static class Program
                     status["currentTool"] = null;
                     status["startedAt"] = DateTimeOffset.UtcNow.ToString("o"); // turn start, for elapsed time
                     status["message"] = null;
-                    RecordProcess(status);
+                    RecordProcess(status, codex);
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "tool":
@@ -66,6 +78,11 @@ internal static class Program
                 case "tool-done":
                     status["state"] = "working";
                     UpdateContext(status, Field("transcript_path"));
+                    break;
+                case "post-compact":
+                    if (!codex) return 0;
+                    status["state"] = "working";
+                    status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
                     break;
                 case "notify":
                     status["state"] = "waiting_input";
@@ -88,7 +105,7 @@ internal static class Program
             }
 
             status["updatedAt"] = DateTimeOffset.UtcNow.ToString("o");
-            Save(status);
+            Save(status, path);
             return 0;
         }
         catch
@@ -111,13 +128,16 @@ internal static class Program
         }
     }
 
-    private static JsonObject LoadOrNew()
+    private static string CodexStatusPath(CodexSurface surface) =>
+        Path.Combine(CodexDir, surface == CodexSurface.Desktop ? "desktop.json" : "cli.json");
+
+    private static JsonObject LoadOrNew(string path)
     {
         try
         {
-            if (File.Exists(StatusPath))
+            if (File.Exists(path))
             {
-                var text = File.ReadAllText(StatusPath);
+                var text = File.ReadAllText(path);
                 if (JsonNode.Parse(text) is JsonObject o) return o;
             }
         }
@@ -127,11 +147,11 @@ internal static class Program
         return new JsonObject();
     }
 
-    private static void Save(JsonObject status)
+    private static void Save(JsonObject status, string path)
     {
-        var tmp = StatusPath + ".tmp";
+        var tmp = path + ".tmp";
         File.WriteAllText(tmp, status.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(tmp, StatusPath, overwrite: true);
+        File.Move(tmp, path, overwrite: true);
     }
 
     private static string? Truncate(string? s, int max)
@@ -205,16 +225,37 @@ internal static class Program
         return 200_000;
     }
 
-    private static void RecordProcess(JsonObject status)
+    private static void RecordProcess(JsonObject status, bool codex = false)
     {
         var map = ProcessMap();
         uint start = (uint)Environment.ProcessId;
 
-        uint claude = Ancestor(map, start, n => n.Contains("claude") || n == "node.exe");
-        if (claude != 0) status["pid"] = (int)claude;
+        uint agent = Ancestor(map, start, codex
+            ? n => n is "codex.exe" or "codex-code-mode-host.exe" or "chatgpt.exe"
+            : n => n.Contains("claude") || n == "node.exe");
+        if (agent != 0) status["pid"] = (int)agent;
 
         uint term = Ancestor(map, start, IsTerminal);
         if (term != 0) status["consolePid"] = (int)term;
+    }
+
+    private enum CodexSurface { Cli, Desktop }
+
+    private static CodexSurface DetectCodexSurface()
+    {
+        var overrideSurface = Environment.GetEnvironmentVariable("HALO_CODEX_SURFACE");
+        if (string.Equals(overrideSurface, "desktop", StringComparison.OrdinalIgnoreCase))
+            return CodexSurface.Desktop;
+        if (string.Equals(overrideSurface, "cli", StringComparison.OrdinalIgnoreCase))
+            return CodexSurface.Cli;
+
+        var map = ProcessMap();
+        uint start = (uint)Environment.ProcessId;
+        if (Ancestor(map, start, n => n is "chatgpt.exe" or "codex-code-mode-host.exe") != 0)
+            return CodexSurface.Desktop;
+        if (Ancestor(map, start, IsTerminal) != 0)
+            return CodexSurface.Cli;
+        return CodexSurface.Cli;
     }
 
     private static bool IsTerminal(string name) => name is
