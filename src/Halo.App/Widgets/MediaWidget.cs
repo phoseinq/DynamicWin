@@ -334,25 +334,26 @@ internal sealed class MediaWidget : IWidget
         DrawEqualizer(g, w - 14f, h / 2f - 1f, fade, playing);
     }
 
-    private const int EqBars = 5;
+    private const int EqBars = 9;
     private readonly AudioMeter _meter = new();
     private readonly float[] _eq = new float[EqBars];
 
-    // bold rounded bars (reference style), driven by the real output level, tinted from the art.
+    // iOS Dynamic-Island waveform: many thin rounded bars, center-weighted (tall middle, dots at
+    // the edges), driven by the real output level, tinted from the art.
     private void DrawEqualizer(Graphics g, float rightX, float cy, float fade, bool playing)
     {
         float peak = playing ? _meter.Peak() : 0f;
         float amp = Math.Clamp((float)Math.Sqrt(peak) * 1.4f, 0f, 1f);
-        const float barW = 4f, gap = 4f, maxH = 30f, minH = 2f;
+        const float barW = 2.6f, gap = 2.6f, maxH = 22f, minH = 2.6f;
         double t = Environment.TickCount / 1000.0;
         float totalW = EqBars * barW + (EqBars - 1) * gap;
         float x0 = rightX - totalW;
         for (int i = 0; i < EqBars; i++)
         {
-            // the LIVE audio level drives the height (bars rise/fall with the music); a gentle per-bar
-            // phase just spreads them so it reads as a spectrum, not one flat block.
+            // center-weight envelope makes it read as a waveform blob, not a flat spectrum
+            float env = 0.25f + 0.75f * (float)Math.Sin(Math.PI * (i + 0.5) / EqBars);
             float phase = 0.5f + 0.5f * (float)Math.Sin(t * (3.0 + i * 0.7) + i * 1.9);
-            float target = minH + (maxH - minH) * amp * (0.45f + 0.55f * phase);
+            float target = minH + (maxH - minH) * amp * env * (0.35f + 0.65f * phase);
             _eq[i] += (target - _eq[i]) * (target > _eq[i] ? 0.6f : 0.14f); // fast catch, VU-style fall
             float bh = Math.Max(minH, _eq[i]);
             Color col = playing ? PaletteAt((float)i / (EqBars - 1)) : Color.FromArgb(120, 255, 255, 255);
