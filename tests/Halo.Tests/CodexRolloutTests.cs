@@ -149,6 +149,42 @@ public sealed class CodexRolloutTests
     }
 
     [Fact]
+    public void ForceRefresh_RateLimitsWithoutInfoPreserveHookContextFields()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "cli", "working", now, pid: 42,
+            contextUsed: 7_000, contextMax: 250_000, promptTokens: 321);
+        WriteRollout(temp.Sessions, "limits-only", "codex_cli_rs", now,
+            EventAt(now, "token_count",
+                "\"info\":null,\"rate_limits\":{\"primary\":{\"used_percent\":27,\"window_minutes\":300,\"resets_in_seconds\":60}}"));
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+
+        Assert.Equal(7_000, store.Current!.ContextUsed);
+        Assert.Equal(250_000, store.Current.ContextMax);
+        Assert.Equal(321, store.Current.PromptTokens);
+        Assert.Equal(27, store.Current.PrimaryLimit!.UsedPercent);
+    }
+
+    [Fact]
+    public void ForceRefresh_PartialTokenInfoMergesEachContextFieldIndependently()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "cli", "working", now, pid: 42,
+            contextUsed: 7_000, contextMax: 250_000, promptTokens: 321);
+        WriteRollout(temp.Sessions, "partial-info", "codex_cli_rs", now,
+            EventAt(now, "token_count", "\"info\":{\"total_token_usage\":{\"total_tokens\":8765}},\"rate_limits\":null"));
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+
+        Assert.Equal(8_765, store.Current!.ContextUsed);
+        Assert.Equal(250_000, store.Current.ContextMax);
+        Assert.Equal(321, store.Current.PromptTokens);
+    }
+
+    [Fact]
     public void Watcher_KeepsLastGoodDesktopDuringMalformedReplacementThenPublishesFinalFile()
     {
         using var temp = new TempDirectory();
@@ -167,6 +203,52 @@ public sealed class CodexRolloutTests
 
         Assert.True(SpinWait.SpinUntil(() => store.Current?.CurrentTool == "final", TimeSpan.FromSeconds(5)));
         Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+    }
+
+    [Fact]
+    public void StatusWatcher_DoesNotReparseUnrelatedRolloutHistory()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "cli", "working", now, pid: 9, currentTool: "first");
+        for (var index = 0; index < 8; index++)
+        {
+            WriteRollout(temp.Sessions, $"history-{index}", "codex_cli_rs", now.AddMinutes(index - 8),
+                EventAt(now.AddMinutes(index - 8), "task_complete", "\"completed_at\":1"));
+        }
+
+        var parseCount = 0;
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: true, parseRollout: path =>
+        {
+            Interlocked.Increment(ref parseCount);
+            return CodexRollout.Parse(path);
+        });
+        var initialVersion = store.Version;
+        var initialParseCount = parseCount;
+
+        WriteStatus(temp.Status, "cli", "working", now.AddSeconds(1), pid: 9, currentTool: "status-only");
+
+        Assert.True(SpinWait.SpinUntil(() => store.Version > initialVersion, TimeSpan.FromSeconds(5)));
+        Assert.Equal(1, initialParseCount);
+        Assert.Equal(initialParseCount, parseCount);
+        Assert.Equal("status-only", store.Current!.CurrentTool);
+    }
+
+    [Fact]
+    public void WatcherError_SchedulesFullRolloutRecovery()
+    {
+        using var temp = new TempDirectory();
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false);
+        var initialVersion = store.Version;
+        var now = DateTimeOffset.UtcNow;
+        WriteRollout(temp.Sessions, "recovered", "Codex Desktop", now,
+            EventAt(now, "task_started", "\"model_context_window\":353400"));
+
+        store.HandleWatcherError(null, new ErrorEventArgs(new InternalBufferOverflowException()));
+
+        Assert.True(SpinWait.SpinUntil(() => store.Version > initialVersion, TimeSpan.FromSeconds(5)));
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+        Assert.Equal("working", store.Current.State);
     }
 
     private static CodexSnapshot Snapshot(CodexSurface source, DateTimeOffset updatedAt, bool alive) => new(
@@ -200,11 +282,14 @@ public sealed class CodexRolloutTests
         var directory = Path.Combine(sessions, timestamp.ToString("yyyy"), timestamp.ToString("MM"), timestamp.ToString("dd"));
         Directory.CreateDirectory(directory);
         var metadata = $"{{\"timestamp\":\"{timestamp:O}\",\"type\":\"session_meta\",\"payload\":{{\"originator\":\"{originator}\",\"cwd\":\"C:\\\\repo\"}}}}";
-        File.WriteAllLines(Path.Combine(directory, $"rollout-{name}.jsonl"), [metadata, .. events]);
+        var path = Path.Combine(directory, $"rollout-{name}.jsonl");
+        File.WriteAllLines(path, [metadata, .. events]);
+        File.SetLastWriteTimeUtc(path, timestamp.UtcDateTime);
     }
 
     private static void WriteStatus(string directory, string surface, string state, DateTimeOffset updatedAt, int pid,
-        string? currentTool = null, bool? processAlive = null)
+        string? currentTool = null, bool? processAlive = null, long contextUsed = 0, long contextMax = 0,
+        long promptTokens = 0)
     {
         var json = System.Text.Json.JsonSerializer.Serialize(new
         {
@@ -214,6 +299,9 @@ public sealed class CodexRolloutTests
             pid,
             updatedAt,
             processAlive,
+            contextUsed,
+            contextMax,
+            promptTokens,
         });
         File.WriteAllText(Path.Combine(directory, $"{surface}.json"), json);
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Globalization;
@@ -13,11 +14,25 @@ internal enum CodexSurface { Cli, Desktop }
 
 internal sealed record CodexLimit(double UsedPercent, int WindowMinutes, DateTimeOffset? ResetsAt);
 
+[Flags]
+internal enum CodexSnapshotFields
+{
+    None = 0,
+    ContextUsed = 1 << 0,
+    ContextMax = 1 << 1,
+    PromptTokens = 1 << 2,
+    PrimaryLimit = 1 << 3,
+    SecondaryLimit = 1 << 4,
+}
+
 internal sealed record CodexSnapshot(
     CodexSurface Source, string State, string? CurrentTool, DateTimeOffset? StartedAt,
     DateTimeOffset? CompactedAt, string? Message, string? Cwd, int Pid, int ConsolePid,
     long ContextUsed, long ContextMax, long PromptTokens, CodexLimit? PrimaryLimit,
-    CodexLimit? SecondaryLimit, DateTimeOffset UpdatedAt, bool ProcessAlive);
+    CodexLimit? SecondaryLimit, DateTimeOffset UpdatedAt, bool ProcessAlive)
+{
+    internal CodexSnapshotFields PresentFields { get; init; }
+}
 
 internal static class CodexRollout
 {
@@ -40,6 +55,7 @@ internal static class CodexRollout
             long promptTokens = 0;
             CodexLimit? primaryLimit = null;
             CodexLimit? secondaryLimit = null;
+            var presentFields = CodexSnapshotFields.None;
             var updatedAt = DateTimeOffset.MinValue;
             var sawEvent = false;
 
@@ -70,7 +86,11 @@ internal static class CodexRollout
                         case "task_started":
                             state = "working";
                             startedAt = timestamp;
-                            contextMax = Number(payload, "model_context_window") ?? contextMax;
+                            if (Number(payload, "model_context_window") is { } startedContextMax)
+                            {
+                                contextMax = startedContextMax;
+                                presentFields |= CodexSnapshotFields.ContextMax;
+                            }
                             break;
                         case "custom_tool_call":
                             state = "working";
@@ -102,16 +122,36 @@ internal static class CodexRollout
                             var info = Property(payload, "info");
                             if (info is { } tokenInfo)
                             {
-                                contextMax = Number(tokenInfo, "model_context_window") ?? contextMax;
-                                contextUsed = TotalTokens(Property(tokenInfo, "total_token_usage")) ?? contextUsed;
-                                promptTokens = TotalTokens(Property(tokenInfo, "last_token_usage")) ?? promptTokens;
+                                if (Number(tokenInfo, "model_context_window") is { } tokenContextMax)
+                                {
+                                    contextMax = tokenContextMax;
+                                    presentFields |= CodexSnapshotFields.ContextMax;
+                                }
+                                if (TotalTokens(Property(tokenInfo, "total_token_usage")) is { } totalTokens)
+                                {
+                                    contextUsed = totalTokens;
+                                    presentFields |= CodexSnapshotFields.ContextUsed;
+                                }
+                                if (TotalTokens(Property(tokenInfo, "last_token_usage")) is { } lastTokens)
+                                {
+                                    promptTokens = lastTokens;
+                                    presentFields |= CodexSnapshotFields.PromptTokens;
+                                }
                             }
 
                             var limits = Property(payload, "rate_limits");
                             if (limits is { } rateLimits)
                             {
-                                primaryLimit = Limit(Property(rateLimits, "primary"), timestamp) ?? primaryLimit;
-                                secondaryLimit = Limit(Property(rateLimits, "secondary"), timestamp) ?? secondaryLimit;
+                                if (Limit(Property(rateLimits, "primary"), timestamp) is { } primary)
+                                {
+                                    primaryLimit = primary;
+                                    presentFields |= CodexSnapshotFields.PrimaryLimit;
+                                }
+                                if (Limit(Property(rateLimits, "secondary"), timestamp) is { } secondary)
+                                {
+                                    secondaryLimit = secondary;
+                                    presentFields |= CodexSnapshotFields.SecondaryLimit;
+                                }
                             }
                             break;
                     }
@@ -130,7 +170,10 @@ internal static class CodexRollout
 
             return new CodexSnapshot(
                 source, state, currentTool, startedAt, compactedAt, message, cwd, 0, 0,
-                contextUsed, contextMax, promptTokens, primaryLimit, secondaryLimit, updatedAt, false);
+                contextUsed, contextMax, promptTokens, primaryLimit, secondaryLimit, updatedAt, false)
+            {
+                PresentFields = presentFields,
+            };
         }
         catch (IOException)
         {
@@ -188,6 +231,41 @@ internal static class CodexRollout
 
         return null;
     }
+
+    internal static CodexSurface? IdentifySurface(string path)
+    {
+        try
+        {
+            foreach (var line in File.ReadLines(path).Take(8))
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    if (String(root, "type") != "session_meta" || Property(root, "payload") is not { } payload)
+                        continue;
+
+                    return String(payload, "originator")?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true
+                        ? CodexSurface.Desktop
+                        : CodexSurface.Cli;
+                }
+                catch (JsonException)
+                {
+                }
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        return null;
+    }
 }
 
 internal sealed class CodexStatusStore : IDisposable
@@ -203,27 +281,36 @@ internal sealed class CodexStatusStore : IDisposable
     private readonly string _statusDirectory;
     private readonly string _sessionsDirectory;
     private readonly Func<int, bool> _processAlive;
-    private readonly object _reloadGate = new();
+    private readonly Func<string, CodexSnapshot?> _parseRollout;
+    private readonly object _workGate = new();
+    private readonly object _publicationGate = new();
     private readonly object _scheduleGate = new();
-    private readonly Timer? _reloadTimer;
+    private readonly Timer _reloadTimer;
     private readonly FileSystemWatcher? _statusWatcher;
     private readonly FileSystemWatcher? _rolloutWatcher;
+    private readonly HashSet<string> _pendingRolloutPaths = new(StringComparer.OrdinalIgnoreCase);
     private CodexSnapshot? _desktopStatus;
     private CodexSnapshot? _cliStatus;
     private CodexSnapshot? _desktopRollout;
     private CodexSnapshot? _cliRollout;
+    private string? _desktopRolloutPath;
+    private string? _cliRolloutPath;
+    private DateTime _desktopRolloutWriteTime;
+    private DateTime _cliRolloutWriteTime;
     private CodexSnapshot? _current;
     private int _version;
+    private bool _pendingStatusReload;
+    private bool _pendingFullRescan;
     private volatile bool _disposed;
 
     internal CodexSnapshot? Current
     {
-        get { lock (_reloadGate) return _current; }
+        get { lock (_publicationGate) return _current; }
     }
 
     internal int Version
     {
-        get { lock (_reloadGate) return _version; }
+        get { lock (_publicationGate) return _version; }
     }
 
     internal CodexStatusStore()
@@ -239,25 +326,27 @@ internal sealed class CodexStatusStore : IDisposable
         string statusDirectory,
         string sessionsDirectory,
         Func<int, bool> processAlive,
-        bool watchFiles)
+        bool watchFiles,
+        Func<string, CodexSnapshot?>? parseRollout = null)
     {
         _statusDirectory = statusDirectory;
         _sessionsDirectory = sessionsDirectory;
         _processAlive = processAlive;
+        _parseRollout = parseRollout ?? CodexRollout.Parse;
         Directory.CreateDirectory(_statusDirectory);
         Directory.CreateDirectory(_sessionsDirectory);
+        _reloadTimer = new Timer(_ => ProcessScheduledReload(), null, Timeout.Infinite, Timeout.Infinite);
 
         if (watchFiles)
         {
-            _reloadTimer = new Timer(_ => Reload(retryTransientReads: true), null, Timeout.Infinite, Timeout.Infinite);
-            _statusWatcher = CreateWatcher(_statusDirectory, "*.json", includeSubdirectories: false);
-            _rolloutWatcher = CreateWatcher(_sessionsDirectory, "*.jsonl", includeSubdirectories: true);
+            _statusWatcher = CreateWatcher(_statusDirectory, "*.json", includeSubdirectories: false, rollout: false);
+            _rolloutWatcher = CreateWatcher(_sessionsDirectory, "*.jsonl", includeSubdirectories: true, rollout: true);
         }
 
-        Reload(retryTransientReads: true);
+        Reload(statusChanged: true, fullRescan: true, []);
     }
 
-    internal void ForceRefresh() => Reload(retryTransientReads: true);
+    internal void ForceRefresh() => Reload(statusChanged: true, fullRescan: true, []);
 
     internal static CodexSnapshot? Select(CodexSnapshot? desktop, CodexSnapshot? cli, DateTimeOffset now) =>
         IsActive(desktop, now) ? desktop : IsActive(cli, now) ? cli : null;
@@ -272,79 +361,143 @@ internal sealed class CodexStatusStore : IDisposable
             _disposed = true;
             _statusWatcher?.Dispose();
             _rolloutWatcher?.Dispose();
-            _reloadTimer?.Dispose();
+            _reloadTimer.Dispose();
         }
 
-        lock (_reloadGate)
+        lock (_workGate)
         {
         }
     }
 
-    private FileSystemWatcher CreateWatcher(string directory, string filter, bool includeSubdirectories)
+    private FileSystemWatcher CreateWatcher(string directory, string filter, bool includeSubdirectories, bool rollout)
     {
         var watcher = new FileSystemWatcher(directory, filter)
         {
             IncludeSubdirectories = includeSubdirectories,
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
         };
-        watcher.Changed += (_, _) => ScheduleReload();
-        watcher.Created += (_, _) => ScheduleReload();
-        watcher.Deleted += (_, _) => ScheduleReload();
-        watcher.Renamed += (_, _) => ScheduleReload();
+        if (rollout)
+        {
+            watcher.Changed += (_, e) => ScheduleReload(rolloutPath: e.FullPath);
+            watcher.Created += (_, e) => ScheduleReload(rolloutPath: e.FullPath);
+            watcher.Deleted += (_, _) => ScheduleReload(fullRescan: true);
+            watcher.Renamed += (_, _) => ScheduleReload(fullRescan: true);
+        }
+        else
+        {
+            watcher.Changed += (_, _) => ScheduleReload(statusChanged: true);
+            watcher.Created += (_, _) => ScheduleReload(statusChanged: true);
+            watcher.Deleted += (_, _) => ScheduleReload(statusChanged: true);
+            watcher.Renamed += (_, _) => ScheduleReload(statusChanged: true);
+        }
+        watcher.Error += HandleWatcherError;
         watcher.EnableRaisingEvents = true;
         return watcher;
     }
 
-    private void ScheduleReload()
+    internal void HandleWatcherError(object? sender, ErrorEventArgs e) =>
+        ScheduleReload(statusChanged: true, fullRescan: true);
+
+    private void ScheduleReload(bool statusChanged = false, bool fullRescan = false, string? rolloutPath = null)
     {
         lock (_scheduleGate)
         {
             if (_disposed)
                 return;
 
-            _reloadTimer?.Change(ReloadDelayMilliseconds, Timeout.Infinite);
+            _pendingStatusReload |= statusChanged;
+            _pendingFullRescan |= fullRescan;
+            if (rolloutPath is not null)
+                _pendingRolloutPaths.Add(rolloutPath);
+            _reloadTimer.Change(ReloadDelayMilliseconds, Timeout.Infinite);
         }
     }
 
-    private void Reload(bool retryTransientReads)
+    private void ProcessScheduledReload()
     {
-        lock (_reloadGate)
+        bool statusChanged;
+        bool fullRescan;
+        string[] rolloutPaths;
+        lock (_scheduleGate)
         {
             if (_disposed)
                 return;
 
-            ApplyStatusRead(ref _desktopStatus, ReadStatus(Path.Combine(_statusDirectory, "desktop.json"), CodexSurface.Desktop), retryTransientReads);
-            ApplyStatusRead(ref _cliStatus, ReadStatus(Path.Combine(_statusDirectory, "cli.json"), CodexSurface.Cli), retryTransientReads);
-            ScanRollouts(out var desktopRollout, out var cliRollout);
-            _desktopRollout = desktopRollout ?? _desktopRollout;
-            _cliRollout = cliRollout ?? _cliRollout;
+            statusChanged = _pendingStatusReload;
+            fullRescan = _pendingFullRescan;
+            rolloutPaths = [.. _pendingRolloutPaths];
+            _pendingStatusReload = false;
+            _pendingFullRescan = false;
+            _pendingRolloutPaths.Clear();
+        }
+
+        Reload(statusChanged, fullRescan, rolloutPaths);
+    }
+
+    private void Reload(bool statusChanged, bool fullRescan, IReadOnlyCollection<string> rolloutPaths)
+    {
+        lock (_workGate)
+        {
+            if (_disposed)
+                return;
+
+            if (statusChanged || fullRescan)
+            {
+                ApplyStatusRead(ref _desktopStatus, ReadStatusWithRetry(
+                    Path.Combine(_statusDirectory, "desktop.json"), CodexSurface.Desktop, _desktopStatus is not null));
+                ApplyStatusRead(ref _cliStatus, ReadStatusWithRetry(
+                    Path.Combine(_statusDirectory, "cli.json"), CodexSurface.Cli, _cliStatus is not null));
+            }
+            else
+            {
+                _desktopStatus = RefreshProcessAlive(_desktopStatus);
+                _cliStatus = RefreshProcessAlive(_cliStatus);
+            }
+
+            if (fullRescan)
+                ScanRollouts();
+            else if (rolloutPaths.Count > 0)
+                ProcessRolloutChanges(rolloutPaths);
 
             if (_disposed)
                 return;
 
             var now = DateTimeOffset.UtcNow;
-            _current = Select(
+            var next = Select(
                 Merge(_desktopStatus, _desktopRollout, now),
                 Merge(_cliStatus, _cliRollout, now),
                 now);
-            _version++;
+            lock (_publicationGate)
+            {
+                if (_disposed)
+                    return;
+                _current = next;
+                _version++;
+            }
         }
     }
 
-    private void ApplyStatusRead(ref CodexSnapshot? target, StatusRead read, bool retryTransientReads)
+    private StatusRead ReadStatusWithRetry(string path, CodexSurface source, bool hasExisting)
     {
-        if (retryTransientReads &&
-            (read.Kind == StatusReadKind.Transient || read.Kind == StatusReadKind.Missing && target is not null))
+        var read = ReadStatus(path, source);
+        if (read.Kind == StatusReadKind.Transient || read.Kind == StatusReadKind.Missing && hasExisting)
         {
             Thread.Sleep(ReloadDelayMilliseconds);
             read = ReadStatus(read.Path, read.Source);
         }
+        return read;
+    }
 
+    private static void ApplyStatusRead(ref CodexSnapshot? target, StatusRead read)
+    {
         if (read.Kind == StatusReadKind.Success)
             target = read.Snapshot;
         else if (read.Kind == StatusReadKind.Missing)
             target = null;
     }
+
+    private CodexSnapshot? RefreshProcessAlive(CodexSnapshot? snapshot) =>
+        snapshot is null ? null : snapshot with { ProcessAlive = ProcessAlive(snapshot.Pid) };
 
     private static bool IsActive(CodexSnapshot? snapshot, DateTimeOffset now) =>
         snapshot is not null && snapshot.State != "ended" &&
@@ -361,20 +514,21 @@ internal sealed class CodexStatusStore : IDisposable
             return hook;
 
         var lifecycle = IsFresh(hook, now) ? hook : rollout;
-        var hasRolloutUsage = rollout.ContextMax > 0 || rollout.PrimaryLimit is not null || rollout.SecondaryLimit is not null;
+        var fields = rollout.PresentFields;
         return lifecycle with
         {
             Source = hook.Source,
             Cwd = lifecycle.Cwd ?? hook.Cwd ?? rollout.Cwd,
             Pid = hook.Pid,
             ConsolePid = hook.ConsolePid,
-            ContextUsed = hasRolloutUsage ? rollout.ContextUsed : hook.ContextUsed,
-            ContextMax = hasRolloutUsage ? rollout.ContextMax : hook.ContextMax,
-            PromptTokens = hasRolloutUsage ? rollout.PromptTokens : hook.PromptTokens,
-            PrimaryLimit = rollout.PrimaryLimit ?? hook.PrimaryLimit,
-            SecondaryLimit = rollout.SecondaryLimit ?? hook.SecondaryLimit,
+            ContextUsed = fields.HasFlag(CodexSnapshotFields.ContextUsed) ? rollout.ContextUsed : hook.ContextUsed,
+            ContextMax = fields.HasFlag(CodexSnapshotFields.ContextMax) ? rollout.ContextMax : hook.ContextMax,
+            PromptTokens = fields.HasFlag(CodexSnapshotFields.PromptTokens) ? rollout.PromptTokens : hook.PromptTokens,
+            PrimaryLimit = fields.HasFlag(CodexSnapshotFields.PrimaryLimit) ? rollout.PrimaryLimit : hook.PrimaryLimit,
+            SecondaryLimit = fields.HasFlag(CodexSnapshotFields.SecondaryLimit) ? rollout.SecondaryLimit : hook.SecondaryLimit,
             UpdatedAt = hook.UpdatedAt > rollout.UpdatedAt ? hook.UpdatedAt : rollout.UpdatedAt,
             ProcessAlive = hook.ProcessAlive,
+            PresentFields = hook.PresentFields | rollout.PresentFields,
         };
     }
 
@@ -428,31 +582,91 @@ internal sealed class CodexStatusStore : IDisposable
         }
     }
 
-    private void ScanRollouts(out CodexSnapshot? desktop, out CodexSnapshot? cli)
+    private void ScanRollouts()
     {
-        desktop = null;
-        cli = null;
+        RolloutCandidate? desktop = null;
+        RolloutCandidate? cli = null;
 
         try
         {
-            foreach (var path in Directory.EnumerateFiles(_sessionsDirectory, "*.jsonl", SearchOption.AllDirectories)
-                         .OrderByDescending(File.GetLastWriteTimeUtc))
+            foreach (var path in Directory.EnumerateFiles(_sessionsDirectory, "*.jsonl", SearchOption.AllDirectories))
             {
-                var snapshot = CodexRollout.Parse(path);
-                if (snapshot?.Source == CodexSurface.Desktop && desktop is null)
-                    desktop = snapshot;
-                else if (snapshot?.Source == CodexSurface.Cli && cli is null)
-                    cli = snapshot;
+                var source = CodexRollout.IdentifySurface(path);
+                if (source is null)
+                    continue;
 
-                if (desktop is not null && cli is not null)
-                    break;
+                var candidate = new RolloutCandidate(path, File.GetLastWriteTimeUtc(path));
+                if (source == CodexSurface.Desktop && (desktop is null || candidate.WriteTime > desktop.Value.WriteTime))
+                    desktop = candidate;
+                else if (source == CodexSurface.Cli && (cli is null || candidate.WriteTime > cli.Value.WriteTime))
+                    cli = candidate;
             }
+
+            ApplyRolloutCandidate(CodexSurface.Desktop, desktop);
+            ApplyRolloutCandidate(CodexSurface.Cli, cli);
         }
         catch (IOException)
         {
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    private void ApplyRolloutCandidate(CodexSurface source, RolloutCandidate? candidate)
+    {
+        if (candidate is null)
+        {
+            SetRollout(source, null, null, DateTime.MinValue);
+            return;
+        }
+
+        var snapshot = _parseRollout(candidate.Value.Path);
+        if (snapshot is not null)
+            SetRollout(source, snapshot, candidate.Value.Path, candidate.Value.WriteTime);
+    }
+
+    private void ProcessRolloutChanges(IEnumerable<string> paths)
+    {
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (!File.Exists(path) || CodexRollout.IdentifySurface(path) is not { } source)
+                    continue;
+
+                var writeTime = File.GetLastWriteTimeUtc(path);
+                var currentPath = source == CodexSurface.Desktop ? _desktopRolloutPath : _cliRolloutPath;
+                var currentWriteTime = source == CodexSurface.Desktop ? _desktopRolloutWriteTime : _cliRolloutWriteTime;
+                if (!string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase) && writeTime < currentWriteTime)
+                    continue;
+
+                var snapshot = _parseRollout(path);
+                if (snapshot is not null)
+                    SetRollout(source, snapshot, path, writeTime);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private void SetRollout(CodexSurface source, CodexSnapshot? snapshot, string? path, DateTime writeTime)
+    {
+        if (source == CodexSurface.Desktop)
+        {
+            _desktopRollout = snapshot;
+            _desktopRolloutPath = path;
+            _desktopRolloutWriteTime = writeTime;
+        }
+        else
+        {
+            _cliRollout = snapshot;
+            _cliRolloutPath = path;
+            _cliRolloutWriteTime = writeTime;
         }
     }
 
@@ -501,4 +715,6 @@ internal sealed class CodexStatusStore : IDisposable
         CodexSurface Source,
         StatusReadKind Kind,
         CodexSnapshot? Snapshot);
+
+    private readonly record struct RolloutCandidate(string Path, DateTime WriteTime);
 }
