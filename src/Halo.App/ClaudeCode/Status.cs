@@ -49,11 +49,34 @@ internal sealed class StatusStore
     };
 
     private readonly string _path;
+    private readonly string? _appPath; // the Claude desktop app's surface (CLI takes priority)
     private readonly Func<int, DateTimeOffset?> _processStartedAt;
     private readonly Func<DateTimeOffset> _clock;
     private readonly FileSystemWatcher? _watcher;
 
-    public CcStatus? Current { get; private set; }
+    private CcStatus? _cli, _app;
+    private CcStatus? _selected;
+    private DateTimeOffset _selectedAt = DateTimeOffset.MinValue;
+    private int _selectedVersion = -1;
+
+    // CLI when it's live, else the desktop app — liveness re-checked at most once a second
+    public CcStatus? Current
+    {
+        get
+        {
+            var now = _clock();
+            if (_selectedVersion != Version || now - _selectedAt > TimeSpan.FromSeconds(1))
+            {
+                _selected = IsLiveStatus(_cli, _processStartedAt, now) ? _cli
+                    : IsLiveStatus(_app, _processStartedAt, now) ? _app
+                    : _cli ?? _app;
+                _selectedAt = now;
+                _selectedVersion = Version;
+            }
+            return _selected;
+        }
+    }
+
     public int Version { get; private set; }
     public bool IsLive => IsLiveStatus(Current, _processStartedAt, _clock());
 
@@ -61,14 +84,16 @@ internal sealed class StatusStore
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch");
 
     public StatusStore()
-        : this(Path.Combine(Directory, "status.json"), GetProcessStartedAt, watchFiles: true)
+        : this(Path.Combine(Directory, "status.json"), GetProcessStartedAt, watchFiles: true,
+            appPath: Path.Combine(Directory, "app.json"))
     {
     }
 
     internal StatusStore(string path, Func<int, DateTimeOffset?> processStartedAt, bool watchFiles,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null, string? appPath = null)
     {
         _path = path;
+        _appPath = appPath;
         _processStartedAt = processStartedAt;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         var directory = Path.GetDirectoryName(_path);
@@ -79,7 +104,7 @@ internal sealed class StatusStore
         if (!watchFiles)
             return;
 
-        _watcher = new FileSystemWatcher(Path.GetDirectoryName(_path)!, Path.GetFileName(_path))
+        _watcher = new FileSystemWatcher(Path.GetDirectoryName(_path)!, "*.json")
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
             EnableRaisingEvents = true,
@@ -152,18 +177,27 @@ internal sealed class StatusStore
     {
         try
         {
-            if (!File.Exists(_path))
-            {
-                Current = null;
-                Version++;
-                return;
-            }
-            using var fs = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            Current = JsonSerializer.Deserialize<CcStatus>(fs, Opts);
+            _cli = Read(_path, _cli);
+            _app = _appPath is null ? null : Read(_appPath, _app);
             Version++;
         }
         catch
         {
+        }
+    }
+
+    // missing file = no session (null); a transient read/parse failure keeps the previous value
+    private static CcStatus? Read(string path, CcStatus? previous)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            return JsonSerializer.Deserialize<CcStatus>(fs, Opts) ?? previous;
+        }
+        catch
+        {
+            return previous;
         }
     }
 }

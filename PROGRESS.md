@@ -108,6 +108,21 @@ Run exe in background, drop a colorful WinForms backdrop behind it, move cursor 
 - Verification: Release build 0 warnings/errors, 56/56 tests, deployed to `%LOCALAPPDATA%\Halo\app`;
   hooks installed with backup at `~/.codex/hooks.json.halo-bak`; live Desktop screenshots captured.
 
+## Polish round (2026-07-16, post-Codex-merge)
+- **Compacting pill redesign (both widgets):** bottom sweep bar → whole-pill soft blue breathing
+  fill (alpha 0.05→0.16, 2.4s cosine) + right zone `~68% · 46s` (elapsed + time-estimated percent,
+  asymptote 99% — compaction has no real progress signal). Verified live via simulated state.
+- **Context accuracy:** `session-start` with `source=clear|startup` now drops the stale `session`
+  block (user saw 250K after /clear). Verified: piped clear event → session removed.
+- **Claude dual-surface:** hook exe writes `status.json` (terminal ancestor = CLI) or `app.json`
+  (desktop app; `HALO_CLAUDE_SURFACE` override); `StatusStore` reads both, **CLI wins when live**,
+  falls back to live app. 2 new tests.
+- **Codex leftovers fixed:** verb map now speaks Codex tool names (`exec`→running…, `apply_patch`→
+  patching…, `web_search`→googling :P, `view_image`→peeking o.o, `update_plan`→plotting…);
+  Desktop Stop rewritten — PostMessage never reaches Electron, now restore-if-iconic +
+  SetForegroundWindow + SendInput(Esc) (untested against a live running Desktop task).
+- 67/67 tests; app + hooks republished to `%LOCALAPPDATA%\Halo`.
+
 ## Codex capsule accuracy and controls (2026-07-16) — design approved
 - User approved both tracks: creative model-aware capsule/context data and working dual-surface Stop
   with anti-spam Weekly refresh/cache behavior.

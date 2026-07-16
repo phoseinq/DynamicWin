@@ -34,7 +34,9 @@ internal static class Program
 
             CodexSurface? surface = codex ? DetectCodexSurface() : null;
             var dir = codex ? CodexDir : ClaudeDir;
-            var path = codex ? CodexStatusPath(surface!.Value) : ClaudeStatusPath;
+            // claude also splits by surface: CLI keeps status.json, the desktop app gets app.json
+            var path = codex ? CodexStatusPath(surface!.Value)
+                : IsClaudeApp() ? Path.Combine(ClaudeDir, "app.json") : ClaudeStatusPath;
             Directory.CreateDirectory(dir);
             var input = ReadInput();
             var status = LoadOrNew(path);
@@ -55,6 +57,8 @@ internal static class Program
                     status["state"] = "idle";
                     if (Field("source") == "compact") // session restarting after a compact = it finished
                         status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
+                    else if (Field("source") is "clear" or "startup") // fresh context — drop the stale numbers
+                        status.Remove("session");
                     RecordProcess(status, codex);
                     break;
                 case "pre-compact":
@@ -240,6 +244,14 @@ internal static class Program
     }
 
     private enum CodexSurface { Cli, Desktop }
+
+    // ponytail: CLI sessions always run under a terminal; the desktop app's engine doesn't
+    private static bool IsClaudeApp()
+    {
+        var o = Environment.GetEnvironmentVariable("HALO_CLAUDE_SURFACE");
+        if (!string.IsNullOrEmpty(o)) return o.Equals("app", StringComparison.OrdinalIgnoreCase);
+        return Ancestor(ProcessMap(), (uint)Environment.ProcessId, IsTerminal) == 0;
+    }
 
     private static CodexSurface DetectCodexSurface()
     {

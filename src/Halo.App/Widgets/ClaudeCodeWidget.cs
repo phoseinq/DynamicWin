@@ -36,7 +36,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     public AgentNotice AgentNotice => _store.Current is { } status
         ? new AgentNotice(status.State, null, status.Message)
         : AgentNotice.None;
-    // text-emerge animation + the compacting sweep both need frames while collapsed
+    // text-emerge animation + the compacting pulse both need frames while collapsed
     public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
 
     private string _shownKey = "";
@@ -69,8 +69,15 @@ internal sealed class ClaudeCodeWidget : IWidget
     {
         var st = _store.Current;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
-        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (st?.State == "compacting") // soft blue breathing across the whole pill = process running
+        {
+            float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
+            using var pb = new SolidBrush(Mul(Blue, fade * (0.05f + 0.11f * pulse)));
+            using var pp = Rounded(new RectangleF(0, 0, w, h), h / 2f);
+            g.FillPath(pb, pp);
+        }
+        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
         using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (ClaudeIcon != null) DrawIcon(g, ClaudeIcon, x, y, sz, fade, sz / 2f); // circular
@@ -88,6 +95,7 @@ internal sealed class ClaudeCodeWidget : IWidget
             _ => IdleMood(st),
         };
         string el = Elapsed(st);
+        if (st?.State == "compacting" && el.Length > 0) el = CompactPct(st) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
@@ -125,16 +133,15 @@ internal sealed class ClaudeCodeWidget : IWidget
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
                 g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, 0, elW + 4, h), esf);
 
-        if (st?.State == "compacting") // indeterminate sweep along the pill bottom (duration unknown)
-        {
-            float t = Environment.TickCount % 1300 / 1300f;
-            const float seg = 46f;
-            float sx = -seg + (w + seg) * t;
-            var clip2 = g.Clip;
-            g.SetClip(new RectangleF(16, h - 5f, w - 32, 3f));
-            Fill(g, sx, h - 5f, seg, 3f, Mul(Blue, fade * 0.9f));
-            g.Clip = clip2;
-        }
+    }
+
+    // ponytail: compaction reports no real progress — time-based estimate, asymptote below 100%
+    private static string CompactPct(CcStatus st)
+    {
+        if (!DateTimeOffset.TryParse(st.StartedAt, null,
+                System.Globalization.DateTimeStyles.RoundtripKind, out var t)) return "";
+        var s = (DateTimeOffset.UtcNow - t).TotalSeconds;
+        return $"~{Math.Min(99, (int)(100 * (1 - Math.Exp(-s / 40.0))))}%";
     }
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)

@@ -26,7 +26,7 @@ Hook events → fields:
 
 | event (argv[0]) | effect |
 |---|---|
-| `session-start` | `sessionId`, `cwd`, `state=idle`, records `pid`/`consolePid` |
+| `session-start` | `sessionId`, `cwd`, `state=idle`, records `pid`/`consolePid`; `source=clear/startup` drops the stale `session` (context numbers) |
 | `prompt` | `state=working`, `lastPrompt` (truncated 120), `startedAt`=now (turn start), `message=null`, context update |
 | `tool` | `state=working`, `currentTool` = tool name |
 | `tool-done` | context update from transcript |
@@ -47,6 +47,16 @@ Context update parses the CLI transcript (`transcript_path` from hook stdin JSON
 
 Cancel: `Halo.Hooks.exe cancel <pid>` = `AttachConsole(consolePid)` + `GenerateConsoleCtrlEvent(CTRL_C)`
 — interrupts the running prompt exactly like pressing Esc/Ctrl+C in that terminal.
+
+### Two surfaces: CLI and the desktop app (CLI wins)
+
+The hook exe splits Claude sessions by surface: a session with a **terminal ancestor**
+(Windows Terminal, conhost, pwsh, VS Code, …) writes `status.json`; one without (the Claude
+desktop app's engine) writes `app.json` (override with `HALO_CLAUDE_SURFACE=cli|app`).
+`StatusStore` reads both and selects: **live CLI → CLI; else live app → app**. Liveness =
+pid alive (start time checked against `updatedAt` to catch pid reuse) or an active state
+updated <30s ago. Selection is memoized for 1s so per-frame reads don't hammer process
+lookups.
 
 ## Collapsed pill (220×40)
 
@@ -69,11 +79,12 @@ Cancel: `Halo.Hooks.exe cancel <pid>` = `AttachConsole(consolePid)` + `GenerateC
   within 20s after a compact finished (`compactedAt`) → `compacted :)`.
 - **Outage override**: mid-work, if health flags trip, the verb is replaced by
   `api error :(` / `net error :(` and the ring goes red.
-- **Compacting state** (`state=compacting`): verb `compacting…` + elapsed timer (uses
-  `startedAt` like working), ring and panel dot turn **blue**, and an **indeterminate sweep
-  bar** runs along the pill bottom (46px blue segment, 3px tall, inset 16px each side,
-  1.3s loop — duration is unknowable, so no determinate fill). `IWidget.Animating` must be
-  true during it so the collapsed pill renders ~30fps.
+- **Compacting state** (`state=compacting`): verb `compacting…`, ring and panel dot turn
+  **blue**, and the whole pill background **breathes blue** — a rounded-rect fill (radius
+  h/2) whose alpha oscillates 0.05→0.16 on a 2.4s cosine loop. The right zone shows
+  `~68% · 46s`: elapsed (from `startedAt`) plus an **estimated** percent — compaction
+  reports no real progress, so it's time-based, `100·(1−e^(−t/40s))` capped at 99% (never
+  claims done). `IWidget.Animating` must be true during it so the pill renders ~30fps.
 
 ## Expanded panel (560×220)
 

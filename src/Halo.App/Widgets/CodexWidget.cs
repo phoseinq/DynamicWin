@@ -44,7 +44,7 @@ internal sealed class CodexWidget : IWidget
     public AgentNotice AgentNotice => _store.Current is { } status
         ? new AgentNotice(status.State, status.CompactedAt, status.Message)
         : AgentNotice.None;
-    // text-emerge animation + the compacting sweep both need frames while collapsed
+    // text-emerge animation + the compacting pulse both need frames while collapsed
     public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
 
     private string _shownKey = "";
@@ -99,8 +99,15 @@ internal sealed class CodexWidget : IWidget
     {
         var st = _store.Current;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
-        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        if (st?.State == "compacting") // soft blue breathing across the whole pill = process running
+        {
+            float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
+            using var pb = new SolidBrush(Mul(Blue, fade * (0.05f + 0.11f * pulse)));
+            using var pp = Rounded(new RectangleF(0, 0, w, h), h / 2f);
+            g.FillPath(pb, pp);
+        }
+        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
         using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (OpenAiIcon != null) DrawIcon(g, OpenAiIcon, x, y, sz, fade, sz / 2f); // circular
@@ -118,6 +125,7 @@ internal sealed class CodexWidget : IWidget
             _ => IdleMood(st),
         };
         string el = Elapsed(st);
+        if (st?.State == "compacting" && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
@@ -155,16 +163,14 @@ internal sealed class CodexWidget : IWidget
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
                 g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, 0, elW + 4, h), esf);
 
-        if (st?.State == "compacting") // indeterminate sweep along the pill bottom (duration unknown)
-        {
-            float t = Environment.TickCount % 1300 / 1300f;
-            const float seg = 46f;
-            float sx = -seg + (w + seg) * t;
-            var clip2 = g.Clip;
-            g.SetClip(new RectangleF(16, h - 5f, w - 32, 3f));
-            Fill(g, sx, h - 5f, seg, 3f, Mul(Blue, fade * 0.9f));
-            g.Clip = clip2;
-        }
+    }
+
+    // ponytail: compaction reports no real progress — time-based estimate, asymptote below 100%
+    private static string CompactPct(CodexSnapshot st)
+    {
+        if (st.StartedAt is not { } t) return "";
+        var s = (DateTimeOffset.UtcNow - t).TotalSeconds;
+        return $"~{Math.Min(99, (int)(100 * (1 - Math.Exp(-s / 40.0))))}%";
     }
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
@@ -557,18 +563,19 @@ internal sealed class CodexWidget : IWidget
     private static string? OutageText() =>
         CodexNetMon.NetDown ? "net error :(" : CodexNetMon.ApiDown ? "api error :(" : null;
 
+    // Codex-native tool names (rollout custom_tool_call, dotted prefix already stripped)
     private static string ToolVerb(string? tool) => tool switch
     {
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",
-        "Read" => "reading…",
-        "Bash" or "PowerShell" => "running…",
-        "Grep" or "Glob" => "digging…",
-        "WebFetch" => "fetching…",
-        "WebSearch" => "googling :P",
-        "Task" or "Agent" => "delegating…",
-        "TodoWrite" => "planning…",
-        "SlashCommand" or "Skill" => "using a skill…",
-        "AskUserQuestion" => "asking you :)",
+        "exec" or "shell" or "local_shell" or "exec_command" or "container" => "running…",
+        "apply_patch" or "edit" or "write_file" => "patching…",
+        "read_file" or "view" or "cat" => "reading…",
+        "grep" or "rg" or "find" or "list_dir" or "ls" => "digging…",
+        "web_search" or "search" => "googling :P",
+        "browser" or "fetch" or "open_url" => "fetching…",
+        "view_image" or "screenshot" => "peeking o.o",
+        "update_plan" or "plan" => "plotting…",
+        "spawn" or "agent" or "subagent" or "thread_spawn" => "delegating…",
+        "request_user_input" or "ask" => "asking you :)",
         null or "" => "hmm…",
         _ => tool!.ToLowerInvariant() + "…",
     };
