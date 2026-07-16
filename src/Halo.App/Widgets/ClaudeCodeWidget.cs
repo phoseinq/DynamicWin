@@ -149,7 +149,8 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string CompactPct(CcStatus st)
     {
         if (ParseTime(st.StartedAt) is not { } t) return "";
-        double expect = st.LastCompactMs is > 3000 and < 600_000 ? st.LastCompactMs / 1000.0 : 60;
+        // ×3: user-tuned pacing — crawling past reality beats finishing before the compact does
+        double expect = 3 * (st.LastCompactMs is > 3000 and < 600_000 ? st.LastCompactMs / 1000.0 : 60);
         return $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / expect, 1, 99)}%";
     }
 

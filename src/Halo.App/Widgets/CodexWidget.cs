@@ -173,9 +173,9 @@ internal sealed class CodexWidget : IWidget
         st?.State == "compacting" && st.StartedAt is { } t && t != _cancelledCompactKey
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
 
-    // ponytail: no duration history plumbed for Codex — pace against a 60s typical compact
+    // ponytail: no duration history plumbed for Codex — pace against 180s (user-tuned 1/3 speed)
     private static string CompactPct(CodexSnapshot st) => st.StartedAt is { } t
-        ? $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / 60, 1, 99)}%" : "";
+        ? $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / 180, 1, 99)}%" : "";
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
     {
