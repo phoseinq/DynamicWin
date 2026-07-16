@@ -204,31 +204,32 @@ internal sealed class CodexWidget : IWidget
             y += 40;
         }
         // hovering a limit row swaps its value for the precise one (exact % + absolute reset time)
-        string LimitValue(float f, DateTimeOffset reset, float rowY)
+        string LimitValue(float f, DateTimeOffset? reset, float rowY)
         {
             bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
                 && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
-                       : $"{Pct(f)}  ·  {ResetIn(reset)}";
+            if (reset is null) return Pct(f);
+            return hov ? $"{f * 100:0.#}%  ·  resets {reset.Value.ToLocalTime():ddd HH:mm}"
+                       : $"{Pct(f)}  ·  {ResetIn(reset.Value)}";
         }
         if (CodexLimits.Current?.Primary is { } primary)
         {
             float used = (float)(primary.UsedPercent / 100d);
-            DrawBar(g, pad, y, barW, "5-hour limit",
-                LimitValue(used, primary.ResetsAt ?? default, y), used, UsageColor(used), a, body, small);
+            DrawBar(g, pad, y, barW, LimitLabel(primary),
+                LimitValue(used, primary.ResetsAt, y), used, UsageColor(used), a, body, small);
             y += 40;
         }
         if (CodexLimits.Current?.Secondary is { } secondary)
         {
             float used = (float)(secondary.UsedPercent / 100d);
-            DrawBar(g, pad, y, barW, "Weekly limit",
-                LimitValue(used, secondary.ResetsAt ?? default, y), used, UsageColor(used), a, body, small);
+            DrawBar(g, pad, y, barW, LimitLabel(secondary),
+                LimitValue(used, secondary.ResetsAt, y), used, UsageColor(used), a, body, small);
         }
 
         // usage freshness + manual refresh (clickable)
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
-        string age = CodexLimits.LastSuccess == DateTime.MinValue ? "usage never fetched"
+        string age = CodexLimits.LastSuccess == DateTimeOffset.MinValue ? "usage never fetched"
             : $"updated {AgeText(DateTime.UtcNow - CodexLimits.LastSuccess)}";
         string rtxt = $"{age}  ·  ⟳ refresh";
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
@@ -238,6 +239,13 @@ internal sealed class CodexWidget : IWidget
 
         DrawCancel(g, w, h, a, body);
     }
+
+    private static string LimitLabel(CodexLimit limit) => limit.WindowMinutes switch
+    {
+        300 => "5-hour limit",
+        10_080 => "Weekly limit",
+        _ => "Plan limit",
+    };
 
     // small circular stop button (square glyph = stop), red when a prompt can be interrupted
     private void DrawCancel(Graphics g, int w, int h, float a, Font font)

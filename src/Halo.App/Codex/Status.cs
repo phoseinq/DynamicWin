@@ -59,7 +59,7 @@ internal static class CodexRollout
             var updatedAt = DateTimeOffset.MinValue;
             var sawEvent = false;
 
-            foreach (var line in File.ReadLines(path))
+            foreach (var line in ReadSharedLines(path))
             {
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
@@ -127,14 +127,16 @@ internal static class CodexRollout
                                     contextMax = tokenContextMax;
                                     presentFields |= CodexSnapshotFields.ContextMax;
                                 }
-                                if (TotalTokens(Property(tokenInfo, "total_token_usage")) is { } totalTokens)
+                                var lastTokens = TotalTokens(Property(tokenInfo, "last_token_usage"));
+                                var contextTokens = lastTokens ?? TotalTokens(Property(tokenInfo, "total_token_usage"));
+                                if (contextTokens is { } currentTokens)
                                 {
-                                    contextUsed = totalTokens;
+                                    contextUsed = currentTokens;
                                     presentFields |= CodexSnapshotFields.ContextUsed;
                                 }
-                                if (TotalTokens(Property(tokenInfo, "last_token_usage")) is { } lastTokens)
+                                if (lastTokens is { } turnTokens)
                                 {
-                                    promptTokens = lastTokens;
+                                    promptTokens = turnTokens;
                                     presentFields |= CodexSnapshotFields.PromptTokens;
                                 }
                             }
@@ -236,7 +238,7 @@ internal static class CodexRollout
     {
         try
         {
-            foreach (var line in File.ReadLines(path).Take(8))
+            foreach (var line in ReadSharedLines(path).Take(8))
             {
                 if (string.IsNullOrWhiteSpace(line))
                     continue;
@@ -265,6 +267,15 @@ internal static class CodexRollout
         }
 
         return null;
+    }
+
+    private static IEnumerable<string> ReadSharedLines(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+            yield return line;
     }
 }
 

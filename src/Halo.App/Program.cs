@@ -46,7 +46,8 @@ internal static class Program
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), () => { }),
                 _ => new MediaWidget(),
             };
-            System.Threading.Thread.Sleep(2000);
+            for (int i = 0; i < 100 && !w.IsActive; i++)
+                System.Threading.Thread.Sleep(100);
             using var bmp = new System.Drawing.Bitmap(560, 220);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {

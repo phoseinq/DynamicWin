@@ -76,10 +76,14 @@ internal sealed class AgentNoticeCoordinator
         _previous[widgetIndex] = notice;
 
         bool waiting = notice.State == "waiting_input" && previous.State != "waiting_input";
+        bool started = notice.State == "working" && previous.State != "working";
         bool compacted = notice.State is not null && notice.State != "compacting" &&
             (previous.State == "compacting" || notice.CompactedAt is not null && notice.CompactedAt != previous.CompactedAt);
         if (waiting || compacted)
             _pending[widgetIndex] = new NoticeWindow(now.AddSeconds(waiting ? 6 : 4), desktopBacked, _nextOrder++);
+
+        if (started && allowSelection && _pending.Count == 0 && _restore < 0)
+            Primary = widgetIndex;
 
         if (allowSelection)
             Select(now, static _ => true);
