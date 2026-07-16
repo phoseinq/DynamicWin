@@ -93,3 +93,17 @@ waiting on user's call re suppression appetite.
 ## Verify recipe
 Run exe in background, drop a colorful WinForms backdrop behind it, move cursor onto the pill center
 (1280,15) to hover-expand, `CopyFromScreen` to PNG, view. Crash log: `%TEMP%\halo-crash.log`.
+
+## Codex widget done (2026-07-16)
+- Supports Codex Desktop and CLI; Desktop wins when both are active.
+- Lifecycle hooks write `~/.codex/notch/{desktop,cli}.json`; rollout JSONL supplies live state,
+  context, model window, and real rate-limit windows without private endpoints.
+- Live rollout files are read with shared access so an active Codex session remains visible.
+- Codex auto-promotes into the primary pill when it enters `working`; CLI Stop injects Esc and
+  Desktop Stop remains disabled.
+- Independent `chatgpt.com` HTTPS health graph, OpenAI asset, status-ring/mood/emerge animations,
+  context and dynamic plan-limit rows match the Claude widget.
+- User-reported Claude stale-status bug fixed: dead/reused PID makes Claude inactive; Halo hides when
+  no widgets are active and reappears when one becomes active.
+- Verification: Release build 0 warnings/errors, 56/56 tests, deployed to `%LOCALAPPDATA%\Halo\app`;
+  hooks installed with backup at `~/.codex/hooks.json.halo-bak`; live Desktop screenshots captured.
