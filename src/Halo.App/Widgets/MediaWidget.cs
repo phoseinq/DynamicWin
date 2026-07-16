@@ -246,6 +246,7 @@ internal sealed class MediaWidget : IWidget
         EnsureArt();
 
         const float artX = 26, artY = 26, artSize = 132;
+        DrawGlow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 0.85f, h * 1.2f, 38);
         DrawArt(g, artX, artY, artSize, fade);
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
@@ -329,21 +330,42 @@ internal sealed class MediaWidget : IWidget
         lock (_lock) { title = _title; playing = _playing; }
         if (title == null) return;
         EnsureArt();
-        float sz = h - 14f, x = 9, y = (h - sz) / 2f - 2f; // slightly smaller + nudged up
+        float sz = h - 14f, x = 9, y = (h - sz) / 2f;
+        DrawGlow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
-        DrawEqualizer(g, w - 14f, h / 2f - 1f, fade, playing);
+        DrawEqualizer(g, w - 14f, h / 2f, fade, playing);
+    }
+
+    // very soft accent wash from the album art over the black pill, clipped to the pill shape
+    private void DrawGlow(Graphics g, int w, int h, float fade, float cx, float cy, float rx, float ry, int alpha)
+    {
+        if (_accent == White) return;
+        using var clip = Rounded(new RectangleF(0, 0, w, h), Math.Min(h / 2f, 30f));
+        var old = g.Clip;
+        g.SetClip(clip);
+        using var gp = new GraphicsPath();
+        gp.AddEllipse(cx - rx, cy - ry, rx * 2, ry * 2);
+        using var pgb = new PathGradientBrush(gp)
+        {
+            CenterColor = Color.FromArgb((int)(alpha * fade), _accent),
+            SurroundColors = new[] { Color.FromArgb(0, _accent) },
+            CenterPoint = new PointF(cx, cy),
+        };
+        g.FillPath(pgb, gp);
+        g.Clip = old;
     }
 
     private const int EqBars = 9;
     private readonly AudioMeter _meter = new();
     private readonly float[] _eq = new float[EqBars];
+    private float _amp;
 
     // iOS Dynamic-Island waveform: many thin rounded bars, center-weighted (tall middle, dots at
     // the edges), driven by the real output level, tinted from the art.
     private void DrawEqualizer(Graphics g, float rightX, float cy, float fade, bool playing)
     {
         float peak = playing ? _meter.Peak() : 0f;
-        float amp = Math.Clamp((float)Math.Sqrt(peak) * 1.4f, 0f, 1f);
+        _amp += (Math.Clamp((float)Math.Sqrt(peak) * 1.4f, 0f, 1f) - _amp) * 0.22f; // smoothed level
         const float barW = 2.6f, gap = 2.6f, maxH = 22f, minH = 2.6f;
         double t = Environment.TickCount / 1000.0;
         float totalW = EqBars * barW + (EqBars - 1) * gap;
@@ -352,9 +374,9 @@ internal sealed class MediaWidget : IWidget
         {
             // center-weight envelope makes it read as a waveform blob, not a flat spectrum
             float env = 0.25f + 0.75f * (float)Math.Sin(Math.PI * (i + 0.5) / EqBars);
-            float phase = 0.5f + 0.5f * (float)Math.Sin(t * (3.0 + i * 0.7) + i * 1.9);
-            float target = minH + (maxH - minH) * amp * env * (0.35f + 0.65f * phase);
-            _eq[i] += (target - _eq[i]) * (target > _eq[i] ? 0.6f : 0.14f); // fast catch, VU-style fall
+            float phase = 0.5f + 0.5f * (float)Math.Sin(t * (1.7 + i * 0.4) + i * 1.9);
+            float target = minH + (maxH - minH) * _amp * env * (0.35f + 0.65f * phase);
+            _eq[i] += (target - _eq[i]) * (target > _eq[i] ? 0.28f : 0.10f); // gentle rise, slow fall
             float bh = Math.Max(minH, _eq[i]);
             Color col = playing ? PaletteAt((float)i / (EqBars - 1)) : Color.FromArgb(120, 255, 255, 255);
             Fill(g, x0 + i * (barW + gap), cy - bh / 2f, barW, bh, Mul(col, fade));
