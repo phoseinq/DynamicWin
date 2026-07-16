@@ -9,6 +9,7 @@ internal sealed class CcSession
 {
     public long ContextUsed { get; set; }
     public long ContextMax { get; set; } = 200000;
+    public long PromptTokens { get; set; } // tokens used by the currently running turn (not the total)
 }
 
 internal sealed class CcUsage
@@ -27,6 +28,9 @@ internal sealed class CcStatus
     public int ConsolePid { get; set; }
     public string? CurrentTool { get; set; }
     public string? LastPrompt { get; set; }
+    public string? StartedAt { get; set; }
+    public string? Message { get; set; } // what Claude is asking (notify hook)
+    public string? CompactedAt { get; set; } // when the last compact finished
     public CcSession? Session { get; set; }
     public CcUsage? Usage { get; set; }
     public string? UpdatedAt { get; set; }

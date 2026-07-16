@@ -11,6 +11,7 @@ internal static class Win32
     public const int WS_EX_TOPMOST = 0x00000008;
     public const int WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
     public const int SW_SHOWNOACTIVATE = 4;
+    public const int SW_HIDE = 0;
 
     public const uint WM_DESTROY = 0x0002;
     public const uint WM_MOUSEMOVE = 0x0200;
@@ -77,6 +78,10 @@ internal static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
 
+    public static readonly IntPtr IDC_ARROW = new(32512);
+    [DllImport("user32.dll")]
+    public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style,
         int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr hInstance, IntPtr param);
@@ -86,6 +91,11 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+    public const int SM_CXSCREEN = 0, SM_CYSCREEN = 1;
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetrics(int index);
 
     [DllImport("user32.dll")]
     public static extern int GetMessage(out MSG msg, IntPtr hwnd, uint min, uint max);
@@ -173,7 +183,15 @@ internal static class Win32
     public static extern IntPtr GetDC(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr GetWindowDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
     public static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+    public const uint SRCCOPY = 0x00CC0020;
+
+    [DllImport("gdi32.dll")]
+    public static extern bool BitBlt(IntPtr hdc, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
 
     [DllImport("gdi32.dll")]
     public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
@@ -187,6 +205,25 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
         IntPtr hdcSrc, ref POINT pptSrc, uint crKey, ref BLENDFUNCTION pblend, uint dwFlags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public int biSize;
+        public int biWidth;
+        public int biHeight;
+        public short biPlanes;
+        public short biBitCount;
+        public int biCompression;
+        public int biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public int biClrUsed;
+        public int biClrImportant;
+    }
+
+    [DllImport("gdi32.dll")]
+    public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
 
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
@@ -205,6 +242,31 @@ internal static class Win32
 
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hwnd, char[] buf, int max);
+
+    public const uint GA_ROOT = 2;
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT p);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    public const uint PW_RENDERFULLCONTENT = 2;
+
+    [DllImport("user32.dll")]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool SetWindowOrgEx(IntPtr hdc, int x, int y, IntPtr prev);
 
     public static void EnableAcrylic(IntPtr hwnd, uint gradientColor)
     {

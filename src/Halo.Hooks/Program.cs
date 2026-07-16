@@ -41,12 +41,21 @@ internal static class Program
                     status["sessionId"] = Field("session_id");
                     status["cwd"] = Field("cwd");
                     status["state"] = "idle";
+                    if (Field("source") == "compact") // session restarting after a compact = it finished
+                        status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
                     RecordProcess(status);
+                    break;
+                case "pre-compact":
+                    status["state"] = "compacting";
+                    status["startedAt"] = DateTimeOffset.UtcNow.ToString("o");
+                    status["message"] = null;
                     break;
                 case "prompt":
                     status["state"] = "working";
                     status["lastPrompt"] = Truncate(Field("prompt"), 120);
                     status["currentTool"] = null;
+                    status["startedAt"] = DateTimeOffset.UtcNow.ToString("o"); // turn start, for elapsed time
+                    status["message"] = null;
                     RecordProcess(status);
                     UpdateContext(status, Field("transcript_path"));
                     break;
@@ -60,15 +69,19 @@ internal static class Program
                     break;
                 case "notify":
                     status["state"] = "waiting_input";
+                    status["message"] = Truncate(Field("message"), 160); // what Claude is asking
                     break;
                 case "stop":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["startedAt"] = null;
+                    status["message"] = null;
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "session-end":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["startedAt"] = null;
                     break;
                 default:
                     return 0;
@@ -130,6 +143,14 @@ internal static class Program
         {
             if (string.IsNullOrEmpty(transcriptPath) || !File.Exists(transcriptPath)) return;
             var lines = File.ReadAllLines(transcriptPath);
+
+            var started = DateTimeOffset.MinValue;
+            if (status["startedAt"] is JsonNode sn)
+                DateTimeOffset.TryParse(sn.GetValue<string>(), null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out started);
+
+            long latest = 0, turn = 0;
+            string? model = null;
             for (int i = lines.Length - 1; i >= 0; i--)
             {
                 if (string.IsNullOrWhiteSpace(lines[i])) continue;
@@ -138,16 +159,31 @@ internal static class Program
                 var usage = node?["message"]?["usage"] ?? node?["usage"];
                 if (usage == null) continue;
 
-                long used = Get(usage, "input_tokens") + Get(usage, "cache_read_input_tokens")
-                    + Get(usage, "cache_creation_input_tokens") + Get(usage, "output_tokens");
-                if (used <= 0) continue;
+                long ctx = Get(usage, "input_tokens") + Get(usage, "cache_read_input_tokens")
+                    + Get(usage, "cache_creation_input_tokens");
+                if (latest == 0 && ctx > 0)
+                {
+                    latest = ctx;
+                    model = (node?["message"]?["model"] ?? node?["model"])?.GetValue<string>();
+                }
 
-                var session = status["session"] as JsonObject ?? new JsonObject();
-                session["contextUsed"] = used;
-                if (session["contextMax"] == null) session["contextMax"] = 200000;
-                status["session"] = session;
-                return;
+                // this turn's real consumption: new input + cache writes + output for every API call
+                // since the prompt started (cache reads excluded — that's the old context re-read)
+                if (started == DateTimeOffset.MinValue) { if (latest > 0) break; continue; }
+                var tsNode = node?["timestamp"]?.GetValue<string>();
+                if (!DateTimeOffset.TryParse(tsNode, null,
+                        System.Globalization.DateTimeStyles.RoundtripKind, out var ts)) continue;
+                if (ts < started) { if (latest > 0) break; continue; }
+                turn += Get(usage, "input_tokens") + Get(usage, "cache_creation_input_tokens")
+                    + Get(usage, "output_tokens");
             }
+            if (latest <= 0) return;
+
+            var session = status["session"] as JsonObject ?? new JsonObject();
+            session["contextUsed"] = latest;
+            session["contextMax"] = ContextWindow(model);
+            session["promptTokens"] = turn;
+            status["session"] = session;
         }
         catch
         {
@@ -158,6 +194,15 @@ internal static class Program
     {
         try { return usage[key]?.GetValue<long>() ?? 0; }
         catch { return 0; }
+    }
+
+    // context window per model family (Opus/Fable/Sonnet take 1M; Haiku 200K)
+    private static long ContextWindow(string? model)
+    {
+        var m = (model ?? "").ToLowerInvariant();
+        if (m.Contains("haiku")) return 200_000;
+        if (m.Contains("opus") || m.Contains("fable") || m.Contains("sonnet")) return 1_000_000;
+        return 200_000;
     }
 
     private static void RecordProcess(JsonObject status)
@@ -229,20 +274,51 @@ internal static class Program
         return map;
     }
 
-    private const uint CTRL_C_EVENT = 0;
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool AttachConsole(uint pid);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool FreeConsole();
-    [DllImport("kernel32.dll")] private static extern bool GenerateConsoleCtrlEvent(uint evt, uint pgid);
-    [DllImport("kernel32.dll")] private static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteConsoleInput(IntPtr h, INPUT_RECORD[] buffer, uint length, out uint written);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEY_EVENT_RECORD
+    {
+        public int bKeyDown;
+        public ushort wRepeatCount;
+        public ushort wVirtualKeyCode;
+        public ushort wVirtualScanCode;
+        public ushort UnicodeChar;
+        public uint dwControlKeyState;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT_RECORD
+    {
+        public ushort EventType;
+        public ushort _pad;
+        public KEY_EVENT_RECORD Key;
+    }
+
+    // Inject Esc into the Claude Code process's console — cancels the running turn WITHOUT
+    // closing it (Ctrl+C would signal the whole console group and kill the terminal).
     private static void Cancel(int pid)
     {
         FreeConsole();
         if (!AttachConsole((uint)pid)) return;
-        SetConsoleCtrlHandler(IntPtr.Zero, true);
-        GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-        System.Threading.Thread.Sleep(150);
-        FreeConsole();
-        SetConsoleCtrlHandler(IntPtr.Zero, false);
+        try
+        {
+            const uint GENERIC_RW = 0x80000000 | 0x40000000, SHARE_RW = 1 | 2, OPEN_EXISTING = 3;
+            IntPtr hIn = CreateFile("CONIN$", GENERIC_RW, SHARE_RW, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+            if (hIn == IntPtr.Zero || hIn == new IntPtr(-1)) return;
+            var recs = new[]
+            {
+                new INPUT_RECORD { EventType = 1, Key = new KEY_EVENT_RECORD { bKeyDown = 1, wRepeatCount = 1, wVirtualKeyCode = 0x1B, wVirtualScanCode = 0x01, UnicodeChar = 0x1B } },
+                new INPUT_RECORD { EventType = 1, Key = new KEY_EVENT_RECORD { bKeyDown = 0, wRepeatCount = 1, wVirtualKeyCode = 0x1B, wVirtualScanCode = 0x01, UnicodeChar = 0x1B } },
+            };
+            WriteConsoleInput(hIn, recs, (uint)recs.Length, out _);
+            CloseHandle(hIn);
+        }
+        finally { FreeConsole(); }
     }
 }
