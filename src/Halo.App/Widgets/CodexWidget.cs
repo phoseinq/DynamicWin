@@ -7,6 +7,8 @@ using Halo.Codex;
 
 namespace Halo.Widgets;
 
+internal enum CodexCancelRoute { None, Cli, Desktop }
+
 internal sealed class CodexWidget : IWidget
 {
     private static readonly Color Blue = Color.FromArgb(91, 157, 255);
@@ -58,11 +60,22 @@ internal sealed class CodexWidget : IWidget
         catch { return null; }
     }
 
-    private bool CanCancel => _store.Current switch
+    private bool CanCancel
     {
-        { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 } => true,
-        { Source: CodexSurface.Desktop, State: "working" } => _canCancelDesktop(),
-        _ => false,
+        get
+        {
+            var snapshot = _store.Current;
+            var canCancelDesktop = snapshot is { Source: CodexSurface.Desktop, State: "working" } &&
+                _canCancelDesktop();
+            return GetCancelRoute(snapshot, canCancelDesktop) != CodexCancelRoute.None;
+        }
+    }
+
+    internal static CodexCancelRoute GetCancelRoute(CodexSnapshot? snapshot, bool canCancelDesktop) => snapshot switch
+    {
+        { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 } => CodexCancelRoute.Cli,
+        { Source: CodexSurface.Desktop, State: "working" } when canCancelDesktop => CodexCancelRoute.Desktop,
+        _ => CodexCancelRoute.None,
     };
 
     private bool _wasOpen;
