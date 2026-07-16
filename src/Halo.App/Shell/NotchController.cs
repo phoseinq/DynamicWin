@@ -136,6 +136,7 @@ internal sealed class NotchController
     private readonly LayeredNotch _notch;
     private readonly StatusStore _claudeStore;
     private readonly CodexStatusStore _codexStore;
+    private readonly CodexDesktopRuntime _codexDesktopRuntime;
     private readonly IWidget[] _widgets;
     private readonly AgentNoticeCoordinator _agentNotices;
     private readonly DispatcherQueueTimer _timer;
@@ -165,12 +166,13 @@ internal sealed class NotchController
         _notch = notch;
         _claudeStore = new StatusStore();
         _codexStore = new CodexStatusStore();
+        _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
         CodexLimits.UpdateFrom(_codexStore.Current);
         _widgets = [
             new MediaWidget(),
             new ClaudeCodeWidget(_claudeStore, CancelClaude),
-            new CodexWidget(_codexStore, CancelCodex),
+            new CodexWidget(_codexStore, CancelCodex, () => _codexDesktopRuntime.Presence.Running),
         ];
 
         _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
@@ -452,7 +454,9 @@ internal sealed class NotchController
     {
         var snapshot = _codexStore.Current;
         if (snapshot is { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 })
-            CcCancel.Request(snapshot.ConsolePid); // existing helper injects Esc into the CLI console
+            CcCancel.Request(snapshot.ConsolePid);
+        else if (snapshot is { Source: CodexSurface.Desktop, State: "working" })
+            _codexDesktopRuntime.TryCancel();
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;

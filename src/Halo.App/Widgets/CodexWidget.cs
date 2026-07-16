@@ -19,11 +19,13 @@ internal sealed class CodexWidget : IWidget
 
     private readonly CodexStatusStore _store;
     private readonly Action _cancel;
+    private readonly Func<bool> _canCancelDesktop;
 
-    public CodexWidget(CodexStatusStore store, Action cancel)
+    public CodexWidget(CodexStatusStore store, Action cancel, Func<bool>? canCancelDesktop = null)
     {
         _store = store;
         _cancel = cancel;
+        _canCancelDesktop = canCancelDesktop ?? (static () => false);
         CodexLimits.Attach(store);
     }
 
@@ -56,7 +58,12 @@ internal sealed class CodexWidget : IWidget
         catch { return null; }
     }
 
-    private bool CanCancel => _store.Current is { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 };
+    private bool CanCancel => _store.Current switch
+    {
+        { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 } => true,
+        { Source: CodexSurface.Desktop, State: "working" } => _canCancelDesktop(),
+        _ => false,
+    };
 
     private bool _wasOpen;
 

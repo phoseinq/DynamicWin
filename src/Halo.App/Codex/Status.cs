@@ -294,6 +294,7 @@ internal sealed class CodexStatusStore : IDisposable
     private readonly Func<int, bool> _processAlive;
     private readonly Func<string, CodexSnapshot?> _parseRollout;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<CodexDesktopPresence> _desktopPresence;
     private readonly object _workGate = new();
     private readonly object _publicationGate = new();
     private readonly object _scheduleGate = new();
@@ -337,7 +338,8 @@ internal sealed class CodexStatusStore : IDisposable
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "notch"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "sessions"),
             IsProcessAlive,
-            watchFiles: true)
+            watchFiles: true,
+            desktopPresence: () => CodexDesktopRuntime.Shared.Presence)
     {
     }
 
@@ -347,13 +349,15 @@ internal sealed class CodexStatusStore : IDisposable
         Func<int, bool> processAlive,
         bool watchFiles,
         Func<string, CodexSnapshot?>? parseRollout = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<CodexDesktopPresence>? desktopPresence = null)
     {
         _statusDirectory = statusDirectory;
         _sessionsDirectory = sessionsDirectory;
         _processAlive = processAlive;
         _parseRollout = parseRollout ?? CodexRollout.Parse;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _desktopPresence = desktopPresence ?? (() => CodexDesktopRuntime.Shared.Presence);
         Directory.CreateDirectory(_statusDirectory);
         Directory.CreateDirectory(_sessionsDirectory);
         _reloadTimer = new Timer(_ => ProcessScheduledReload(), null, Timeout.Infinite, Timeout.Infinite);
@@ -484,7 +488,7 @@ internal sealed class CodexStatusStore : IDisposable
                 return;
 
             var now = _clock();
-            var desktopCandidate = Merge(_desktopStatus, _desktopRollout, now);
+            var desktopCandidate = NormalizeDesktop(Merge(_desktopStatus, _desktopRollout, now), _desktopPresence(), now);
             var cliCandidate = Merge(_cliStatus, _cliRollout, now);
             var next = Select(desktopCandidate, cliCandidate, now);
             lock (_publicationGate)
@@ -514,9 +518,10 @@ internal sealed class CodexStatusStore : IDisposable
                 generation = _publicationGeneration;
             }
 
-            desktop = RefreshProcessAlive(desktop);
+            var now = _clock();
+            desktop = NormalizeDesktop(RefreshProcessAlive(desktop), _desktopPresence(), now);
             cli = RefreshProcessAlive(cli);
-            var next = Select(desktop, cli, _clock());
+            var next = Select(desktop, cli, now);
 
             lock (_publicationGate)
             {
@@ -561,6 +566,23 @@ internal sealed class CodexStatusStore : IDisposable
 
     private static bool IsFresh(CodexSnapshot snapshot, DateTimeOffset now) =>
         snapshot.ProcessAlive || snapshot.UpdatedAt >= now.AddSeconds(-30);
+
+    internal static CodexSnapshot? NormalizeDesktop(
+        CodexSnapshot? snapshot, CodexDesktopPresence presence, DateTimeOffset now)
+    {
+        if (!presence.Running)
+            return null;
+        if (snapshot is null || snapshot.UpdatedAt < presence.StartedAt)
+            return EmptyDesktop(presence.StartedAt);
+        if (snapshot.UpdatedAt < now.AddSeconds(-30) &&
+            snapshot.State is "working" or "waiting_input" or "compacting")
+            return snapshot with { State = "idle", CurrentTool = null, StartedAt = null, ProcessAlive = true };
+        return snapshot with { ProcessAlive = true };
+    }
+
+    private static CodexSnapshot EmptyDesktop(DateTimeOffset startedAt) => new(
+        CodexSurface.Desktop, "idle", null, null, null, null, null, 0, 0, 0, 0, 0,
+        null, null, startedAt, true);
 
     private static CodexSnapshot? Merge(CodexSnapshot? hook, CodexSnapshot? rollout, DateTimeOffset now)
     {

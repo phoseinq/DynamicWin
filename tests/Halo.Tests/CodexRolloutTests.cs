@@ -5,6 +5,27 @@ namespace Halo.Tests;
 public sealed class CodexRolloutTests
 {
     [Fact]
+    public void DesktopPresence_KeepsQuietRolloutIdleWhileAppRuns()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var rollout = Snapshot(CodexSurface.Desktop, now.AddMinutes(-2), alive: false);
+
+        var value = CodexStatusStore.NormalizeDesktop(
+            rollout, new CodexDesktopPresence(true, now.AddHours(-1)), now);
+
+        Assert.Equal("idle", value!.State);
+    }
+
+    [Fact]
+    public void DesktopPresence_DropsSnapshotWhenAppStops()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.Null(CodexStatusStore.NormalizeDesktop(
+            Snapshot(CodexSurface.Desktop, now, false), new(false, default), now));
+    }
+
+    [Fact]
     public void Parse_UsesLatestTokenCountAndTaskState()
     {
         var path = TempRollout(
@@ -113,7 +134,8 @@ public sealed class CodexRolloutTests
             TokenCount(total: 800, context: 353_400, primaryUsed: 35, primaryWindow: 300,
                 primaryReset: 1784808749, secondaryUsed: 45, secondaryWindow: 10_080, secondaryResetInSeconds: 900));
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false,
+            desktopPresence: StoppedDesktop);
 
         Assert.Equal(CodexSurface.Cli, store.Current!.Source);
         Assert.Equal("hook-tool", store.Current.CurrentTool);
@@ -139,7 +161,8 @@ public sealed class CodexRolloutTests
         WriteRollout(temp.Sessions, "desktop", "Codex Desktop", now,
             EventAt(now, "task_started", "\"model_context_window\":353400"));
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false,
+            desktopPresence: RunningDesktop);
 
         Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
         Assert.Equal("working", store.Current.State);
@@ -152,7 +175,8 @@ public sealed class CodexRolloutTests
         var alive = false;
         WriteStatus(temp.Status, "cli", "working", DateTimeOffset.UtcNow.AddMinutes(-5), pid: 424242, processAlive: true);
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => alive, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => alive, watchFiles: false,
+            desktopPresence: StoppedDesktop);
 
         Assert.Null(store.Current);
 
@@ -174,7 +198,8 @@ public sealed class CodexRolloutTests
             EventAt(now, "token_count",
                 "\"info\":null,\"rate_limits\":{\"primary\":{\"used_percent\":27,\"window_minutes\":300,\"resets_in_seconds\":60}}"));
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false,
+            desktopPresence: StoppedDesktop);
 
         Assert.Equal(7_000, store.Current!.ContextUsed);
         Assert.Equal(250_000, store.Current.ContextMax);
@@ -192,7 +217,8 @@ public sealed class CodexRolloutTests
         WriteRollout(temp.Sessions, "partial-info", "codex_cli_rs", now,
             EventAt(now, "token_count", "\"info\":{\"total_token_usage\":{\"total_tokens\":8765}},\"rate_limits\":null"));
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false,
+            desktopPresence: StoppedDesktop);
 
         Assert.Equal(8_765, store.Current!.ContextUsed);
         Assert.Equal(250_000, store.Current.ContextMax);
@@ -206,7 +232,8 @@ public sealed class CodexRolloutTests
         var now = DateTimeOffset.UtcNow;
         WriteStatus(temp.Status, "desktop", "working", now, pid: 7, currentTool: "first");
 
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: true);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: true,
+            desktopPresence: RunningDesktop);
         var initialVersion = store.Version;
         File.WriteAllText(Path.Combine(temp.Status, "desktop.json"), "{partial");
 
@@ -237,7 +264,7 @@ public sealed class CodexRolloutTests
         {
             Interlocked.Increment(ref parseCount);
             return CodexRollout.Parse(path);
-        });
+        }, desktopPresence: StoppedDesktop);
         var initialVersion = store.Version;
         var initialParseCount = parseCount;
 
@@ -253,7 +280,8 @@ public sealed class CodexRolloutTests
     public void WatcherError_SchedulesFullRolloutRecovery()
     {
         using var temp = new TempDirectory();
-        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false);
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false,
+            desktopPresence: RunningDesktop);
         var initialVersion = store.Version;
         var now = DateTimeOffset.UtcNow;
         WriteRollout(temp.Sessions, "recovered", "Codex Desktop", now,
@@ -267,7 +295,7 @@ public sealed class CodexRolloutTests
     }
 
     [Fact]
-    public void Polling_ExpiresFreshRolloutWithoutFilesystemWork()
+    public void Polling_NormalizesStaleDesktopRolloutWithoutFilesystemWork()
     {
         using var temp = new TempDirectory();
         var now = DateTimeOffset.UtcNow;
@@ -280,7 +308,8 @@ public sealed class CodexRolloutTests
                 Interlocked.Increment(ref parseCount);
                 return CodexRollout.Parse(path);
             },
-            clock: () => now);
+            clock: () => now,
+            desktopPresence: RunningDesktop);
         var initialVersion = store.Version;
         var initialParseCount = parseCount;
 
@@ -288,7 +317,7 @@ public sealed class CodexRolloutTests
 
         now = now.AddSeconds(31);
 
-        Assert.Null(store.Current);
+        Assert.Equal("idle", store.Current!.State);
         Assert.True(store.Version > initialVersion);
         Assert.Equal(initialParseCount, parseCount);
     }
@@ -302,7 +331,8 @@ public sealed class CodexRolloutTests
         WriteStatus(temp.Status, "desktop", "working", now.AddMinutes(-5), pid: 101);
         WriteStatus(temp.Status, "cli", "working", now.AddMinutes(-5), pid: 202);
         using var store = new CodexStatusStore(temp.Status, temp.Sessions, livePids.Contains, watchFiles: false,
-            clock: () => now);
+            clock: () => now,
+            desktopPresence: () => livePids.Contains(101) ? RunningDesktop() : StoppedDesktop());
         var initialVersion = store.Version;
 
         Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
@@ -315,6 +345,10 @@ public sealed class CodexRolloutTests
 
     private static CodexSnapshot Snapshot(CodexSurface source, DateTimeOffset updatedAt, bool alive) => new(
         source, "working", null, null, null, null, null, 0, 0, 0, 0, 0, null, null, updatedAt, alive);
+
+    private static CodexDesktopPresence RunningDesktop() => new(true, DateTimeOffset.MinValue);
+
+    private static CodexDesktopPresence StoppedDesktop() => new(false, default);
 
     private static string TempRollout(params string[] events)
     {
