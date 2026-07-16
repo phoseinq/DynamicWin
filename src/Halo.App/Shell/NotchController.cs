@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using Halo.ClaudeCode;
+using Halo.Codex;
 using Halo.Interop;
 using Halo.Widgets;
 using Windows.System;
@@ -48,6 +50,76 @@ internal static class NotchVisibility
     }
 }
 
+internal sealed class AgentNoticeCoordinator
+{
+    private readonly Dictionary<int, AgentNotice> _previous = new();
+    private readonly Dictionary<int, NoticeWindow> _pending = new();
+    private long _nextOrder;
+    private int _restore = -1;
+
+    internal AgentNoticeCoordinator(int primary) => Primary = primary;
+
+    internal int Primary { get; private set; }
+
+    internal bool IsOpen(DateTimeOffset now) => _pending.Values.Any(window => window.Until >= now);
+
+    internal void SetPrimary(int primary)
+    {
+        if (_restore < 0)
+            Primary = primary;
+    }
+
+    internal void Observe(int widgetIndex, AgentNotice notice, DateTimeOffset now,
+        bool desktopBacked = false, bool allowSelection = true)
+    {
+        _previous.TryGetValue(widgetIndex, out var previous);
+        _previous[widgetIndex] = notice;
+
+        bool waiting = notice.State == "waiting_input" && previous.State != "waiting_input";
+        bool compacted = notice.State is not null && notice.State != "compacting" &&
+            (previous.State == "compacting" || notice.CompactedAt is not null && notice.CompactedAt != previous.CompactedAt);
+        if (waiting || compacted)
+            _pending[widgetIndex] = new NoticeWindow(now.AddSeconds(waiting ? 6 : 4), desktopBacked, _nextOrder++);
+
+        if (allowSelection)
+            Select(now, static _ => true);
+    }
+
+    internal void Tick(DateTimeOffset now, Func<int, bool>? isActive = null, bool allowSelection = true)
+    {
+        foreach (var (index, window) in _pending.ToArray())
+            if (window.Until < now)
+                _pending.Remove(index);
+
+        if (allowSelection)
+            Select(now, isActive ?? (static _ => true));
+    }
+
+    private void Select(DateTimeOffset now, Func<int, bool> isActive)
+    {
+        if (_pending.Count > 0)
+        {
+            if (_restore < 0)
+                _restore = Primary;
+
+            Primary = _pending
+                .OrderBy(pair => pair.Key == _restore ? 0 : pair.Value.DesktopBacked ? 1 : 2)
+                .ThenBy(pair => pair.Value.Order)
+                .First().Key;
+            return;
+        }
+
+        if (_restore >= 0)
+        {
+            if (isActive(_restore))
+                Primary = _restore;
+            _restore = -1;
+        }
+    }
+
+    private readonly record struct NoticeWindow(DateTimeOffset Until, bool DesktopBacked, long Order);
+}
+
 internal sealed class NotchController
 {
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
@@ -58,8 +130,10 @@ internal sealed class NotchController
     private const int CaptureFast = 2, CaptureSlow = 12; // glass capture cadence: ~60fps expanded, ~10fps collapsed
 
     private readonly LayeredNotch _notch;
-    private readonly StatusStore _store;
+    private readonly StatusStore _claudeStore;
+    private readonly CodexStatusStore _codexStore;
     private readonly IWidget[] _widgets;
+    private readonly AgentNoticeCoordinator _agentNotices;
     private readonly DispatcherQueueTimer _timer;
     private readonly int _cl, _ct, _el, _et;
 
@@ -82,15 +156,18 @@ internal sealed class NotchController
     private int _captureTick;
     private int _animTick;
     private int _lastCaptureVer;
-    private DateTime _noticeUntil;       // Apple-style: pill auto-expands while Claude waits for input
-    private string? _lastCcState;
-    private int _noticeRestore = -1;
-
     public NotchController(LayeredNotch notch)
     {
         _notch = notch;
-        _store = new StatusStore();
-        _widgets = new IWidget[] { new ClaudeCodeWidget(_store, Cancel), new MediaWidget() };
+        _claudeStore = new StatusStore();
+        _codexStore = new CodexStatusStore();
+        CodexLimits.Attach(_codexStore);
+        CodexLimits.UpdateFrom(_codexStore.Current);
+        _widgets = [
+            new MediaWidget(),
+            new ClaudeCodeWidget(_claudeStore, CancelClaude),
+            new CodexWidget(_codexStore, CancelCodex),
+        ];
 
         _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
         _ct = notch.WorkTop;
@@ -108,6 +185,7 @@ internal sealed class NotchController
             _primary = active[0];
             Apply(0f);
         }
+        _agentNotices = new AgentNoticeCoordinator(_primary);
 
         Dispatcher.Ensure();
         var dq = DispatcherQueue.GetForCurrentThread();
@@ -132,7 +210,10 @@ internal sealed class NotchController
         else if (visibility.Action == NotchVisibilityAction.ShowAndRender)
         {
             if (Array.IndexOf(active, _primary) < 0)
+            {
                 _primary = active[0];
+                _agentNotices.SetPrimary(_primary);
+            }
             _notch.SetVisible(true);
             _lastFg = IntPtr.Zero;
             Apply(_progress);
@@ -143,25 +224,28 @@ internal sealed class NotchController
 
         // primary must be an active widget; fall back to the first active one if it went inactive
         if (_drop < 0f && Array.IndexOf(active, _primary) < 0)
+        {
             _primary = active[0];
+            _agentNotices.SetPrimary(_primary);
+        }
 
-        // Claude asked something, or a compact just finished → notification: expand, hold, collapse
-        var ccState = _store.Current?.State;
-        bool asked = ccState == "waiting_input" && _lastCcState != "waiting_input";
-        bool compacted = _lastCcState == "compacting" && ccState != null && ccState != "compacting";
-        if (asked || compacted)
+        // Any agent can request a temporary expansion. Keep an active dropdown intact, then surface
+        // the queued notice once its drop animation finishes.
+        var now = DateTimeOffset.UtcNow;
+        for (int i = 0; i < _widgets.Length; i++)
         {
-            _noticeUntil = DateTime.UtcNow.AddSeconds(compacted ? 4 : 6);
-            if (_widgets[_primary] is not ClaudeCodeWidget && _drop < 0f)
-            { _noticeRestore = _primary; _primary = 0; }
+            bool desktopBacked = _widgets[i] is CodexWidget codex && codex.IsDesktop;
+            _agentNotices.Observe(i, _widgets[i].AgentNotice, now, desktopBacked, allowSelection: _drop < 0f);
         }
-        _lastCcState = ccState;
-        bool notice = ccState == "waiting_input" && DateTime.UtcNow < _noticeUntil;
-        if (!notice && _noticeRestore >= 0 && _progress < 0.02f)
+        _agentNotices.Tick(now, i => _widgets[i].IsActive, allowSelection: _drop < 0f);
+        if (_drop < 0f)
+            _primary = _agentNotices.Primary;
+        if (Array.IndexOf(active, _primary) < 0)
         {
-            if (_widgets[_noticeRestore].IsActive) _primary = _noticeRestore;
-            _noticeRestore = -1;
+            _primary = active[0];
+            _agentNotices.SetPrimary(_primary);
         }
+        bool notice = _drop < 0f && _agentNotices.IsOpen(now);
 
         Win32.GetCursorPos(out var p);
         bool hovered = _progress > 0.02f
@@ -186,7 +270,7 @@ internal sealed class NotchController
         if (_drop >= 0f)
         {
             dnext = _drop + 0.008f / 0.34f; // slower = more liquid
-            if (dnext >= 1f) { _primary = _pending; dnext = -1f; _arrive = 0f; }
+            if (dnext >= 1f) { _primary = _pending; _agentNotices.SetPrimary(_primary); dnext = -1f; _arrive = 0f; }
         }
 
         float anext = _arrive;
@@ -354,10 +438,17 @@ internal sealed class NotchController
             _widgets[_primary].DrawContent, _widgets[_primary].DrawCollapsed);
     }
 
-    private void Cancel()
+    private void CancelClaude()
     {
-        var pid = _store.Current?.Pid ?? 0;
+        var pid = _claudeStore.Current?.Pid ?? 0;
         if (pid > 0) CcCancel.Request(pid);
+    }
+
+    private void CancelCodex()
+    {
+        var snapshot = _codexStore.Current;
+        if (snapshot is { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 })
+            CcCancel.Request(snapshot.ConsolePid); // existing helper injects Esc into the CLI console
     }
 
     private static float Lerp(float a, float b, float t) => a + (b - a) * t;

@@ -57,6 +57,21 @@ public sealed class CodexRolloutTests
     }
 
     [Fact]
+    public void Parse_IgnoresNumericNullFields()
+    {
+        var path = TempRollout(
+            Event("task_started", "\"model_context_window\":null"),
+            Event("token_count", "\"info\":{\"model_context_window\":null,\"total_token_usage\":{\"total_tokens\":null},\"last_token_usage\":{\"total_tokens\":null}},\"rate_limits\":{\"primary\":{\"used_percent\":null,\"window_minutes\":null,\"resets_at\":null},\"secondary\":null}"));
+
+        var value = CodexRollout.Parse(path)!;
+
+        Assert.Equal("working", value.State);
+        Assert.Equal(CodexSnapshotFields.None, value.PresentFields);
+        Assert.Null(value.PrimaryLimit);
+        Assert.Null(value.SecondaryLimit);
+    }
+
+    [Fact]
     public void Select_PrefersActiveDesktopOverCli()
     {
         var now = DateTimeOffset.UtcNow;

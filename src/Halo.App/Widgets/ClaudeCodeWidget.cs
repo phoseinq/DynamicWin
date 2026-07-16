@@ -33,6 +33,9 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     public bool IsActive => _store.IsLive;
     public int Version => _store.Version + NetMon.Version;
+    public AgentNotice AgentNotice => _store.Current is { } status
+        ? new AgentNotice(status.State, null, status.Message)
+        : AgentNotice.None;
     // text-emerge animation + the compacting sweep both need frames while collapsed
     public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
 

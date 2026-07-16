@@ -4,6 +4,11 @@ using System.Drawing;
 
 namespace Halo.Widgets;
 
+internal readonly record struct AgentNotice(string? State, DateTimeOffset? CompactedAt, string? Message)
+{
+    internal static AgentNotice None => new(null, null, null);
+}
+
 internal interface IWidget
 {
     string Icon { get; }                     // glyph fallback for the circle / dropdown
@@ -17,6 +22,9 @@ internal interface IWidget
 
     // True when the widget wants continuous frames (e.g. an animated preview). Drives re-render.
     bool Animating => false;
+
+    // Agent lifecycle events can temporarily expand the pill without coupling the controller to an agent type.
+    AgentNotice AgentNotice => AgentNotice.None;
 
     void DrawContent(Graphics g, int w, int h, float expandFade);       // expanded pill
 

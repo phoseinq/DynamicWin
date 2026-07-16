@@ -36,6 +36,10 @@ internal sealed class CodexWidget : IWidget
     public string? AgentState => _store.Current?.State;
     public bool IsActive => _store.Current is not null;
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
+    public bool IsDesktop => _store.Current?.Source == CodexSurface.Desktop;
+    public AgentNotice AgentNotice => _store.Current is { } status
+        ? new AgentNotice(status.State, status.CompactedAt, status.Message)
+        : AgentNotice.None;
     // text-emerge animation + the compacting sweep both need frames while collapsed
     public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
 

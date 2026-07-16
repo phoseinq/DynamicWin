@@ -213,11 +213,11 @@ internal static class CodexRollout
         Property(element, name) is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
 
     private static long? Number(JsonElement element, string name) =>
-        Property(element, name) is { } value && value.TryGetInt64(out var number) ? number :
+        Property(element, name) is { ValueKind: JsonValueKind.Number } value && value.TryGetInt64(out var number) ? number :
         Property(element, name) is { ValueKind: JsonValueKind.String } text && long.TryParse(text.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number) ? number : null;
 
     private static double? NumberDouble(JsonElement element, string name) =>
-        Property(element, name) is { } value && value.TryGetDouble(out var number) ? number :
+        Property(element, name) is { ValueKind: JsonValueKind.Number } value && value.TryGetDouble(out var number) ? number :
         Property(element, name) is { ValueKind: JsonValueKind.String } text && double.TryParse(text.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? number : null;
 
     private static DateTimeOffset? Timestamp(JsonElement element, string name)
