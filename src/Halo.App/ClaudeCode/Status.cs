@@ -79,7 +79,26 @@ internal sealed class StatusStore
     }
 
     public int Version { get; private set; }
-    public bool IsLive => IsLiveStatus(Current, _processStartedAt, _clock());
+
+    // liveness re-checked at most once a second (process lookups per frame add up)
+    private bool _live;
+    private DateTimeOffset _liveAt = DateTimeOffset.MinValue;
+    private int _liveVersion = -1;
+
+    public bool IsLive
+    {
+        get
+        {
+            var now = _clock();
+            if (_liveVersion != Version || now - _liveAt > TimeSpan.FromSeconds(1))
+            {
+                _live = IsLiveStatus(Current, _processStartedAt, now);
+                _liveAt = now;
+                _liveVersion = Version;
+            }
+            return _live;
+        }
+    }
 
     public static string Directory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch");

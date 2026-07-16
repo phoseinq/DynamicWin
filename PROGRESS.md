@@ -94,6 +94,21 @@ waiting on user's call re suppression appetite.
 Run exe in background, drop a colorful WinForms backdrop behind it, move cursor onto the pill center
 (1280,15) to hover-expand, `CopyFromScreen` to PNG, view. Crash log: `%TEMP%\halo-crash.log`.
 
+## Always-on pill + limits without a session + 529 detection (2026-07-17)
+- Pill no longer hides when no widget is active (fixes "missing after Windows startup"): only
+  fullscreen hides it; with zero active widgets it renders as a bare glass pill (no expand/menu).
+- CC/Codex widgets stay reachable without a live session (`IsActive` = has status OR cached limits),
+  and their expanded panels draw the limit bars + net graph + refresh even with `Session == null`
+  (only the context bar needs a transcript). Stale/dead CC status renders as idle via a `Live`
+  coercion helper; `StatusStore.IsLive` now cached 1s (it's hit per-frame).
+- Both NetMons treat an HTTP 5xx answer (incl. 529 Overloaded) as Lost → red ring, "api error :("
+  verb, red api line in the graph during Anthropic/OpenAI overload storms (previously any HTTP
+  status counted as healthy, so 529s looked fine).
+- Verified: 68/68 tests; live pill screenshot post-deploy; `--render-widget` shots of the
+  no-session Claude panel (limits visible) and Codex panel. Deployed to `%LOCALAPPDATA%\Halo\app`.
+- Gotcha: sandboxed shells run on an isolated desktop — `Start-Process` there makes the pill
+  invisible to the real session; deploy/restart Halo from an unsandboxed shell.
+
 ## Codex widget done (2026-07-16)
 - Supports Codex Desktop and CLI; Desktop wins when both are active.
 - Lifecycle hooks write `~/.codex/notch/{desktop,cli}.json`; rollout JSONL supplies live state,

@@ -108,7 +108,8 @@ internal static class NetMon
             using var resp = Http.Send(
                 new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url),
                 System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
-            return (int)sw.ElapsedMilliseconds; // any HTTP status = the server actually answered
+            // 4xx = the server is fine (auth/route noise); 5xx (incl. 529 Overloaded) = it's down
+            return (int)resp.StatusCode >= 500 ? Lost : (int)sw.ElapsedMilliseconds;
         }
         catch { return Lost; }
     }

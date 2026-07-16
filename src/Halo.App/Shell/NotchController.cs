@@ -20,33 +20,19 @@ internal enum NotchVisibilityAction
 internal readonly record struct NotchVisibilityDecision(
     NotchVisibilityAction Action,
     bool ReturnEarly,
-    bool HiddenForFullscreen,
-    bool HiddenForNoActiveWidgets);
+    bool HiddenForFullscreen);
 
 internal static class NotchVisibility
 {
-    internal static NotchVisibilityDecision Decide(bool fullscreen, bool hasActiveWidgets,
-        bool hiddenForFullscreen, bool hiddenForNoActiveWidgets)
+    // the pill is always on screen (empty when no widget is active) — only fullscreen hides it
+    internal static NotchVisibilityDecision Decide(bool fullscreen, bool hiddenForFullscreen)
     {
         if (fullscreen)
-        {
-            var action = hiddenForFullscreen || hiddenForNoActiveWidgets
-                ? NotchVisibilityAction.None
-                : NotchVisibilityAction.Hide;
-            return new(action, ReturnEarly: true, HiddenForFullscreen: true, hiddenForNoActiveWidgets);
-        }
+            return new(hiddenForFullscreen ? NotchVisibilityAction.None : NotchVisibilityAction.Hide,
+                ReturnEarly: true, HiddenForFullscreen: true);
 
-        if (!hasActiveWidgets)
-        {
-            var action = hiddenForFullscreen || hiddenForNoActiveWidgets
-                ? NotchVisibilityAction.None
-                : NotchVisibilityAction.Hide;
-            return new(action, ReturnEarly: true, HiddenForFullscreen: false, HiddenForNoActiveWidgets: true);
-        }
-
-        var show = hiddenForFullscreen || hiddenForNoActiveWidgets;
-        return new(show ? NotchVisibilityAction.ShowAndRender : NotchVisibilityAction.None,
-            ReturnEarly: false, HiddenForFullscreen: false, HiddenForNoActiveWidgets: false);
+        return new(hiddenForFullscreen ? NotchVisibilityAction.ShowAndRender : NotchVisibilityAction.None,
+            ReturnEarly: false, HiddenForFullscreen: false);
     }
 }
 
@@ -155,7 +141,7 @@ internal sealed class NotchController
     private int _lastSec = -1;
     private bool _lastMouseDown;
     private bool _hiddenForFullscreen;
-    private bool _hiddenForNoActiveWidgets;
+    private bool _empty; // no active widgets: pill stays visible but renders blank
     private bool _lastDesktop = true;
     private IntPtr _lastFg = IntPtr.Zero;
     private IntPtr _behind = IntPtr.Zero;
@@ -182,16 +168,9 @@ internal sealed class NotchController
         _et = notch.WorkTop;
 
         var active = ActiveIndices();
-        if (active.Length == 0)
-        {
-            _hiddenForNoActiveWidgets = true;
-            _notch.SetVisible(false);
-        }
-        else
-        {
-            _primary = active[0];
-            Apply(0f);
-        }
+        _empty = active.Length == 0;
+        if (!_empty) _primary = active[0];
+        Apply(0f); // empty or not, the pill shows from the first frame (boot = blank pill)
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
         Dispatcher.Ensure();
@@ -208,16 +187,14 @@ internal sealed class NotchController
         DetectCompactCancel(fg);
         bool fullscreen = _notch.IsFullscreen(fg);
         var active = fullscreen ? [] : ActiveIndices();
-        var visibility = NotchVisibility.Decide(fullscreen, active.Length > 0,
-            _hiddenForFullscreen, _hiddenForNoActiveWidgets);
+        var visibility = NotchVisibility.Decide(fullscreen, _hiddenForFullscreen);
         _hiddenForFullscreen = visibility.HiddenForFullscreen;
-        _hiddenForNoActiveWidgets = visibility.HiddenForNoActiveWidgets;
 
         if (visibility.Action == NotchVisibilityAction.Hide)
             _notch.SetVisible(false);
         else if (visibility.Action == NotchVisibilityAction.ShowAndRender)
         {
-            if (Array.IndexOf(active, _primary) < 0)
+            if (active.Length > 0 && Array.IndexOf(active, _primary) < 0)
             {
                 _primary = active[0];
                 _agentNotices.SetPrimary(_primary);
@@ -230,8 +207,10 @@ internal sealed class NotchController
         if (visibility.ReturnEarly)
             return;
 
+        bool wasEmpty = _empty;
+        _empty = active.Length == 0;
         // primary must be an active widget; fall back to the first active one if it went inactive
-        if (_drop < 0f && Array.IndexOf(active, _primary) < 0)
+        if (!_empty && _drop < 0f && Array.IndexOf(active, _primary) < 0)
         {
             _primary = active[0];
             _agentNotices.SetPrimary(_primary);
@@ -248,7 +227,7 @@ internal sealed class NotchController
         _agentNotices.Tick(now, i => _widgets[i].IsActive, allowSelection: _drop < 0f);
         if (_drop < 0f)
             _primary = _agentNotices.Primary;
-        if (Array.IndexOf(active, _primary) < 0)
+        if (!_empty && Array.IndexOf(active, _primary) < 0)
         {
             _primary = active[0];
             _agentNotices.SetPrimary(_primary);
@@ -259,7 +238,7 @@ internal sealed class NotchController
         bool hovered = _progress > 0.02f
             ? InRect(p, _el, _et, ExpandedW, ExpandedH)
             : InRect(p, _cl, _ct, CollapsedW, CollapsedH);
-        bool open = hovered || notice;
+        bool open = (hovered || notice) && !_empty; // an empty pill has nothing to expand into
 
         int dir = open ? 1 : -1;
         float step = 0.008f / (open ? OpenSeconds : CloseSeconds);
@@ -327,7 +306,7 @@ internal sealed class NotchController
         WidgetInput.Mouse = mouse;
 
         int wv = WidgetVersion();
-        bool changed = next != _progress || wv != _widgetVersion || deskChanged
+        bool changed = next != _progress || wv != _widgetVersion || deskChanged || wasEmpty != _empty
             || refreshed || tick || _menu != prevMenu || _drop != prevDrop || _arrive != prevArrive || forceAnim || mouseMoved;
         _progress = next;
         _widgetVersion = wv;
@@ -423,7 +402,7 @@ internal sealed class NotchController
         float arrive = _arrive < 0f ? 1f : 1f - (1f - _arrive) * (1f - _arrive); // easeOutQuad bloom after swap
         mini *= arrive;
 
-        var alts = AltIndices();
+        var alts = _empty ? Array.Empty<int>() : AltIndices();
         var frame = new MenuFrame
         {
             Show = alts.Length >= 1,
@@ -442,8 +421,10 @@ internal sealed class NotchController
             frame.ToX = w - h / 2f; // fuse into the pill's rounded end (metaball dominates), not fly to centre
             frame.ToY = h / 2f;
         }
+        // no active widget → bare glass pill (still visible after boot, just blank)
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
-            _widgets[_primary].DrawContent, _widgets[_primary].DrawCollapsed);
+            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent,
+            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed);
     }
 
     // a compact cancelled with Esc fires no hook — watch for the keystroke ourselves while the

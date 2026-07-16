@@ -31,13 +31,16 @@ internal sealed class ClaudeCodeWidget : IWidget
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
     public Bitmap? IconImage => ClaudeIcon;
 
-    public bool IsActive => _store.IsLive;
+    // stay reachable without a live session (limits must be visible any time); a stale/dead
+    // session renders as idle instead of freezing on its last verb
+    public bool IsActive => _store.Current is not null || Limits.FiveHour >= 0 || Limits.Week >= 0;
+    private CcStatus? Live => _store.IsLive ? _store.Current : null;
     public int Version => _store.Version + NetMon.Version;
-    public AgentNotice AgentNotice => _store.Current is { } status
+    public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
     // text-emerge animation + the compacting pulse both need frames while collapsed
-    public bool Animating => _appear < 1f || Compacting(_store.Current);
+    public bool Animating => _appear < 1f || Compacting(Live);
 
     private string _shownKey = "";
     private float _appear = 1f;
@@ -52,7 +55,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         catch { return null; }
     }
 
-    private bool CanCancel => _store.Current?.State == "working" && _store.Current.Pid > 0;
+    private bool CanCancel => Live is { State: "working", Pid: > 0 };
 
     private bool _wasOpen;
 
@@ -61,13 +64,13 @@ internal sealed class ClaudeCodeWidget : IWidget
         bool open = fade > 0.01f;
         if (open && !_wasOpen) Limits.OnPanelOpen(); // one refresh per open (spam-guarded)
         _wasOpen = open;
-        if (open) { NetMon.Poke(); DrawExpanded(g, w, h, fade, _store.Current); }
+        if (open) { NetMon.Poke(); DrawExpanded(g, w, h, fade, Live); }
     }
 
     // collapsed pill = Claude icon on the left, what it's doing on the right (Apple-style)
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
-        var st = _store.Current;
+        var st = Live;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
@@ -196,20 +199,21 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
             g.DrawString(line, small, ab, pad + 20, pad + 24);
 
-        if (st?.Session == null)
-        {
-            using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Claude Code session", body, nb, pad, pad + 64);
-            return;
-        }
-
-        // only real data: context tokens from the transcript + the working directory
+        // limits + graph stay up even with no session — only the context bar needs a live transcript
         float y = pad + 58;
         int barW = w - pad * 2;
-        double ctx = ContextFrac(st);
-        long maxK = st.Session.ContextMax / 1000, usedK = Math.Min(st.Session.ContextUsed / 1000, maxK);
-        string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-        DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+        if (st?.Session is { } sess)
+        {
+            double ctx = ContextFrac(st);
+            long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
+            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
+            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+        }
+        else
+        {
+            using var nb = new SolidBrush(Mul(Dim, a));
+            g.DrawString("No active Claude Code session", body, nb, pad, y + 4);
+        }
         // hovering a limit row swaps its value for the precise one (exact % + absolute reset time)
         string LimitValue(float f, DateTimeOffset reset, float rowY)
         {

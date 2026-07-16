@@ -38,7 +38,8 @@ internal sealed class CodexWidget : IWidget
 
     public string Id => "codex";
     public string? AgentState => _store.Current?.State;
-    public bool IsActive => _store.Current is not null;
+    // stay reachable without a live session so the cached limits are always visible
+    public bool IsActive => _store.Current is not null || CodexLimits.Current is not null;
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
     public bool IsDesktop => _store.Current?.Source == CodexSurface.Desktop;
     public AgentNotice AgentNotice => _store.Current is { } status
@@ -215,17 +216,17 @@ internal sealed class CodexWidget : IWidget
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
             g.DrawString(line, small, ab, pad + 20, pad + 24);
 
+        // Rows consume only fields present in the authoritative Codex sources.
+        // Limits + graph stay up even with no session — only session rows need one.
+        float y = pad + 58;
+        int barW = w - pad * 2;
         if (st is null)
         {
             using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Codex session", body, nb, pad, pad + 64);
-            return;
+            g.DrawString("No active Codex session", body, nb, pad, y + 4);
+            y += 40;
         }
-
-        // Rows consume only fields present in the authoritative Codex sources.
-        float y = pad + 58;
-        int barW = w - pad * 2;
-        if (st.PresentFields.HasFlag(CodexSnapshotFields.ContextUsed | CodexSnapshotFields.ContextMax) && st.ContextMax > 0)
+        else if (st.PresentFields.HasFlag(CodexSnapshotFields.ContextUsed | CodexSnapshotFields.ContextMax) && st.ContextMax > 0)
         {
             double ctx = ContextFrac(st);
             long maxK = st.ContextMax / 1000, usedK = Math.Min(st.ContextUsed / 1000, maxK);

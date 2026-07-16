@@ -103,11 +103,14 @@ public sealed class ClaudeStatusTests
         var updatedAt = now.AddMinutes(-5);
         DateTimeOffset? processStartedAt = updatedAt.AddMinutes(-1);
         WriteStatus(temp.Path, state: "working", pid: 39156, updatedAt);
-        var store = NewStore(temp, now, _ => processStartedAt);
+        var clock = now;
+        var store = new StatusStore(temp.Path, _ => processStartedAt, watchFiles: false,
+            clock: () => clock, appPath: temp.AppPath);
 
         Assert.True(store.IsLive);
 
-        processStartedAt = now;
+        processStartedAt = clock;
+        clock = clock.AddSeconds(2); // liveness is cached for up to a second
 
         Assert.False(store.IsLive);
     }

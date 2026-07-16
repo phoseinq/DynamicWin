@@ -112,7 +112,8 @@ internal static class CodexNetMon
             using var response = Http.Send(
                 new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url),
                 System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
-            return (int)stopwatch.ElapsedMilliseconds;
+            // 4xx = the server is fine (auth/route noise); 5xx (incl. 529 Overloaded) = it's down
+            return (int)response.StatusCode >= 500 ? Lost : (int)stopwatch.ElapsedMilliseconds;
         }
         catch
         {
