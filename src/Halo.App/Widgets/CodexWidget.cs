@@ -38,8 +38,9 @@ internal sealed class CodexWidget : IWidget
 
     public string Id => "codex";
     public string? AgentState => _store.Current?.State;
-    // stay reachable without a live session so the cached limits are always visible
-    public bool IsActive => _store.Current is not null || CodexLimits.Current is not null;
+    // visible only while the desktop app / CLI actually runs (user's call); the panel still
+    // shows cached limits when it's open with no task in flight
+    public bool IsActive => _store.Current is not null;
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
     public bool IsDesktop => _store.Current?.Source == CodexSurface.Desktop;
     public AgentNotice AgentNotice => _store.Current is { } status

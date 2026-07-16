@@ -97,10 +97,12 @@ Run exe in background, drop a colorful WinForms backdrop behind it, move cursor 
 ## Always-on pill + limits without a session + 529 detection (2026-07-17)
 - Pill no longer hides when no widget is active (fixes "missing after Windows startup"): only
   fullscreen hides it; with zero active widgets it renders as a bare glass pill (no expand/menu).
-- CC/Codex widgets stay reachable without a live session (`IsActive` = has status OR cached limits),
-  and their expanded panels draw the limit bars + net graph + refresh even with `Session == null`
+- CC/Codex expanded panels draw the limit bars + net graph + refresh even with `Session == null`
   (only the context bar needs a transcript). Stale/dead CC status renders as idle via a `Live`
   coercion helper; `StatusStore.IsLive` now cached 1s (it's hit per-frame).
+- Widget visibility (user's call after seeing the Codex circle with ChatGPT closed): agents show
+  only while their app actually runs — Codex needs desktop/CLI presence, Claude a live pid. So
+  "limits without a session" applies while the app is open but idle, not when it's closed.
 - Both NetMons treat an HTTP 5xx answer (incl. 529 Overloaded) as Lost → red ring, "api error :("
   verb, red api line in the graph during Anthropic/OpenAI overload storms (previously any HTTP
   status counted as healthy, so 529s looked fine).

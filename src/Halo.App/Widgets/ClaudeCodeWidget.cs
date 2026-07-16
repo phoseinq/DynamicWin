@@ -31,9 +31,9 @@ internal sealed class ClaudeCodeWidget : IWidget
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
     public Bitmap? IconImage => ClaudeIcon;
 
-    // stay reachable without a live session (limits must be visible any time); a stale/dead
-    // session renders as idle instead of freezing on its last verb
-    public bool IsActive => _store.Current is not null || Limits.FiveHour >= 0 || Limits.Week >= 0;
+    // visible only while a Claude Code process is actually alive (user's call); the panel still
+    // shows limits when it's open with no session data yet
+    public bool IsActive => _store.IsLive;
     private CcStatus? Live => _store.IsLive ? _store.Current : null;
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
