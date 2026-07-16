@@ -15,6 +15,7 @@ internal struct MenuFrame
     public Bitmap?[] Images;    // parallel to Icons; non-null draws instead of the glyph
     public float Open;          // eased 0..1
     public bool Dropping;
+    public bool Outward;        // true = new-app arrival: blob flows pill → circle
     public string DropIcon;
     public Bitmap? DropImage;
     public float Drop;          // 0..1
@@ -351,7 +352,8 @@ internal sealed class LayeredNotch
         float e = 1f + k3 * p * p * p + k1 * p * p;
         float bx = menu.FromX + (menu.ToX - menu.FromX) * e;
         float by = menu.FromY + (menu.ToY - menu.FromY) * e;
-        float r2 = CircleD / 2f * (1f - 0.2f * e); // stays circle-sized while it flows, then fuses
+        // inward: shrinks as it fuses; outward (arrival): grows to full circle size as it lands
+        float r2 = CircleD / 2f * (menu.Outward ? 0.8f + 0.2f * e : 1f - 0.2f * e);
         var blob = new PointF(bx, by);
         var c1 = new PointF(w - h / 2f, h / 2f); // pill's right rounded end
         float r1 = h / 2f;
@@ -363,7 +365,10 @@ internal sealed class LayeredNotch
             g.FillEllipse(b, blob.X - r2, blob.Y - r2, r2 * 2, r2 * 2);
         }
 
-        float a = menu.Drop < 0.8f ? 1f : 1f - (menu.Drop - 0.8f) / 0.2f;
+        // inward: icon fades out on landing; outward: fades in as the blob leaves the pill
+        float a = menu.Outward
+            ? Math.Clamp(menu.Drop / 0.25f, 0f, 1f)
+            : menu.Drop < 0.8f ? 1f : 1f - (menu.Drop - 0.8f) / 0.2f;
         if (menu.DropImage != null)
         {
             DrawCircleImage(g, menu.DropImage, blob.X - r2, blob.Y - r2, r2 * 2, a);

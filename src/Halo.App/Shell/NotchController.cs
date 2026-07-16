@@ -135,8 +135,10 @@ internal sealed class NotchController
     private float _drop = -1f;  // <0 idle, else 0..1 "drop into pill" animation
     private float _arrive = -1f; // <0 idle, else 0..1 new-app "opening" bloom after a swap
     private int _pending, _dropSlot;
+    private bool _dropOut;      // drop runs pill → circle (new-app arrival toss)
     private string _dropIcon = "";
     private Bitmap? _dropImage;
+    private readonly bool[] _prevActive;
     private int _widgetVersion = -1;
     private int _lastSec = -1;
     private bool _lastMouseDown;
@@ -170,6 +172,8 @@ internal sealed class NotchController
         var active = ActiveIndices();
         _empty = active.Length == 0;
         if (!_empty) _primary = active[0];
+        _prevActive = new bool[_widgets.Length];
+        for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = _widgets[i].IsActive;
         Apply(0f); // empty or not, the pill shows from the first frame (boot = blank pill)
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
@@ -234,6 +238,26 @@ internal sealed class NotchController
         }
         bool notice = _drop < 0f && _agentNotices.IsOpen(now);
 
+        // a supported app just appeared → toss its icon out of the pill into the swap circle
+        for (int i = 0; i < _widgets.Length; i++)
+        {
+            bool isAct = _widgets[i].IsActive;
+            if (isAct && !_prevActive[i] && !fullscreen && _drop < 0f)
+            {
+                if (i == _primary) _arrive = 0f; // became the pill itself → bloom
+                else if (_progress < 0.1f)
+                {
+                    _pending = _primary; // arrival: primary stays put
+                    _dropOut = true;
+                    _dropIcon = _widgets[i].Icon;
+                    _dropImage = _widgets[i].IconImage;
+                    _dropSlot = Math.Max(0, Array.IndexOf(AltIndices(), i));
+                    _drop = 0f;
+                }
+            }
+            _prevActive[i] = isAct;
+        }
+
         Win32.GetCursorPos(out var p);
         bool hovered = _progress > 0.02f
             ? InRect(p, _el, _et, ExpandedW, ExpandedH)
@@ -257,7 +281,12 @@ internal sealed class NotchController
         if (_drop >= 0f)
         {
             dnext = _drop + 0.008f / 0.34f; // slower = more liquid
-            if (dnext >= 1f) { _primary = _pending; _agentNotices.SetPrimary(_primary); dnext = -1f; _arrive = 0f; }
+            if (dnext >= 1f)
+            {
+                if (!_dropOut) { _primary = _pending; _agentNotices.SetPrimary(_primary); _arrive = 0f; }
+                _dropOut = false;
+                dnext = -1f;
+            }
         }
 
         float anext = _arrive;
@@ -414,12 +443,15 @@ internal sealed class NotchController
             DropImage = _dropImage,
             Drop = _drop >= 0f ? _drop : 0f,
         };
+        frame.Outward = _dropOut;
         if (frame.Dropping)
         {
-            frame.FromX = w + LayeredNotch.CircleGap + LayeredNotch.CircleD / 2f;
-            frame.FromY = LayeredNotch.CircleY + _dropSlot * LayeredNotch.CircleD + LayeredNotch.CircleD / 2f;
-            frame.ToX = w - h / 2f; // fuse into the pill's rounded end (metaball dominates), not fly to centre
-            frame.ToY = h / 2f;
+            float circleX = w + LayeredNotch.CircleGap + LayeredNotch.CircleD / 2f;
+            float circleY = LayeredNotch.CircleY + _dropSlot * LayeredNotch.CircleD + LayeredNotch.CircleD / 2f;
+            float pillX = w - h / 2f, pillY = h / 2f; // pill's rounded end (metaball dominates)
+            (frame.FromX, frame.FromY, frame.ToX, frame.ToY) = _dropOut
+                ? (pillX, pillY, circleX, circleY)  // arrival: blob detaches from the pill into the circle
+                : (circleX, circleY, pillX, pillY); // swap: picked circle fuses into the pill
         }
         // no active widget → bare glass pill (still visible after boot, just blank)
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
