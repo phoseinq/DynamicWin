@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 
 namespace Halo.Codex;
 
@@ -33,6 +34,7 @@ internal static class CodexRollout
             DateTimeOffset? compactedAt = null;
             string? message = null;
             string? cwd = null;
+            var source = CodexSurface.Cli;
             long contextUsed = 0;
             long contextMax = 0;
             long promptTokens = 0;
@@ -62,6 +64,8 @@ internal static class CodexRollout
                     {
                         case "session_meta":
                             cwd ??= String(payload, "cwd");
+                            if (String(payload, "originator")?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true)
+                                source = CodexSurface.Desktop;
                             break;
                         case "task_started":
                             state = "working";
@@ -125,7 +129,7 @@ internal static class CodexRollout
                 updatedAt = File.GetLastWriteTimeUtc(path);
 
             return new CodexSnapshot(
-                CodexSurface.Cli, state, currentTool, startedAt, compactedAt, message, cwd, 0, 0,
+                source, state, currentTool, startedAt, compactedAt, message, cwd, 0, 0,
                 contextUsed, contextMax, promptTokens, primaryLimit, secondaryLimit, updatedAt, false);
         }
         catch (IOException)
@@ -188,83 +192,267 @@ internal static class CodexRollout
 
 internal sealed class CodexStatusStore : IDisposable
 {
+    private const int ReloadDelayMilliseconds = 40;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         NumberHandling = JsonNumberHandling.AllowReadingFromString,
     };
 
-    private readonly string _directory;
-    private readonly FileSystemWatcher _watcher;
+    private readonly string _statusDirectory;
+    private readonly string _sessionsDirectory;
+    private readonly Func<int, bool> _processAlive;
+    private readonly object _reloadGate = new();
+    private readonly object _scheduleGate = new();
+    private readonly Timer? _reloadTimer;
+    private readonly FileSystemWatcher? _statusWatcher;
+    private readonly FileSystemWatcher? _rolloutWatcher;
+    private CodexSnapshot? _desktopStatus;
+    private CodexSnapshot? _cliStatus;
+    private CodexSnapshot? _desktopRollout;
+    private CodexSnapshot? _cliRollout;
+    private CodexSnapshot? _current;
+    private int _version;
+    private volatile bool _disposed;
 
-    internal CodexSnapshot? Current { get; private set; }
-    internal int Version { get; private set; }
-
-    internal CodexStatusStore()
+    internal CodexSnapshot? Current
     {
-        _directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "notch");
-        Directory.CreateDirectory(_directory);
-        _watcher = new FileSystemWatcher(_directory, "*.json")
-        {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
-            EnableRaisingEvents = true,
-        };
-        _watcher.Changed += (_, _) => Load();
-        _watcher.Created += (_, _) => Load();
-        _watcher.Deleted += (_, _) => Load();
-        _watcher.Renamed += (_, _) => Load();
-        Load();
+        get { lock (_reloadGate) return _current; }
     }
 
-    internal void ForceRefresh() => Load();
+    internal int Version
+    {
+        get { lock (_reloadGate) return _version; }
+    }
+
+    internal CodexStatusStore()
+        : this(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "notch"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "sessions"),
+            IsProcessAlive,
+            watchFiles: true)
+    {
+    }
+
+    internal CodexStatusStore(
+        string statusDirectory,
+        string sessionsDirectory,
+        Func<int, bool> processAlive,
+        bool watchFiles)
+    {
+        _statusDirectory = statusDirectory;
+        _sessionsDirectory = sessionsDirectory;
+        _processAlive = processAlive;
+        Directory.CreateDirectory(_statusDirectory);
+        Directory.CreateDirectory(_sessionsDirectory);
+
+        if (watchFiles)
+        {
+            _reloadTimer = new Timer(_ => Reload(retryTransientReads: true), null, Timeout.Infinite, Timeout.Infinite);
+            _statusWatcher = CreateWatcher(_statusDirectory, "*.json", includeSubdirectories: false);
+            _rolloutWatcher = CreateWatcher(_sessionsDirectory, "*.jsonl", includeSubdirectories: true);
+        }
+
+        Reload(retryTransientReads: true);
+    }
+
+    internal void ForceRefresh() => Reload(retryTransientReads: true);
 
     internal static CodexSnapshot? Select(CodexSnapshot? desktop, CodexSnapshot? cli, DateTimeOffset now) =>
         IsActive(desktop, now) ? desktop : IsActive(cli, now) ? cli : null;
 
-    public void Dispose() => _watcher.Dispose();
-
-    private void Load()
+    public void Dispose()
     {
-        var desktop = Read(Path.Combine(_directory, "desktop.json"), CodexSurface.Desktop);
-        var cli = Read(Path.Combine(_directory, "cli.json"), CodexSurface.Cli);
-        Current = Select(desktop, cli, DateTimeOffset.UtcNow);
-        Version++;
+        lock (_scheduleGate)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _statusWatcher?.Dispose();
+            _rolloutWatcher?.Dispose();
+            _reloadTimer?.Dispose();
+        }
+
+        lock (_reloadGate)
+        {
+        }
+    }
+
+    private FileSystemWatcher CreateWatcher(string directory, string filter, bool includeSubdirectories)
+    {
+        var watcher = new FileSystemWatcher(directory, filter)
+        {
+            IncludeSubdirectories = includeSubdirectories,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+        };
+        watcher.Changed += (_, _) => ScheduleReload();
+        watcher.Created += (_, _) => ScheduleReload();
+        watcher.Deleted += (_, _) => ScheduleReload();
+        watcher.Renamed += (_, _) => ScheduleReload();
+        watcher.EnableRaisingEvents = true;
+        return watcher;
+    }
+
+    private void ScheduleReload()
+    {
+        lock (_scheduleGate)
+        {
+            if (_disposed)
+                return;
+
+            _reloadTimer?.Change(ReloadDelayMilliseconds, Timeout.Infinite);
+        }
+    }
+
+    private void Reload(bool retryTransientReads)
+    {
+        lock (_reloadGate)
+        {
+            if (_disposed)
+                return;
+
+            ApplyStatusRead(ref _desktopStatus, ReadStatus(Path.Combine(_statusDirectory, "desktop.json"), CodexSurface.Desktop), retryTransientReads);
+            ApplyStatusRead(ref _cliStatus, ReadStatus(Path.Combine(_statusDirectory, "cli.json"), CodexSurface.Cli), retryTransientReads);
+            ScanRollouts(out var desktopRollout, out var cliRollout);
+            _desktopRollout = desktopRollout ?? _desktopRollout;
+            _cliRollout = cliRollout ?? _cliRollout;
+
+            if (_disposed)
+                return;
+
+            var now = DateTimeOffset.UtcNow;
+            _current = Select(
+                Merge(_desktopStatus, _desktopRollout, now),
+                Merge(_cliStatus, _cliRollout, now),
+                now);
+            _version++;
+        }
+    }
+
+    private void ApplyStatusRead(ref CodexSnapshot? target, StatusRead read, bool retryTransientReads)
+    {
+        if (retryTransientReads &&
+            (read.Kind == StatusReadKind.Transient || read.Kind == StatusReadKind.Missing && target is not null))
+        {
+            Thread.Sleep(ReloadDelayMilliseconds);
+            read = ReadStatus(read.Path, read.Source);
+        }
+
+        if (read.Kind == StatusReadKind.Success)
+            target = read.Snapshot;
+        else if (read.Kind == StatusReadKind.Missing)
+            target = null;
     }
 
     private static bool IsActive(CodexSnapshot? snapshot, DateTimeOffset now) =>
         snapshot is not null && snapshot.State != "ended" &&
         (snapshot.ProcessAlive || snapshot.UpdatedAt >= now.AddSeconds(-30));
 
-    private static CodexSnapshot? Read(string path, CodexSurface source)
+    private static bool IsFresh(CodexSnapshot snapshot, DateTimeOffset now) =>
+        snapshot.ProcessAlive || snapshot.UpdatedAt >= now.AddSeconds(-30);
+
+    private static CodexSnapshot? Merge(CodexSnapshot? hook, CodexSnapshot? rollout, DateTimeOffset now)
+    {
+        if (hook is null)
+            return rollout;
+        if (rollout is null)
+            return hook;
+
+        var lifecycle = IsFresh(hook, now) ? hook : rollout;
+        var hasRolloutUsage = rollout.ContextMax > 0 || rollout.PrimaryLimit is not null || rollout.SecondaryLimit is not null;
+        return lifecycle with
+        {
+            Source = hook.Source,
+            Cwd = lifecycle.Cwd ?? hook.Cwd ?? rollout.Cwd,
+            Pid = hook.Pid,
+            ConsolePid = hook.ConsolePid,
+            ContextUsed = hasRolloutUsage ? rollout.ContextUsed : hook.ContextUsed,
+            ContextMax = hasRolloutUsage ? rollout.ContextMax : hook.ContextMax,
+            PromptTokens = hasRolloutUsage ? rollout.PromptTokens : hook.PromptTokens,
+            PrimaryLimit = rollout.PrimaryLimit ?? hook.PrimaryLimit,
+            SecondaryLimit = rollout.SecondaryLimit ?? hook.SecondaryLimit,
+            UpdatedAt = hook.UpdatedAt > rollout.UpdatedAt ? hook.UpdatedAt : rollout.UpdatedAt,
+            ProcessAlive = hook.ProcessAlive,
+        };
+    }
+
+    private StatusRead ReadStatus(string path, CodexSurface source)
     {
         try
         {
             if (!File.Exists(path))
-                return null;
+                return new StatusRead(path, source, StatusReadKind.Missing, null);
 
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             var status = JsonSerializer.Deserialize<HookStatus>(stream, JsonOptions);
             if (status is null)
-                return null;
+                return new StatusRead(path, source, StatusReadKind.Transient, null);
 
             var updatedAt = status.UpdatedAt ?? File.GetLastWriteTimeUtc(path);
-            return new CodexSnapshot(
+            var snapshot = new CodexSnapshot(
                 source, status.State ?? "idle", status.CurrentTool, status.StartedAt, status.CompactedAt,
                 status.Message, status.Cwd, status.Pid, status.ConsolePid, status.ContextUsed, status.ContextMax,
                 status.PromptTokens, status.PrimaryLimit, status.SecondaryLimit, updatedAt,
-                status.ProcessAlive ?? IsProcessAlive(status.Pid));
+                ProcessAlive(status.Pid));
+            return new StatusRead(path, source, StatusReadKind.Success, snapshot);
         }
         catch (IOException)
         {
-            return null;
+            return new StatusRead(path, source, StatusReadKind.Transient, null);
         }
         catch (JsonException)
         {
-            return null;
+            return new StatusRead(path, source, StatusReadKind.Transient, null);
         }
         catch (UnauthorizedAccessException)
         {
-            return null;
+            return new StatusRead(path, source, StatusReadKind.Transient, null);
+        }
+    }
+
+    private bool ProcessAlive(int pid)
+    {
+        try
+        {
+            return pid > 0 && _processAlive(pid);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private void ScanRollouts(out CodexSnapshot? desktop, out CodexSnapshot? cli)
+    {
+        desktop = null;
+        cli = null;
+
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(_sessionsDirectory, "*.jsonl", SearchOption.AllDirectories)
+                         .OrderByDescending(File.GetLastWriteTimeUtc))
+            {
+                var snapshot = CodexRollout.Parse(path);
+                if (snapshot?.Source == CodexSurface.Desktop && desktop is null)
+                    desktop = snapshot;
+                else if (snapshot?.Source == CodexSurface.Cli && cli is null)
+                    cli = snapshot;
+
+                if (desktop is not null && cli is not null)
+                    break;
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -304,6 +492,13 @@ internal sealed class CodexStatusStore : IDisposable
         public CodexLimit? PrimaryLimit { get; set; }
         public CodexLimit? SecondaryLimit { get; set; }
         public DateTimeOffset? UpdatedAt { get; set; }
-        public bool? ProcessAlive { get; set; }
     }
+
+    private enum StatusReadKind { Missing, Success, Transient }
+
+    private readonly record struct StatusRead(
+        string Path,
+        CodexSurface Source,
+        StatusReadKind Kind,
+        CodexSnapshot? Snapshot);
 }

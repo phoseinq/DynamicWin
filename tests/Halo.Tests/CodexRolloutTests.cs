@@ -9,7 +9,9 @@ public sealed class CodexRolloutTests
     {
         var path = TempRollout(
             Event("task_started", "\"model_context_window\":353400"),
-            TokenCount(total: 18420, context: 353400, primaryUsed: 37, primaryWindow: 300, primaryReset: 1784808749),
+            TokenCount(total: 9_100, context: 200_000, primaryUsed: 12, primaryWindow: 300,
+                primaryReset: 1784808000, secondaryUsed: 21, secondaryWindow: 10_080, secondaryResetInSeconds: 600),
+            TokenCount(total: 18_420, context: 353_400, primaryUsed: 37, primaryWindow: 300, primaryReset: 1784808749),
             ToolCall("functions.exec"));
 
         var value = CodexRollout.Parse(path)!;
@@ -20,6 +22,9 @@ public sealed class CodexRolloutTests
         Assert.Equal(353_400, value.ContextMax);
         Assert.Equal(37, value.PrimaryLimit!.UsedPercent);
         Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1784808749), value.PrimaryLimit.ResetsAt);
+        Assert.Equal(21, value.SecondaryLimit!.UsedPercent);
+        Assert.Equal(10_080, value.SecondaryLimit.WindowMinutes);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-16T12:10:00Z"), value.SecondaryLimit.ResetsAt);
     }
 
     [Fact]
@@ -81,6 +86,89 @@ public sealed class CodexRolloutTests
         Assert.Same(cli, CodexStatusStore.Select(desktop, cli, now));
     }
 
+    [Fact]
+    public void ForceRefresh_MergesNewestRolloutUsageIntoHookState()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "cli", "working", now, pid: 42, currentTool: "hook-tool");
+        WriteRollout(temp.Sessions, "older", "codex_cli_rs", now.AddSeconds(-2),
+            TokenCount(total: 100, context: 200_000, primaryUsed: 10, primaryWindow: 300, primaryReset: 1784808000));
+        WriteRollout(temp.Sessions, "newer", "codex_cli_rs", now,
+            TokenCount(total: 800, context: 353_400, primaryUsed: 35, primaryWindow: 300,
+                primaryReset: 1784808749, secondaryUsed: 45, secondaryWindow: 10_080, secondaryResetInSeconds: 900));
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: false);
+
+        Assert.Equal(CodexSurface.Cli, store.Current!.Source);
+        Assert.Equal("hook-tool", store.Current.CurrentTool);
+        Assert.Equal(800, store.Current.ContextUsed);
+        Assert.Equal(353_400, store.Current.ContextMax);
+        Assert.Equal(35, store.Current.PrimaryLimit!.UsedPercent);
+        Assert.Equal(45, store.Current.SecondaryLimit!.UsedPercent);
+
+        WriteRollout(temp.Sessions, "latest", "codex_cli_rs", now.AddSeconds(1),
+            TokenCount(total: 1_200, context: 400_000, primaryUsed: 51, primaryWindow: 300, primaryReset: 1784809000));
+        store.ForceRefresh();
+
+        Assert.Equal(1_200, store.Current!.ContextUsed);
+        Assert.Equal(51, store.Current.PrimaryLimit!.UsedPercent);
+    }
+
+    [Fact]
+    public void ForceRefresh_UsesActiveRolloutWhenHookIsStale()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "desktop", "ended", now.AddMinutes(-5), pid: 0);
+        WriteRollout(temp.Sessions, "desktop", "Codex Desktop", now,
+            EventAt(now, "task_started", "\"model_context_window\":353400"));
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => false, watchFiles: false);
+
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+        Assert.Equal("working", store.Current.State);
+    }
+
+    [Fact]
+    public void ForceRefresh_RecomputesProcessLivenessAndIgnoresPersistedTrue()
+    {
+        using var temp = new TempDirectory();
+        var alive = false;
+        WriteStatus(temp.Status, "cli", "working", DateTimeOffset.UtcNow.AddMinutes(-5), pid: 424242, processAlive: true);
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => alive, watchFiles: false);
+
+        Assert.Null(store.Current);
+
+        alive = true;
+        store.ForceRefresh();
+
+        Assert.NotNull(store.Current);
+        Assert.True(store.Current!.ProcessAlive);
+    }
+
+    [Fact]
+    public void Watcher_KeepsLastGoodDesktopDuringMalformedReplacementThenPublishesFinalFile()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.UtcNow;
+        WriteStatus(temp.Status, "desktop", "working", now, pid: 7, currentTool: "first");
+
+        using var store = new CodexStatusStore(temp.Status, temp.Sessions, _ => true, watchFiles: true);
+        var initialVersion = store.Version;
+        File.WriteAllText(Path.Combine(temp.Status, "desktop.json"), "{partial");
+
+        Assert.True(SpinWait.SpinUntil(() => store.Version > initialVersion, TimeSpan.FromSeconds(5)));
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+        Assert.Equal("first", store.Current.CurrentTool);
+
+        WriteStatus(temp.Status, "desktop", "working", now.AddSeconds(1), pid: 7, currentTool: "final");
+
+        Assert.True(SpinWait.SpinUntil(() => store.Current?.CurrentTool == "final", TimeSpan.FromSeconds(5)));
+        Assert.Equal(CodexSurface.Desktop, store.Current!.Source);
+    }
+
     private static CodexSnapshot Snapshot(CodexSurface source, DateTimeOffset updatedAt, bool alive) => new(
         source, "working", null, null, null, null, null, 0, 0, 0, 0, 0, null, null, updatedAt, alive);
 
@@ -92,10 +180,68 @@ public sealed class CodexRolloutTests
     }
 
     private static string Event(string type, string payload) =>
-        $"{{\"timestamp\":\"2026-07-16T12:00:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"{type}\",{payload}}}}}";
+        EventAt(DateTimeOffset.Parse("2026-07-16T12:00:00Z"), type, payload);
+
+    private static string EventAt(DateTimeOffset timestamp, string type, string payload) =>
+        $"{{\"timestamp\":\"{timestamp:O}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"{type}\",{payload}}}}}";
 
     private static string ToolCall(string name) => Event("custom_tool_call", $"\"name\":\"{name}\"");
 
-    private static string TokenCount(long total, long context, double primaryUsed, int primaryWindow, long primaryReset) =>
-        Event("token_count", $"\"info\":{{\"total_token_usage\":{{\"total_tokens\":{total}}},\"model_context_window\":{context}}},\"rate_limits\":{{\"primary\":{{\"used_percent\":{primaryUsed},\"window_minutes\":{primaryWindow},\"resets_at\":{primaryReset}}}}}");
+    private static string TokenCount(long total, long context, double primaryUsed, int primaryWindow, long primaryReset,
+        double? secondaryUsed = null, int secondaryWindow = 0, long secondaryResetInSeconds = 0)
+    {
+        var secondary = secondaryUsed is null ? string.Empty :
+            $",\"secondary\":{{\"used_percent\":{secondaryUsed},\"window_minutes\":{secondaryWindow},\"resets_in_seconds\":{secondaryResetInSeconds}}}";
+        return Event("token_count", $"\"info\":{{\"total_token_usage\":{{\"total_tokens\":{total}}},\"model_context_window\":{context}}},\"rate_limits\":{{\"primary\":{{\"used_percent\":{primaryUsed},\"window_minutes\":{primaryWindow},\"resets_at\":{primaryReset}}}{secondary}}}");
+    }
+
+    private static void WriteRollout(string sessions, string name, string originator, DateTimeOffset timestamp, params string[] events)
+    {
+        var directory = Path.Combine(sessions, timestamp.ToString("yyyy"), timestamp.ToString("MM"), timestamp.ToString("dd"));
+        Directory.CreateDirectory(directory);
+        var metadata = $"{{\"timestamp\":\"{timestamp:O}\",\"type\":\"session_meta\",\"payload\":{{\"originator\":\"{originator}\",\"cwd\":\"C:\\\\repo\"}}}}";
+        File.WriteAllLines(Path.Combine(directory, $"rollout-{name}.jsonl"), [metadata, .. events]);
+    }
+
+    private static void WriteStatus(string directory, string surface, string state, DateTimeOffset updatedAt, int pid,
+        string? currentTool = null, bool? processAlive = null)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            source = surface,
+            state,
+            currentTool,
+            pid,
+            updatedAt,
+            processAlive,
+        });
+        File.WriteAllText(Path.Combine(directory, $"{surface}.json"), json);
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        internal string Root { get; } = Path.Combine(Path.GetTempPath(), $"halo-codex-tests-{Guid.NewGuid():N}");
+        internal string Status => Path.Combine(Root, "notch");
+        internal string Sessions => Path.Combine(Root, "sessions");
+
+        internal TempDirectory()
+        {
+            Directory.CreateDirectory(Status);
+            Directory.CreateDirectory(Sessions);
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
 }
