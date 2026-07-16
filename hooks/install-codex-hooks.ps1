@@ -34,7 +34,9 @@ foreach ($hookEvent in $events.Keys) {
     $keptEntries = foreach ($entry in @($hooks[$hookEvent])) {
         if ($null -eq $entry) { continue }
         $keptHandlers = @($entry['hooks'] | Where-Object {
-            $_['command'] -notlike '*Halo.Hooks.exe" codex *'
+            $command = [string]$_['command']
+            $command -notlike '*Halo.Hooks.exe" codex *' -and
+            $command -notmatch 'Halo\.Hooks\.exe"\s+(session-start|prompt|tool|tool-done|pre-compact|post-compact|stop)$'
         })
         $entry['hooks'] = $keptHandlers
         if ($keptHandlers.Count -gt 0) { $entry }
