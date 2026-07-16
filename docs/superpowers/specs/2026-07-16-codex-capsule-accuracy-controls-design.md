@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-16
 
-**Status:** Approved for specification by the user
+**Status:** Approved by the user for implementation
 
 ## Goal
 
@@ -17,6 +17,7 @@ This change includes:
 - Model-aware context capacity and accurate latest-call token usage.
 - Freshness metadata for context and plan-limit values.
 - A working Stop path for Codex CLI and Codex Desktop.
+- Stable Codex Desktop presence while its packaged app is running, including idle periods.
 - Cooldowns for Stop and manual plan-limit refresh.
 - Deduplicated, non-expired plan-limit caching.
 - Automated tests, Release verification, deployment, and collapsed/expanded screenshots.
@@ -47,6 +48,7 @@ New behavior is split into focused files so future work does not require rereadi
 
 - `Codex/CodexActivityText.cs` owns operation classification and user-facing English copy.
 - `Codex/CodexDesktopCancel.cs` owns packaged-window discovery and Desktop Escape delivery.
+- `Codex/CodexDesktopRuntime.cs` owns cached packaged-app presence and process-start detection.
 - `Codex/CodexRefreshGate.cs` owns cooldown decisions and remaining-wait text.
 - `Codex/Status.cs` remains responsible for rollout parsing and store selection, but only receives the minimal fields needed for model, token freshness, and nested operation input.
 - `Codex/Limits.cs` remains responsible for accepted/cached limits, with deduplicated writes and expiration.
@@ -91,6 +93,14 @@ The cache writes only when accepted bucket data or its source timestamp changes.
 The UI displays source freshness, not render time. Opening the panel cannot make an old value look new.
 
 ## Desktop and CLI Stop
+
+### Desktop presence
+
+The Desktop widget remains active whenever the packaged Codex app process is running, even when its
+latest rollout has been quiet for more than 30 seconds. A stale active lifecycle becomes `idle`
+instead of disappearing. Closing the packaged app removes the Desktop widget without waiting for a
+rollout timeout. If the newest rollout predates the current Desktop process, Halo publishes a clean
+idle snapshot and does not inherit that rollout's context or activity.
 
 ### CLI
 
