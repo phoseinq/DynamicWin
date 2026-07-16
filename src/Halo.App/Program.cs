@@ -10,7 +10,7 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        // dev hook: `Halo.App --render-widget <out.png> [media|clock|battery|volume]`
+        // dev hook: `Halo.App --render-widget <out.png> [media|claude|codex]`
         if (args.Length >= 2 && args[0] == "--render-widget") { RenderWidget(args[1], args.Length > 2 ? args[2] : "media"); return; }
 
         using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
@@ -39,8 +39,12 @@ internal static class Program
     {
         var t = new System.Threading.Thread(() =>
         {
-            IWidget w = new MediaWidget();
-            _ = which;
+            IWidget w = which switch
+            {
+                "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), () => { }),
+                "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), () => { }),
+                _ => new MediaWidget(),
+            };
             System.Threading.Thread.Sleep(2000);
             using var bmp = new System.Drawing.Bitmap(560, 220);
             using (var g = System.Drawing.Graphics.FromImage(bmp))

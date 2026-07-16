@@ -1,0 +1,552 @@
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using Halo.Codex;
+
+namespace Halo.Widgets;
+
+internal sealed class CodexWidget : IWidget
+{
+    private static readonly Color Blue = Color.FromArgb(91, 157, 255);
+    private static readonly Color Green = Color.FromArgb(62, 207, 92);
+    private static readonly Color Amber = Color.FromArgb(255, 176, 32);
+    private static readonly Color Red = Color.FromArgb(229, 72, 77);
+    private static readonly Color Track = Color.FromArgb(38, 255, 255, 255);
+    private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
+    private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
+
+    private readonly CodexStatusStore _store;
+    private readonly Action _cancel;
+
+    public CodexWidget(CodexStatusStore store, Action cancel)
+    {
+        _store = store;
+        _cancel = cancel;
+        CodexLimits.Attach(store);
+    }
+
+    private static readonly Bitmap? OpenAiIcon = LoadIcon();
+
+    public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
+    public Bitmap? IconImage => OpenAiIcon;
+
+    public string Id => "codex";
+    public string? AgentState => _store.Current?.State;
+    public bool IsActive => _store.Current is not null;
+    public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
+    // text-emerge animation + the compacting sweep both need frames while collapsed
+    public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
+
+    private string _shownKey = "";
+    private float _appear = 1f;
+
+    private static Bitmap? LoadIcon()
+    {
+        try
+        {
+            using var s = typeof(CodexWidget).Assembly.GetManifestResourceStream("Halo.Assets.openai.png");
+            return s != null ? new Bitmap(s) : null;
+        }
+        catch { return null; }
+    }
+
+    private bool CanCancel => _store.Current is { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 };
+
+    private bool _wasOpen;
+
+    public void DrawContent(Graphics g, int w, int h, float fade)
+    {
+        bool open = fade > 0.01f;
+        if (open && !_wasOpen) CodexLimits.ForceRefresh();
+        _wasOpen = open;
+        if (open)
+        {
+            var snapshot = _store.Current;
+            if (snapshot is not null) CodexLimits.UpdateFrom(snapshot);
+            CodexNetMon.Poke();
+            DrawExpanded(g, w, h, fade, snapshot);
+        }
+    }
+
+    // collapsed pill = OpenAI icon on the left, what it's doing on the right (Apple-style)
+    public void DrawCollapsed(Graphics g, int w, int h, float fade)
+    {
+        var st = _store.Current;
+        float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
+        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+            g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
+        if (OpenAiIcon != null) DrawIcon(g, OpenAiIcon, x, y, sz, fade, sz / 2f); // circular
+        else
+            using (var db = new SolidBrush(Mul(RingColor(st), fade)))
+                g.FillEllipse(db, x, y, sz, sz);
+
+        // balanced zones: verb hugs the icon, the timer owns the right edge — text length changes
+        // never leave a lopsided gap. Moods (idle/offline) centre in the whole free space instead.
+        string verb = OutageText() ?? st?.State switch
+        {
+            "working" => ToolVerb(st.CurrentTool),
+            "compacting" => "compacting…",
+            "waiting_input" => "your move ;)",
+            _ => IdleMood(st),
+        };
+        string el = Elapsed(st);
+        if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
+        else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
+        float e = 1f - MathF.Pow(1f - _appear, 3);
+        bool busy = st?.State == "working" || st?.State == "compacting";
+        bool centred = !busy && st?.State != "waiting_input";
+
+        float textX = x + sz + 11;
+        using var tf2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        float elW = el.Length > 0 ? g.MeasureString(el, tf2, int.MaxValue, StringFormat.GenericTypographic).Width : 0;
+        float avail = (w - 14) - textX - (elW > 0 ? elW + 10 : 0);
+
+        float px = 15f;
+        using (var fm = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel))
+        {
+            var m0 = g.MeasureString(verb, fm, int.MaxValue, StringFormat.GenericTypographic);
+            if (m0.Width > avail && m0.Width > 0) px = Math.Max(9f, px * avail / m0.Width);
+        }
+        using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(Mul(White, fade * e));
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        {
+            Alignment = centred ? StringAlignment.Center : StringAlignment.Near,
+            LineAlignment = StringAlignment.Center,
+            FormatFlags = StringFormatFlags.NoWrap,
+        };
+        var clip = g.Clip;
+        g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h)); // text is born from behind the icon
+        float zoneW = centred ? avail - 34f : avail + 16f; // centred moods lean toward the icon
+        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), 0, zoneW, h), sf);
+        g.Clip = clip;
+
+        if (elW > 0) // timer zone, right-aligned and dimmer so the verb stays the focus
+            using (var eb = new SolidBrush(Mul(Dim, fade * e)))
+            using (var esf = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, 0, elW + 4, h), esf);
+
+        if (st?.State == "compacting") // indeterminate sweep along the pill bottom (duration unknown)
+        {
+            float t = Environment.TickCount % 1300 / 1300f;
+            const float seg = 46f;
+            float sx = -seg + (w + seg) * t;
+            var clip2 = g.Clip;
+            g.SetClip(new RectangleF(16, h - 5f, w - 32, 3f));
+            Fill(g, sx, h - 5f, seg, 3f, Mul(Blue, fade * 0.9f));
+            g.Clip = clip2;
+        }
+    }
+
+    private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
+    {
+        using var path = Rounded(new RectangleF(x, y, size, size), radius);
+        int s = Math.Max(1, (int)Math.Ceiling(size));
+        using var scaled = new Bitmap(s, s, PixelFormat.Format32bppPArgb);
+        using (var sg = Graphics.FromImage(scaled))
+        {
+            sg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            sg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            using var ia = new ImageAttributes();
+            ia.SetWrapMode(WrapMode.TileFlipXY);
+            ia.SetColorMatrix(new ColorMatrix { Matrix33 = fade });
+            int side = Math.Min(img.Width, img.Height);
+            sg.DrawImage(img, new Rectangle(0, 0, s, s), (img.Width - side) / 2, (img.Height - side) / 2, side, side, GraphicsUnit.Pixel, ia);
+        }
+        using var tb = new TextureBrush(scaled) { WrapMode = WrapMode.Clamp };
+        tb.TranslateTransform(x, y);
+        g.FillPath(tb, path);
+    }
+
+    private void DrawExpanded(Graphics g, int w, int h, float a, CodexSnapshot? st)
+    {
+        int pad = 26;
+        using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
+        using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+
+        var dot = StateColor(st?.State);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var db = new SolidBrush(Mul(dot, a)))
+            g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
+        using (var tb = new SolidBrush(Mul(White, a)))
+            g.DrawString("Codex", title, tb, pad + 20, pad - 2);
+        string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
+            ? st.Message! : Activity(st); // show the actual question while Codex waits
+        using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
+            g.DrawString(line, small, ab, pad + 20, pad + 24);
+
+        if (st is null)
+        {
+            using var nb = new SolidBrush(Mul(Dim, a));
+            g.DrawString("No active Codex session", body, nb, pad, pad + 64);
+            return;
+        }
+
+        // Rows consume only fields present in the authoritative Codex sources.
+        float y = pad + 58;
+        int barW = w - pad * 2;
+        if (st.PresentFields.HasFlag(CodexSnapshotFields.ContextUsed | CodexSnapshotFields.ContextMax) && st.ContextMax > 0)
+        {
+            double ctx = ContextFrac(st);
+            long maxK = st.ContextMax / 1000, usedK = Math.Min(st.ContextUsed / 1000, maxK);
+            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
+            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+            y += 40;
+        }
+        // hovering a limit row swaps its value for the precise one (exact % + absolute reset time)
+        string LimitValue(float f, DateTimeOffset reset, float rowY)
+        {
+            bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
+                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
+            return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
+                       : $"{Pct(f)}  ·  {ResetIn(reset)}";
+        }
+        if (CodexLimits.Current?.Primary is { } primary)
+        {
+            float used = (float)(primary.UsedPercent / 100d);
+            DrawBar(g, pad, y, barW, "5-hour limit",
+                LimitValue(used, primary.ResetsAt ?? default, y), used, UsageColor(used), a, body, small);
+            y += 40;
+        }
+        if (CodexLimits.Current?.Secondary is { } secondary)
+        {
+            float used = (float)(secondary.UsedPercent / 100d);
+            DrawBar(g, pad, y, barW, "Weekly limit",
+                LimitValue(used, secondary.ResetsAt ?? default, y), used, UsageColor(used), a, body, small);
+        }
+
+        // usage freshness + manual refresh (clickable)
+        var rr = RefreshRect(w, h);
+        bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
+        string age = CodexLimits.LastSuccess == DateTime.MinValue ? "usage never fetched"
+            : $"updated {AgeText(DateTime.UtcNow - CodexLimits.LastSuccess)}";
+        string rtxt = $"{age}  ·  ⟳ refresh";
+        using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
+        using (var rsf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+            g.DrawString(rtxt, small, rb, rr, rsf);
+
+        DrawCancel(g, w, h, a, body);
+    }
+
+    // small circular stop button (square glyph = stop), red when a prompt can be interrupted
+    private void DrawCancel(Graphics g, int w, int h, float a, Font font)
+    {
+        var r = CancelRect(w, h);
+        bool on = CanCancel;
+        var col = on ? Red : Color.FromArgb(120, 255, 255, 255);
+        float ba = on ? a : a * 0.4f;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var b = new SolidBrush(Mul(Color.FromArgb(46, col), a)))
+            g.FillEllipse(b, r.X, r.Y, r.Width, r.Height);
+        using (var pen = new Pen(Mul(col, ba), 1.4f))
+            g.DrawEllipse(pen, r.X, r.Y, r.Width, r.Height);
+        float sq = r.Width * 0.34f;
+        using (var sb = new SolidBrush(Mul(on ? Red : Dim, a)))
+        using (var sp = Rounded(new RectangleF(r.X + (r.Width - sq) / 2, r.Y + (r.Height - sq) / 2, sq, sq), 2f))
+            g.FillPath(sb, sp);
+
+        DrawNet(g, r.X - 26, a); // breathing room between the graph and the stop button
+    }
+
+    // connection-to-ChatGPT graph: green = your internet (ping 1.1.1.1), blue = path to
+    // chatgpt.com. Lost stretches turn red on that line — so you can tell whose fault it is.
+    private static void DrawNet(Graphics g, float rightX, float a)
+    {
+        var (net, api) = CodexNetMon.Snapshot();
+        const float stepX = 5f, gh = 22f;
+        int n = net.Length;
+        float gw = (n - 1) * stepX, x0 = rightX - gw, top = 19, barsY = top + 14;
+
+        // dynamic scale (api TCP latency is usually way above ping)
+        int cap = 150;
+        foreach (var v in net) if (v > cap) cap = v;
+        foreach (var v in api) if (v > cap) cap = v;
+        cap = (cap + 49) / 50 * 50;
+
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float ax = x0 - 5;
+        using (var axis = new Pen(Mul(Dim, a * 0.6f), 1f))
+        {
+            g.DrawLine(axis, ax, barsY - 3, ax, barsY + gh);       // Y axis
+            g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh); // X axis
+        }
+        using (var tf = new Font("Segoe UI", 9f, GraphicsUnit.Pixel))
+        using (var tb = new SolidBrush(Mul(Dim, a * 0.8f)))
+        {
+            var sz = g.MeasureString(cap.ToString(), tf);
+            g.DrawString(cap.ToString(), tf, tb, ax - sz.Width - 1, barsY - 5);
+            sz = g.MeasureString("0", tf);
+            g.DrawString("0", tf, tb, ax - sz.Width - 1, barsY + gh - 9);
+        }
+
+        float Y(int ms) => barsY + gh * (1 - Math.Clamp((float)ms / cap, 0.04f, 1f));
+
+        void Series(int[] s, Color col)
+        {
+            var pts = new List<(PointF p, bool lost)>();
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] == CodexNetMon.Empty) continue;
+                bool lost = s[i] == CodexNetMon.Lost;
+                pts.Add((new PointF(x0 + i * stepX, lost ? barsY : Y(s[i])), lost));
+            }
+            using var ok = new Pen(Mul(col, a), 1.6f) { LineJoin = LineJoin.Round };
+            using var bad = new Pen(Mul(Red, a), 1.6f) { LineJoin = LineJoin.Round };
+            for (int i = 1; i < pts.Count; i++)
+                g.DrawLine(pts[i - 1].lost || pts[i].lost ? bad : ok, pts[i - 1].p, pts[i].p);
+            if (pts.Count > 0)
+                using (var db = new SolidBrush(Mul(pts[^1].lost ? Red : col, a)))
+                    g.FillEllipse(db, pts[^1].p.X - 2f, pts[^1].p.Y - 2f, 4.5f, 4.5f);
+        }
+        Series(net, Green);
+        Series(api, Blue);
+
+        // colour-coded legend/label: "net 15 · api 210 ms" (a lost side shows ":(")
+        int lastN = LastSample(net), lastA = LastSample(api);
+        string tn = "net " + (lastN == CodexNetMon.Empty ? "…" : lastN == CodexNetMon.Lost ? ":(" : lastN.ToString());
+        string ta = "api " + (lastA == CodexNetMon.Empty ? "…" : lastA == CodexNetMon.Lost ? ":(" : lastA + " ms");
+        using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
+        {
+            float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
+            float lx = rightX - (wN + wS + wA);
+            using (var b = new SolidBrush(Mul(lastN == CodexNetMon.Lost ? Red : Green, a))) g.DrawString(tn, f, b, lx, top - 2);
+            using (var b = new SolidBrush(Mul(Dim, a))) g.DrawString(" · ", f, b, lx + wN, top - 2);
+            using (var b = new SolidBrush(Mul(lastA == CodexNetMon.Lost ? Red : Blue, a))) g.DrawString(ta, f, b, lx + wN + wS, top - 2);
+        }
+
+        DrawNetHover(g, a, net, api, x0, stepX, barsY, gh, rightX, Y);
+    }
+
+    private static int LastSample(int[] s)
+    {
+        for (int i = s.Length - 1; i >= 0; i--) if (s[i] != CodexNetMon.Empty) return s[i];
+        return CodexNetMon.Empty;
+    }
+
+    // hover: guide line + details box (both paths at that sample, loss counts, whose fault)
+    private static void DrawNetHover(Graphics g, float a, int[] net, int[] api,
+        float x0, float stepX, float top, float gh, float right, Func<int, float> Y)
+    {
+        var m = WidgetInput.Mouse;
+        if (!WidgetInput.Over || m.X < x0 - 9 || m.X > right + 6 || m.Y < top - 10 || m.Y > top + gh + 10)
+            return;
+        int idx = Math.Clamp((int)MathF.Round((m.X - x0) / stepX), 0, net.Length - 1);
+        int vN = net[idx], vA = api[idx];
+        if (vN == CodexNetMon.Empty && vA == CodexNetMon.Empty) return;
+
+        float gx = x0 + idx * stepX;
+        using (var guide = new Pen(Mul(White, a * 0.35f), 1f) { DashStyle = DashStyle.Dot })
+            g.DrawLine(guide, gx, top - 3, gx, top + gh);
+        void Mark(int v, Color col)
+        {
+            if (v == CodexNetMon.Empty) return;
+            using var hb = new SolidBrush(Mul(v == CodexNetMon.Lost ? Red : col, a));
+            g.FillEllipse(hb, gx - 2.5f, (v == CodexNetMon.Lost ? top : Y(v)) - 2.5f, 5.5f, 5.5f);
+        }
+        Mark(vN, Green); Mark(vA, Blue);
+
+        int lostN = 0, cntN = 0, lostA = 0, cntA = 0;
+        for (int i = 0; i < net.Length; i++)
+        {
+            if (net[i] != CodexNetMon.Empty) { cntN++; if (net[i] == CodexNetMon.Lost) lostN++; }
+            if (api[i] != CodexNetMon.Empty) { cntA++; if (api[i] == CodexNetMon.Lost) lostA++; }
+        }
+        string F(int v) => v == CodexNetMon.Lost ? ":(" : v == CodexNetMon.Empty ? "–" : $"{v} ms";
+        var lines = new List<(string t, Color c)>
+        {
+            ($"net {F(vN)}   api {F(vA)}", White),
+            ($"loss  net {lostN}/{cntN}  ·  api {lostA}/{cntA}", Dim),
+            ("1.1.1.1  ·  chatgpt.com", Dim),
+        };
+        if (vA == CodexNetMon.Lost && vN >= 0) lines.Add(("OpenAI's side :(", Amber));
+        else if (vN == CodexNetMon.Lost) lines.Add(("your internet :(", Red));
+
+        using var f2 = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+        float bw2 = 0;
+        foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
+        bw2 += 16;
+        float bh2 = lines.Count * 14 + 10;
+        float bx = Math.Min(gx + 8, right - bw2), by = top + gh + 8;
+        using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
+        {
+            using (var bg = new SolidBrush(Mul(Color.FromArgb(232, 20, 20, 22), a))) g.FillPath(bg, path);
+            using (var pen = new Pen(Mul(Track, a), 1f)) g.DrawPath(pen, path);
+        }
+        for (int i = 0; i < lines.Count; i++)
+            using (var b = new SolidBrush(Mul(lines[i].c, a)))
+                g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 14);
+    }
+
+    private static RectangleF CancelRect(int w, int h)
+    {
+        const float d = 34, margin = 22;
+        return new RectangleF(w - margin - d, 20, d, d);
+    }
+
+    private static RectangleF RefreshRect(int w, int h) => new(w - 26 - 220, h - 26, 220, 20);
+
+    private static string AgeText(TimeSpan d) =>
+        d.TotalMinutes < 1 ? "just now"
+        : d.TotalHours < 1 ? $"{(int)d.TotalMinutes}m ago"
+        : d.TotalDays < 1 ? $"{(int)d.TotalHours}h ago"
+        : $"{(int)d.TotalDays}d ago";
+
+    public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
+        => new[]
+        {
+            (CancelRect(w, h), (Action<PointF>)(_ => { if (CanCancel) _cancel(); })),
+            (RefreshRect(w, h), (Action<PointF>)(_ => { _store.ForceRefresh(); CodexLimits.ForceRefresh(); })),
+        };
+
+    private static void DrawBar(Graphics g, float x, float y, float w, string label, string value,
+        double frac, Color fill, float a, Font labelFont, Font valueFont)
+    {
+        using (var lb = new SolidBrush(Mul(White, a)))
+            g.DrawString(label, labelFont, lb, x, y);
+        var sz = g.MeasureString(value, valueFont);
+        using (var vb = new SolidBrush(Mul(Dim, a)))
+            g.DrawString(value, valueFont, vb, x + w - sz.Width, y + 1);
+
+        float by = y + 24, bh = 6;
+        Fill(g, x, by, w, bh, Mul(Track, a));
+        double f = Math.Clamp(frac, 0, 1);
+        if (f > 0)
+            Fill(g, x, by, (float)(w * f), bh, Mul(fill, a));
+    }
+
+    private static void Fill(Graphics g, float x, float y, float w, float h, Color c)
+    {
+        if (w <= 0) return;
+        using var path = Rounded(new RectangleF(x, y, w, h), h / 2f);
+        using var b = new SolidBrush(c);
+        g.FillPath(b, path);
+    }
+
+    private static GraphicsPath Rounded(RectangleF r, float radius)
+    {
+        float d = Math.Min(radius * 2, Math.Min(r.Width, r.Height));
+        var p = new GraphicsPath();
+        if (d <= 0) { p.AddRectangle(r); return p; }
+        p.AddArc(r.X, r.Y, d, d, 180, 90);
+        p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        p.CloseFigure();
+        return p;
+    }
+
+    private static Color Mul(Color c, float a)
+        => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);
+
+    private static double ContextFrac(CodexSnapshot? st) =>
+        st is null || st.ContextMax <= 0 ? 0 : Math.Clamp((double)st.ContextUsed / st.ContextMax, 0, 1);
+
+    private static Color StateColor(string? state) => state switch
+    {
+        "working" => Green,
+        "compacting" => Blue,
+        "waiting_input" => Amber,
+        _ => Color.FromArgb(140, 255, 255, 255),
+    };
+
+    // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
+    // it would vanish): green = working, yellow = deep thinking / needs input, red = error, white = idle
+    private static Color RingColor(CodexSnapshot? st)
+        => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
+         : st?.State == "waiting_input" ? Amber
+         : st?.State == "compacting" ? Blue
+         : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
+         : White;
+
+    private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
+
+    private static Color LerpC(Color a, Color b, float t) => Color.FromArgb(
+        (int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t),
+        (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+
+    // blue up to 50%, then smoothly blends into amber, then red — no hard steps
+    private static Color UsageColor(float f) =>
+        f <= 0.5f ? Blue
+        : f <= 0.75f ? LerpC(Blue, Amber, (f - 0.5f) / 0.25f)
+        : LerpC(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+
+    private static string ResetIn(DateTimeOffset r)
+    {
+        if (r == default) return "";
+        var d = r - DateTimeOffset.UtcNow;
+        if (d.TotalSeconds <= 0) return "now";
+        if (d.TotalDays >= 1) return $"{(int)d.TotalDays}d {d.Hours}h";
+        if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes}m";
+        return $"{d.Minutes}m";
+    }
+
+    internal static string DisplayText(string state, string? tool, bool apiDown, bool netDown) =>
+        netDown ? "net error :(" : apiDown ? "api error :(" : state switch
+        {
+            "working" => ToolVerb(tool),
+            "compacting" => "compacting…",
+            "waiting_input" => "your move ;)",
+            _ => "let's work :)",
+        };
+
+    private static string Activity(CodexSnapshot? st)
+    {
+        string verb = OutageText() ?? st?.State switch
+        {
+            "working" => ToolVerb(st.CurrentTool),
+            "compacting" => "compacting…",
+            "waiting_input" => "your move ;)",
+            _ => IdleMood(st),
+        };
+        if (st?.State != "working" && st?.State != "compacting") return verb;
+        var el = Elapsed(st);
+        return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
+    }
+
+    // minimal mood line when nothing is running
+    private static string IdleMood(CodexSnapshot? st) =>
+        CodexNetMon.NetDown ? "offline :("
+        : CodexNetMon.ApiDown ? "api down :("
+        : JustCompacted(st) ? "compacted :)"
+        : CodexLimits.FiveHour >= 0.95f ? "outta juice XD"
+        : "let's work :)";
+
+    private static bool JustCompacted(CodexSnapshot? st) =>
+        st?.CompactedAt is { } t && DateTimeOffset.UtcNow - t < TimeSpan.FromSeconds(20);
+
+    // an outage overrides whatever the verb was — even mid-work "writing…" becomes the error
+    private static string? OutageText() =>
+        CodexNetMon.NetDown ? "net error :(" : CodexNetMon.ApiDown ? "api error :(" : null;
+
+    private static string ToolVerb(string? tool) => tool switch
+    {
+        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",
+        "Read" => "reading…",
+        "Bash" or "PowerShell" => "running…",
+        "Grep" or "Glob" => "digging…",
+        "WebFetch" => "fetching…",
+        "WebSearch" => "googling :P",
+        "Task" or "Agent" => "delegating…",
+        "TodoWrite" => "planning…",
+        "SlashCommand" or "Skill" => "using a skill…",
+        "AskUserQuestion" => "asking you :)",
+        null or "" => "hmm…",
+        _ => tool!.ToLowerInvariant() + "…",
+    };
+
+    // how long the current turn (or compact) has been running
+    private static string Elapsed(CodexSnapshot? st)
+    {
+        if ((st?.State != "working" && st?.State != "compacting") || st?.StartedAt is not { } t) return "";
+        var d = DateTimeOffset.UtcNow - t;
+        if (d.TotalSeconds < 1) return "";
+        return d.TotalMinutes >= 1 ? $"{(int)d.TotalMinutes}m {d.Seconds}s" : $"{d.Seconds}s";
+    }
+}

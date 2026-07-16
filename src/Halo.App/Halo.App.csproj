@@ -14,5 +14,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets\claude.png" />
+    <EmbeddedResource Include="Assets\openai.png" LogicalName="Halo.Assets.openai.png" />
   </ItemGroup>
 </Project>
