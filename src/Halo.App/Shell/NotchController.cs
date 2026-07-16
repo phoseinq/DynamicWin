@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using Halo.ClaudeCode;
 using Halo.Interop;
@@ -6,6 +7,46 @@ using Halo.Widgets;
 using Windows.System;
 
 namespace Halo.Shell;
+
+internal enum NotchVisibilityAction
+{
+    None,
+    Hide,
+    ShowAndRender,
+}
+
+internal readonly record struct NotchVisibilityDecision(
+    NotchVisibilityAction Action,
+    bool ReturnEarly,
+    bool HiddenForFullscreen,
+    bool HiddenForNoActiveWidgets);
+
+internal static class NotchVisibility
+{
+    internal static NotchVisibilityDecision Decide(bool fullscreen, bool hasActiveWidgets,
+        bool hiddenForFullscreen, bool hiddenForNoActiveWidgets)
+    {
+        if (fullscreen)
+        {
+            var action = hiddenForFullscreen || hiddenForNoActiveWidgets
+                ? NotchVisibilityAction.None
+                : NotchVisibilityAction.Hide;
+            return new(action, ReturnEarly: true, HiddenForFullscreen: true, hiddenForNoActiveWidgets);
+        }
+
+        if (!hasActiveWidgets)
+        {
+            var action = hiddenForFullscreen || hiddenForNoActiveWidgets
+                ? NotchVisibilityAction.None
+                : NotchVisibilityAction.Hide;
+            return new(action, ReturnEarly: true, HiddenForFullscreen: false, HiddenForNoActiveWidgets: true);
+        }
+
+        var show = hiddenForFullscreen || hiddenForNoActiveWidgets;
+        return new(show ? NotchVisibilityAction.ShowAndRender : NotchVisibilityAction.None,
+            ReturnEarly: false, HiddenForFullscreen: false, HiddenForNoActiveWidgets: false);
+    }
+}
 
 internal sealed class NotchController
 {
@@ -33,7 +74,8 @@ internal sealed class NotchController
     private int _widgetVersion = -1;
     private int _lastSec = -1;
     private bool _lastMouseDown;
-    private bool _hidden;
+    private bool _hiddenForFullscreen;
+    private bool _hiddenForNoActiveWidgets;
     private bool _lastDesktop = true;
     private IntPtr _lastFg = IntPtr.Zero;
     private IntPtr _behind = IntPtr.Zero;
@@ -55,7 +97,17 @@ internal sealed class NotchController
         _el = notch.WorkLeft + (notch.WorkWidth - ExpandedW) / 2;
         _et = notch.WorkTop;
 
-        Apply(0f);
+        var active = ActiveIndices();
+        if (active.Length == 0)
+        {
+            _hiddenForNoActiveWidgets = true;
+            _notch.SetVisible(false);
+        }
+        else
+        {
+            _primary = active[0];
+            Apply(0f);
+        }
 
         Dispatcher.Ensure();
         var dq = DispatcherQueue.GetForCurrentThread();
@@ -68,19 +120,30 @@ internal sealed class NotchController
     private void OnTick(DispatcherQueueTimer sender, object args)
     {
         var fg = Win32.GetForegroundWindow();
-        if (_notch.IsFullscreen(fg))
+        bool fullscreen = _notch.IsFullscreen(fg);
+        var active = fullscreen ? [] : ActiveIndices();
+        var visibility = NotchVisibility.Decide(fullscreen, active.Length > 0,
+            _hiddenForFullscreen, _hiddenForNoActiveWidgets);
+        _hiddenForFullscreen = visibility.HiddenForFullscreen;
+        _hiddenForNoActiveWidgets = visibility.HiddenForNoActiveWidgets;
+
+        if (visibility.Action == NotchVisibilityAction.Hide)
+            _notch.SetVisible(false);
+        else if (visibility.Action == NotchVisibilityAction.ShowAndRender)
         {
-            if (!_hidden) { _hidden = true; _notch.SetVisible(false); }
-            return;
+            if (Array.IndexOf(active, _primary) < 0)
+                _primary = active[0];
+            _notch.SetVisible(true);
+            _lastFg = IntPtr.Zero;
+            Apply(_progress);
         }
-        if (_hidden) { _hidden = false; _notch.SetVisible(true); _lastFg = IntPtr.Zero; }
+
+        if (visibility.ReturnEarly)
+            return;
 
         // primary must be an active widget; fall back to the first active one if it went inactive
-        if (_drop < 0f && !_widgets[_primary].IsActive)
-        {
-            var act = ActiveIndices();
-            if (act.Length > 0) _primary = act[0];
-        }
+        if (_drop < 0f && Array.IndexOf(active, _primary) < 0)
+            _primary = active[0];
 
         // Claude asked something, or a compact just finished → notification: expand, hold, collapse
         var ccState = _store.Current?.State;
@@ -192,12 +255,11 @@ internal sealed class NotchController
 
     private int[] ActiveIndices()
     {
-        int n = 0;
-        for (int i = 0; i < _widgets.Length; i++) if (_widgets[i].IsActive) n++;
-        var r = new int[n];
-        int j = 0;
-        for (int i = 0; i < _widgets.Length; i++) if (_widgets[i].IsActive) r[j++] = i;
-        return r;
+        var active = new List<int>(_widgets.Length);
+        for (int i = 0; i < _widgets.Length; i++)
+            if (_widgets[i].IsActive)
+                active.Add(i);
+        return [.. active];
     }
 
     // active widgets other than the primary — these fill the swap circle / dropdown

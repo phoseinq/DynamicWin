@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
@@ -39,6 +40,8 @@ internal sealed class CcStatus
 
 internal sealed class StatusStore
 {
+    private static readonly TimeSpan ProcessStartTolerance = TimeSpan.FromSeconds(2);
+
     private static readonly JsonSerializerOptions Opts = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -46,27 +49,27 @@ internal sealed class StatusStore
     };
 
     private readonly string _path;
-    private readonly Func<int, bool> _processAlive;
+    private readonly Func<int, DateTimeOffset?> _processStartedAt;
     private readonly Func<DateTimeOffset> _clock;
     private readonly FileSystemWatcher? _watcher;
 
     public CcStatus? Current { get; private set; }
     public int Version { get; private set; }
-    public bool IsLive => IsLiveStatus(Current, _processAlive, _clock());
+    public bool IsLive => IsLiveStatus(Current, _processStartedAt, _clock());
 
     public static string Directory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch");
 
     public StatusStore()
-        : this(Path.Combine(Directory, "status.json"), IsProcessAlive, watchFiles: true)
+        : this(Path.Combine(Directory, "status.json"), GetProcessStartedAt, watchFiles: true)
     {
     }
 
-    internal StatusStore(string path, Func<int, bool> processAlive, bool watchFiles,
+    internal StatusStore(string path, Func<int, DateTimeOffset?> processStartedAt, bool watchFiles,
         Func<DateTimeOffset>? clock = null)
     {
         _path = path;
-        _processAlive = processAlive;
+        _processStartedAt = processStartedAt;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(directory))
@@ -87,60 +90,62 @@ internal sealed class StatusStore
         _watcher.Renamed += (_, _) => Load();
     }
 
-    private static bool IsLiveStatus(CcStatus? status, Func<int, bool> processAlive, DateTimeOffset now)
+    private static bool IsLiveStatus(CcStatus? status, Func<int, DateTimeOffset?> processStartedAt, DateTimeOffset now)
     {
         if (status is null)
             return false;
 
+        if (!DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var updatedAt))
+            return false;
+
         if (status.Pid > 0)
-            return ProcessIsAlive(status.Pid, processAlive);
+        {
+            var startedAt = ProcessStartTime(status.Pid, processStartedAt);
+            return startedAt.HasValue && startedAt.Value <= updatedAt + ProcessStartTolerance;
+        }
 
         if (status.Pid < 0)
             return false;
 
-        if (status.State is not ("working" or "waiting" or "waiting_input" or "compacting")
-            || !DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
-                out var updatedAt))
+        if (status.State is not ("working" or "waiting" or "waiting_input" or "compacting"))
             return false;
 
         return updatedAt >= now.AddSeconds(-30);
     }
 
-    private static bool ProcessIsAlive(int pid, Func<int, bool> processAlive)
+    private static DateTimeOffset? ProcessStartTime(int pid, Func<int, DateTimeOffset?> processStartedAt)
     {
         try
         {
-            return processAlive(pid);
+            return processStartedAt(pid);
         }
         catch (ArgumentException)
         {
-            return false;
+            return null;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return null;
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 
-    private static bool IsProcessAlive(int pid)
+    private static DateTimeOffset? GetProcessStartedAt(int pid)
     {
         if (pid <= 0)
-            return false;
+            return null;
 
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            return !process.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
+        using var process = Process.GetProcessById(pid);
+        return process.HasExited ? null : new DateTimeOffset(process.StartTime);
     }
 
     private void Load()
