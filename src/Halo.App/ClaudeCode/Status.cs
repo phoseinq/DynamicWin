@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -45,21 +46,37 @@ internal sealed class StatusStore
     };
 
     private readonly string _path;
-    private readonly FileSystemWatcher _watcher;
+    private readonly Func<int, bool> _processAlive;
+    private readonly Func<DateTimeOffset> _clock;
+    private readonly FileSystemWatcher? _watcher;
 
     public CcStatus? Current { get; private set; }
     public int Version { get; private set; }
+    public bool IsLive => IsLiveStatus(Current, _processAlive, _clock());
 
     public static string Directory { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch");
 
     public StatusStore()
+        : this(Path.Combine(Directory, "status.json"), IsProcessAlive, watchFiles: true)
     {
-        System.IO.Directory.CreateDirectory(Directory);
-        _path = Path.Combine(Directory, "status.json");
+    }
+
+    internal StatusStore(string path, Func<int, bool> processAlive, bool watchFiles,
+        Func<DateTimeOffset>? clock = null)
+    {
+        _path = path;
+        _processAlive = processAlive;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        var directory = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(directory))
+            System.IO.Directory.CreateDirectory(directory);
         Load();
 
-        _watcher = new FileSystemWatcher(Directory, "status.json")
+        if (!watchFiles)
+            return;
+
+        _watcher = new FileSystemWatcher(Path.GetDirectoryName(_path)!, Path.GetFileName(_path))
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
             EnableRaisingEvents = true,
@@ -68,6 +85,62 @@ internal sealed class StatusStore
         _watcher.Created += (_, _) => Load();
         _watcher.Deleted += (_, _) => Load();
         _watcher.Renamed += (_, _) => Load();
+    }
+
+    private static bool IsLiveStatus(CcStatus? status, Func<int, bool> processAlive, DateTimeOffset now)
+    {
+        if (status is null)
+            return false;
+
+        if (status.Pid > 0)
+            return ProcessIsAlive(status.Pid, processAlive);
+
+        if (status.Pid < 0)
+            return false;
+
+        if (status.State is not ("working" or "waiting" or "waiting_input" or "compacting")
+            || !DateTimeOffset.TryParse(status.UpdatedAt, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var updatedAt))
+            return false;
+
+        return updatedAt >= now.AddSeconds(-30);
+    }
+
+    private static bool ProcessIsAlive(int pid, Func<int, bool> processAlive)
+    {
+        try
+        {
+            return processAlive(pid);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        if (pid <= 0)
+            return false;
+
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private void Load()

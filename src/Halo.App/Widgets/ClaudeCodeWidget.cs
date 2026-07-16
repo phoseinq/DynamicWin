@@ -31,8 +31,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
     public Bitmap? IconImage => ClaudeIcon;
 
-    // ponytail: active whenever a status file exists; ceiling = stale file after CC exits, refine with a heartbeat if it bugs
-    public bool IsActive => _store.Current != null;
+    public bool IsActive => _store.IsLive;
     public int Version => _store.Version + NetMon.Version;
     // text-emerge animation + the compacting sweep both need frames while collapsed
     public bool Animating => _appear < 1f || _store.Current?.State == "compacting";
