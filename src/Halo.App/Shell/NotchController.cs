@@ -127,7 +127,14 @@ internal sealed class NotchController
     private readonly IWidget[] _widgets;
     private readonly AgentNoticeCoordinator _agentNotices;
     private readonly DispatcherQueueTimer _timer;
-    private readonly int _cl, _ct, _el, _et;
+
+    // geometry derived per-use: work area and Scale both change at runtime
+    private float S => _notch.Scale;
+    private int Sc(int v) => (int)MathF.Round(v * S);
+    private int _cl => _notch.WorkLeft + (_notch.WorkWidth - Sc(CollapsedW)) / 2;
+    private int _el => _notch.WorkLeft + (_notch.WorkWidth - Sc(ExpandedW)) / 2;
+    private int _ct => _notch.WorkTop;
+    private int _et => _notch.WorkTop;
 
     private int _primary;
     private float _progress;
@@ -145,6 +152,9 @@ internal sealed class NotchController
     private int _widgetVersion = -1;
     private int _lastSec = -1;
     private bool _lastMouseDown;
+    private bool _resizing;
+    private Win32.POINT _resizeFrom;
+    private float _scale0, _handle;
     private bool _hiddenForFullscreen;
     private bool _empty; // no active widgets: pill stays visible but renders blank
     private bool _lastDesktop = true;
@@ -174,11 +184,6 @@ internal sealed class NotchController
         for (int s = 0; s < StatusStore.MaxSessions; s++)
             widgets.Add(new GenericAgentWidget(agentStore, s));
         _widgets = [.. widgets];
-
-        _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
-        _ct = notch.WorkTop;
-        _el = notch.WorkLeft + (notch.WorkWidth - ExpandedW) / 2;
-        _et = notch.WorkTop;
 
         var active = ActiveIndices();
         _empty = active.Length == 0;
@@ -270,9 +275,38 @@ internal sealed class NotchController
         }
 
         Win32.GetCursorPos(out var p);
-        bool hovered = _progress > 0.02f
-            ? InRect(p, _el, _et, ExpandedW, ExpandedH)
-            : InRect(p, _cl, _ct, CollapsedW, CollapsedH);
+
+        // corner-drag resize: grab the handle zone, drag = live global rescale, release = persist
+        bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
+        bool inHandle = _progress > 0.9f
+            && p.X >= _el + Sc(ExpandedW - 44) && p.X < _el + Sc(ExpandedW) + 8
+            && p.Y >= _et + Sc(ExpandedH - 44) && p.Y < _et + Sc(ExpandedH) + 8;
+        bool rescaled = false;
+        if (_resizing)
+        {
+            if (down)
+            {
+                float ns = Math.Clamp(_scale0
+                    + ((p.X - _resizeFrom.X) + (p.Y - _resizeFrom.Y)) / (float)(ExpandedW + ExpandedH),
+                    0.7f, 1.6f);
+                rescaled = ns != _notch.Scale;
+                _notch.Scale = ns;
+            }
+            else { _resizing = false; _notch.SaveScale(); }
+        }
+        else if (down && !_lastMouseDown && inHandle)
+        {
+            _resizing = true;
+            _resizeFrom = p;
+            _scale0 = _notch.Scale;
+        }
+        float prevHandle = _handle;
+        _handle = Math.Clamp(_handle + (inHandle || _resizing ? 1 : -1) * 0.008f / 0.12f, 0f, 1f);
+        _notch.HandleAlpha = _handle;
+
+        bool hovered = _resizing || (_progress > 0.02f
+            ? InRect(p, _el, _et, Sc(ExpandedW), Sc(ExpandedH))
+            : InRect(p, _cl, _ct, Sc(CollapsedW), Sc(CollapsedH)));
         bool open = (hovered || notice) && !_empty; // an empty pill has nothing to expand into
 
         int dir = open ? 1 : -1;
@@ -288,7 +322,7 @@ internal sealed class NotchController
         int hoverRow = -1;
         if (inMenu && p.Y >= _ct)
         {
-            int r0 = (p.Y - _ct) / LayeredNotch.CircleD;
+            int r0 = (p.Y - _ct) / Sc(LayeredNotch.CircleD);
             if (r0 >= 0 && r0 < rows.Count) hoverRow = r0;
         }
         if (hoverRow != _row && hoverRow >= 0) { _row = hoverRow; _rowOpen = 0f; }
@@ -350,8 +384,8 @@ internal sealed class NotchController
         bool forceAnim = false;
         if (_widgets[_primary].Animating && _progress < 0.5f && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }
 
-        // cursor in panel coords for widget hover effects; redraw as it moves over the open panel
-        var mouse = new PointF(p.X - _el, p.Y - _et);
+        // cursor in logical panel coords for widget hover effects; redraw as it moves over the open panel
+        var mouse = new PointF((p.X - _el) / S, (p.Y - _et) / S);
         bool mouseMoved = WidgetInput.Over != (hovered && next > 0.98f) || (WidgetInput.Over && WidgetInput.Mouse != mouse);
         WidgetInput.Over = hovered && next > 0.98f;
         WidgetInput.Mouse = mouse;
@@ -359,7 +393,7 @@ internal sealed class NotchController
         int wv = WidgetVersion();
         bool changed = next != _progress || wv != _widgetVersion || deskChanged || wasEmpty != _empty
             || refreshed || tick || _menu != prevMenu || _drop != prevDrop || _arrive != prevArrive
-            || _rowOpen != prevRowOpen || forceAnim || mouseMoved;
+            || _rowOpen != prevRowOpen || forceAnim || mouseMoved || rescaled || _handle != prevHandle;
         _progress = next;
         _widgetVersion = wv;
         if (changed) Apply(_progress);
@@ -370,8 +404,8 @@ internal sealed class NotchController
     {
         var rows = Groups();
         if (rows.Count == 0) return false;
-        int D = LayeredNotch.CircleD;
-        int x = _cl + CollapsedW + LayeredNotch.CircleGap;
+        int D = Sc(LayeredNotch.CircleD);
+        int x = _cl + Sc(CollapsedW + LayeredNotch.CircleGap);
         float openV = EaseOutBack(Math.Clamp(_menu, 0f, 1f));
         float hNow = D + (rows.Count - 1) * D * Math.Max(0f, openV);
         if (p.X >= x && p.X < x + D && p.Y >= _ct && p.Y < _ct + Math.Max(D, hNow))
@@ -452,16 +486,17 @@ internal sealed class NotchController
     private void PollClick(Win32.POINT p)
     {
         bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
-        if (down && !_lastMouseDown)
+        if (down && !_lastMouseDown && !_resizing)
         {
             if (_progress > 0.9f)
             {
+                // widget rects are logical; the cursor is physical — compare scaled, hand back logical
                 foreach (var (r, onClick) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
                 {
-                    int bx = _el + (int)r.X, by = _et + (int)r.Y;
-                    if (p.X >= bx && p.X < bx + r.Width && p.Y >= by && p.Y < by + r.Height)
+                    float bx = _el + r.X * S, by = _et + r.Y * S;
+                    if (p.X >= bx && p.X < bx + r.Width * S && p.Y >= by && p.Y < by + r.Height * S)
                     {
-                        onClick(new PointF(p.X - _el, p.Y - _et));
+                        onClick(new PointF((p.X - _el) / S, (p.Y - _et) / S));
                         break;
                     }
                 }
@@ -469,8 +504,8 @@ internal sealed class NotchController
             else if (_progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && InMenu(p))
             {
                 var rows = Groups();
-                int D = LayeredNotch.CircleD;
-                int mx = _cl + CollapsedW + LayeredNotch.CircleGap;
+                int D = Sc(LayeredNotch.CircleD);
+                int mx = _cl + Sc(CollapsedW + LayeredNotch.CircleGap);
                 int row = Math.Clamp((p.Y - _ct) / D, 0, rows.Count - 1);
                 var grp = rows[row];
                 int rel = (p.X - mx) / D; // 0 = the app row's own circle, 1.. = a fanned session
@@ -478,8 +513,9 @@ internal sealed class NotchController
                 _pending = grp[pick];
                 _dropIcon = _widgets[_pending].Icon;
                 _dropImage = _widgets[_pending].IconImage;
-                _dropCX = rel <= 0 ? D / 2f : (rel + 0.5f) * D; // fly from the circle actually clicked
-                _dropCY = (row + 0.5f) * D;
+                int DL = LayeredNotch.CircleD; // drop coords feed the (logical) render space
+                _dropCX = rel <= 0 ? DL / 2f : (rel + 0.5f) * DL; // fly from the circle actually clicked
+                _dropCY = (row + 0.5f) * DL;
                 _drop = 0f;
                 _menu = 0f;
                 _rowOpen = 0f;

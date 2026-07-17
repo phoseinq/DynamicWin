@@ -38,6 +38,34 @@ internal sealed class LayeredNotch
 
     private Win32.WndProc _wndProc = null!;
     private int _workLeft, _workTop, _workWidth;
+
+    // global pill scale (corner-drag resize). Rendering applies it as one ScaleTransform,
+    // so icons/text/clips all stay in lockstep; hit-testing scales in NotchController.
+    public float Scale = 1f;
+    public float HandleAlpha; // corner resize-handle visibility, 0..1 (controller fades it)
+    private static readonly string ScalePath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "scale");
+
+    public void LoadScale()
+    {
+        try
+        {
+            if (float.TryParse(System.IO.File.ReadAllText(ScalePath),
+                    System.Globalization.CultureInfo.InvariantCulture, out var s))
+                Scale = Math.Clamp(s, 0.7f, 1.6f);
+        }
+        catch { }
+    }
+
+    public void SaveScale()
+    {
+        try
+        {
+            System.IO.File.WriteAllText(ScalePath,
+                Scale.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch { }
+    }
     private Bitmap? _bg;
     private readonly object _bgLock = new();
     private volatile bool _capturing;
@@ -71,6 +99,7 @@ internal sealed class LayeredNotch
         _workLeft = work.left;
         _workTop = work.top;
         _workWidth = work.right - work.left;
+        LoadScale();
 
         int exStyle = Win32.WS_EX_LAYERED | Win32.WS_EX_TOOLWINDOW | Win32.WS_EX_TOPMOST | Win32.WS_EX_NOACTIVATE;
         Hwnd = Win32.CreateWindowEx(exStyle, "HaloNotchWindow", "Halo", Win32.WS_POPUP,
@@ -213,11 +242,16 @@ internal sealed class LayeredNotch
         int totalW = menu.Show ? menuX + CircleD * (1 + maxFan) : w;
         int totalH = Math.Max(h, menu.Show ? Math.Max(1, menu.RowIcons.Length) * CircleD : 0);
 
+        // resize: everything is laid out in logical units, one ScaleTransform blows it all up
+        // together — icons, text, clips and the strip stay in lockstep at any size
+        float S = Scale;
+        int pw = (int)MathF.Ceiling(totalW * S), ph = (int)MathF.Ceiling(totalH * S);
+
         var bmi = new Win32.BITMAPINFOHEADER
         {
             biSize = Marshal.SizeOf<Win32.BITMAPINFOHEADER>(),
-            biWidth = totalW,
-            biHeight = -totalH,
+            biWidth = pw,
+            biHeight = -ph,
             biPlanes = 1,
             biBitCount = 32,
             biCompression = 0,
@@ -227,23 +261,33 @@ internal sealed class LayeredNotch
         IntPtr memDc = Win32.CreateCompatibleDC(screenDc);
         IntPtr oldObj = Win32.SelectObject(memDc, dib);
 
-        using (var bmp = new Bitmap(totalW, totalH, totalW * 4, PixelFormat.Format32bppPArgb, bits))
+        using (var bmp = new Bitmap(pw, ph, pw * 4, PixelFormat.Format32bppPArgb, bits))
         using (var g = Graphics.FromImage(bmp))
         {
             g.Clear(Color.Transparent);
+            g.ScaleTransform(S, S);
             DrawShape(g, w, h, radius, tintAlpha, glass);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             if (collapsedFade > 0.01f) drawCollapsed(g, w, h, collapsedFade);
             drawContent(g, w, h, contentFade);
+            if (HandleAlpha > 0.01f && contentFade > 0.5f)
+            {
+                // resize handle: a short stroke hugging the bottom-right corner curve — kept tight
+                // to the edge and short so it stays clear of the panel's bottom-right text
+                using var hp = new Pen(Color.FromArgb((int)(160 * HandleAlpha * contentFade), 255, 255, 255), 3f)
+                { StartCap = LineCap.Round, EndCap = LineCap.Round };
+                int m = 3;
+                g.DrawArc(hp, w - 2 * radius + m, h - 2 * radius + m, 2 * (radius - m), 2 * (radius - m), 25, 40);
+            }
             float ca = 1f - contentFade;
             if (menu.Show && ca > 0.01f && !menu.Dropping) DrawMenu(g, menuX, w, tintAlpha, glass, menu, ca);
             if (menu.Dropping) DrawDrop(g, menu, tintAlpha, w, h); // the circle itself flows in (no static circle)
         }
 
-        var size = new Win32.SIZE { cx = totalW, cy = totalH };
+        var size = new Win32.SIZE { cx = pw, cy = ph };
         var src = new Win32.POINT { X = 0, Y = 0 };
-        var dst = new Win32.POINT { X = _workLeft + (_workWidth - w) / 2, Y = _workTop };
+        var dst = new Win32.POINT { X = _workLeft + (_workWidth - (int)(w * S)) / 2, Y = _workTop };
         var blend = new Win32.BLENDFUNCTION
         {
             BlendOp = Win32.AC_SRC_OVER,
