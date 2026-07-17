@@ -131,6 +131,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
+        if (st?.State == "waiting_input") textX += 16; // no timer on the right — breathe off the icon
         using var tf2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
         float elW = el.Length > 0 ? g.MeasureString(el, tf2, int.MaxValue, StringFormat.GenericTypographic).Width : 0;
         float avail = (w - 14) - textX - (elW > 0 ? elW + 10 : 0);
