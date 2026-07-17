@@ -545,6 +545,17 @@ internal sealed class LayeredNotch
             Win32.PostQuitMessage(0);
             return IntPtr.Zero;
         }
+        if (msg is Win32.WM_DISPLAYCHANGE or Win32.WM_SETTINGCHANGE)
+        {
+            // monitor plugged/unplugged or work area moved: stale coords leave the pill
+            // off-screen — re-read; the next UpdateLayeredWindow repositions from these
+            var work = default(Win32.RECT);
+            Win32.SystemParametersInfo(Win32.SPI_GETWORKAREA, 0, ref work, 0);
+            _workLeft = work.left;
+            _workTop = work.top;
+            _workWidth = work.right - work.left;
+            lock (_bgLock) { _bg?.Dispose(); _bg = null; } // wallpaper snapshot is per-geometry
+        }
         return Win32.DefWindowProc(hwnd, msg, wParam, lParam);
     }
 }
