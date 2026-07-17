@@ -360,16 +360,18 @@ internal sealed class LayeredNotch
                         cg.Clip = clip;
                     }
                     DrawCircleImage(cg, img, cx, cy, D, ia);
-                    if (ring is { } rc) // status ring hugging the icon, same style as the pill's
-                    {
-                        float inset = D * 0.19f - 2.5f * ss, dd = D - inset * 2;
-                        using var pen = new Pen(Color.FromArgb((int)(140 * ia), rc), 1.9f * ss);
-                        cg.DrawEllipse(pen, cx + inset, cy + inset, dd, dd);
-                    }
-                    return;
                 }
-                using var ib = new SolidBrush(Color.FromArgb((int)(235 * ia), 255, 255, 255));
-                cg.DrawString(icon, f, ib, new RectangleF(cx, cy, D, D), sf);
+                else
+                {
+                    using var ib = new SolidBrush(Color.FromArgb((int)(235 * ia), 255, 255, 255));
+                    cg.DrawString(icon, f, ib, new RectangleF(cx, cy, D, D), sf);
+                }
+                if (ring is { } rc) // status ring hugging the icon, same style as the pill's
+                {
+                    float inset = D * 0.19f - 2.5f * ss, dd = D - inset * 2;
+                    using var pen = new Pen(Color.FromArgb((int)(140 * ia), rc), 1.9f * ss);
+                    cg.DrawEllipse(pen, cx + inset, cy + inset, dd, dd);
+                }
             }
 
             for (int i = 0; i < rows; i++)

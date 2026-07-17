@@ -19,7 +19,17 @@
 - **Media polish**: iOS 9-bar center-weighted waveform; glass transport chips + eased hover; glyphs
   centred by path ink-bounds; soft volume chip + breathing bar.
 - **Limits staleness**: 5-min heartbeat Timer in `Limits` (was: only panel-open/refresh → "59m ago").
+  Also: account-lockout 429 (long `Retry-After`) now recorded as 5h=100% + reset time — the panel
+  told the truth ("100% · 30m · updated just now") instead of rotting to "updated 12h ago".
 - **Startup lag**: autostart moved Startup-folder lnk → Scheduled Task `Halo` at logon (no stagger).
+- **Strip rings + numbers**: every circle wears the pill's status ring (`IWidget.Ring`); duplicate
+  sessions get deeper shades (`Fx.Shade`) + stable number badges (`Fx.Badge`); codex surfaces badge
+  1/2 when both live.
+- **Generic agents**: `GenericAgentWidget` + `docs/generic-agents.md` — any AI tool writing
+  `~/.halo/agents/agent-*.json` (name/icon/state/pid/...) gets the full treatment; groups by name.
+  Verified live with a fake "Gemini CLI" file.
+- **Media = already player-agnostic** (GSMTC): browsers/SoundCloud/VLC work without changes; a
+  dedicated video-player face is the user's NEXT milestone.
 
 Goal: smooth glass notch for Windows (Dynamic Island for desktop). C# + .NET 9, Win32 layered window
 rendered with `UpdateLayeredWindow` + GDI+. Spec in `docs/` (start at `docs/MAP.md`); current

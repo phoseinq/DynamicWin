@@ -170,6 +170,9 @@ internal sealed class NotchController
         widgets.Add(new CodexWidget(_codexStore, CodexSurface.Desktop, () => CancelCodex(CodexSurface.Desktop),
             () => _codexDesktopRuntime.Presence.Running));
         widgets.Add(new CodexWidget(_codexStore, CodexSurface.Cli, () => CancelCodex(CodexSurface.Cli)));
+        var agentStore = GenericAgentWidget.NewStore(); // any other AI tool: ~/.halo/agents/agent-*.json
+        for (int s = 0; s < StatusStore.MaxSessions; s++)
+            widgets.Add(new GenericAgentWidget(agentStore, s));
         _widgets = [.. widgets];
 
         _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
@@ -396,14 +399,22 @@ internal sealed class NotchController
         return first;
     }
 
-    // alt widgets grouped per app (media / claude / codex), preserving widget order inside a group
+    // alt widgets grouped per app (media / claude / codex / each generic agent by name),
+    // preserving widget order inside a group
     private List<int[]> Groups()
     {
-        var byKind = new Dictionary<int, List<int>>();
-        var order = new List<int>();
+        var byKind = new Dictionary<string, List<int>>();
+        var order = new List<string>();
         foreach (var i in AltIndices())
         {
-            int kind = _widgets[i] switch { MediaWidget => 0, ClaudeCodeWidget => 1, _ => 2 };
+            string kind = _widgets[i] switch
+            {
+                MediaWidget => "media",
+                ClaudeCodeWidget => "claude",
+                CodexWidget => "codex",
+                GenericAgentWidget ga => "g:" + ga.GroupKey,
+                _ => "other",
+            };
             if (!byKind.TryGetValue(kind, out var list)) { list = new List<int>(); byKind[kind] = list; order.Add(kind); }
             list.Add(i);
         }

@@ -104,9 +104,22 @@ internal static class Limits
             req.Headers.TryAddWithoutValidation("authorization", "Bearer " + tok);
             req.Headers.TryAddWithoutValidation("anthropic-beta", "oauth-2025-04-20");
             using var resp = Http.Send(req);
-            if ((int)resp.StatusCode == 429) // the usage endpoint itself is rate-limited:
-            {                                // keep the last good values and back off
-                _cooldown = TimeSpan.FromMinutes(2);
+            if ((int)resp.StatusCode == 429)
+            {
+                // account-limit lockout 429s this endpoint too, with Retry-After = seconds to the
+                // 5h reset — that IS the current truth (100%, resets then), don't let the data rot
+                var ra = resp.Headers.RetryAfter?.Delta ?? TimeSpan.Zero;
+                if (ra > TimeSpan.FromMinutes(2))
+                {
+                    FiveHour = 1f;
+                    FiveHourReset = DateTimeOffset.UtcNow + ra;
+                    LastSuccess = DateTime.UtcNow;
+                    SaveCache();
+                    Failed = false;
+                    _cooldown = ra < TimeSpan.FromMinutes(30) ? ra : TimeSpan.FromMinutes(30);
+                }
+                else // plain endpoint rate-limit: keep the last good values and back off
+                    _cooldown = TimeSpan.FromMinutes(2);
                 return;
             }
             _cooldown = TimeSpan.FromSeconds(30);

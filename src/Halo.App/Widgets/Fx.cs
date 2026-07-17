@@ -120,6 +120,24 @@ internal static class Fx
         catch { return White; }
     }
 
+    // icon + small dark corner badge with one character (session number / surface letter)
+    public static Bitmap Badge(Bitmap icon, char ch)
+    {
+        var b = new Bitmap(icon.Width, icon.Height, PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(b);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        g.DrawImage(icon, 0, 0, icon.Width, icon.Height);
+        float d = icon.Width * 0.42f, x = icon.Width - d, y = icon.Height - d;
+        using (var bg = new SolidBrush(Color.FromArgb(230, 24, 24, 26)))
+            g.FillEllipse(bg, x, y, d, d);
+        using var f = new Font("Segoe UI Semibold", d * 0.62f, GraphicsUnit.Pixel);
+        using var wb = new SolidBrush(Color.FromArgb(240, 255, 255, 255));
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(ch.ToString(), f, wb, new RectangleF(x, y - d * 0.02f, d, d), sf);
+        return b;
+    }
+
     // progressively deeper/more saturated shade per duplicate session, so twin green rings differ
     public static Color Shade(Color c, int step)
     {

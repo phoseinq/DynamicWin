@@ -46,25 +46,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         get
         {
             if (ClaudeIcon is null) return null;
-            return _badged ??= Badge(ClaudeIcon, (char)('1' + _slot));
+            return _badged ??= Fx.Badge(ClaudeIcon, (char)('1' + _slot));
         }
-    }
-
-    private static Bitmap Badge(Bitmap icon, char letter)
-    {
-        var b = new Bitmap(icon.Width, icon.Height, PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(b);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-        g.DrawImage(icon, 0, 0, icon.Width, icon.Height);
-        float d = icon.Width * 0.42f, x = icon.Width - d, y = icon.Height - d;
-        using (var bg = new SolidBrush(Color.FromArgb(230, 24, 24, 26)))
-            g.FillEllipse(bg, x, y, d, d);
-        using var f = new Font("Segoe UI Semibold", d * 0.62f, GraphicsUnit.Pixel);
-        using var wb = new SolidBrush(Color.FromArgb(240, 255, 255, 255));
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(letter.ToString(), f, wb, new RectangleF(x, y - d * 0.02f, d, d), sf);
-        return b;
     }
 
     // one widget per session slot; visible only while that session's process is alive

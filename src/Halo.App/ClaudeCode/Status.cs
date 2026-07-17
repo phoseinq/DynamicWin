@@ -26,6 +26,8 @@ internal sealed class CcUsage
 
 internal sealed class CcStatus
 {
+    public string? Name { get; set; } // generic-agent files: display name ("Gemini CLI"...)
+    public string? Icon { get; set; } // generic-agent files: path to a png/ico for the circle
     public string? State { get; set; }
     public string? Cwd { get; set; }
     public int Pid { get; set; }
@@ -193,7 +195,7 @@ internal sealed class StatusStore
         }
     }
 
-    private static DateTimeOffset? GetProcessStartedAt(int pid)
+    internal static DateTimeOffset? GetProcessStartedAt(int pid)
     {
         if (pid <= 0)
             return null;

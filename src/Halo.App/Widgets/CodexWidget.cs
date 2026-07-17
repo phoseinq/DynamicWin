@@ -42,7 +42,20 @@ internal sealed class CodexWidget : IWidget
         ? a : Color.FromArgb(16, 163, 127);
 
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
-    public Bitmap? IconImage => OpenAiIcon;
+
+    // number badge only when both surfaces are live (1 = ChatGPT app, 2 = CLI) \u2014 same scheme as CC sessions
+    private Bitmap? _badged;
+
+    public Bitmap? IconImage
+    {
+        get
+        {
+            if (OpenAiIcon is null) return null;
+            var other = _surface == CodexSurface.Desktop ? CodexSurface.Cli : CodexSurface.Desktop;
+            if (_store.Candidate(other) is null) return OpenAiIcon;
+            return _badged ??= Fx.Badge(OpenAiIcon, _surface == CodexSurface.Desktop ? '1' : '2');
+        }
+    }
 
     public string Id => "codex";
     public string? AgentState => Current?.State;
