@@ -303,6 +303,7 @@ internal sealed class MediaWidget : IWidget
             var hit = r; hit.Inflate(4f, 4f);
             bool hov = WidgetInput.Over && hit.Contains(WidgetInput.Mouse);
             _btnHover[i] += ((hov ? 1f : 0f) - _btnHover[i]) * 0.35f;
+            if (Math.Abs((hov ? 1f : 0f) - _btnHover[i]) < 0.03f) _btnHover[i] = hov ? 1f : 0f; // settle
             float t = _btnHover[i], sc = 1f + 0.09f * t, d = r.Width * sc;
             var rr = new RectangleF(r.X + (r.Width - d) / 2f, r.Y + (r.Height - d) / 2f, d, d);
             using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(15 + 19 * t), 255, 255, 255), fade)))
@@ -310,7 +311,8 @@ internal sealed class MediaWidget : IWidget
             using (var pen = new Pen(Mul(Color.FromArgb((int)(34 + 30 * t), 255, 255, 255), fade), 1f))
                 g.DrawEllipse(pen, rr);
             string glyph = i == 0 ? "\uE892" : i == 1 ? (playing ? "\uE769" : "\uE768") : "\uE893";
-            DrawGlyphSoft(g, rr, glyph, (i == 1 ? 22f : 17f) * sc, fade * (0.8f + 0.2f * t));
+            DrawGlyphSoft(g, rr, glyph, (i == 1 ? 22f : 17f) * sc, fade * (0.8f + 0.2f * t),
+                i == 1 && !playing ? 1.5f : 0f); // play triangle: optical nudge toward its centroid
         }
     }
 
@@ -320,16 +322,21 @@ internal sealed class MediaWidget : IWidget
     private static readonly FontFamily FluentFamily = new("Segoe Fluent Icons");
 
     // soft + truly centred: outline the glyph as a path and centre its ink bounds in the rect
-    // (font-metric centring leaves Fluent glyphs visibly off inside the chips)
-    private void DrawGlyphSoft(Graphics g, RectangleF r, string glyph, float px, float fade)
+    // (font-metric centring leaves Fluent glyphs visibly off inside the chips).
+    // opticalDx: bbox-centring reads wrong for lopsided shapes (the play triangle's mass sits
+    // left of its box centre) — callers nudge those toward their visual centre.
+    private void DrawGlyphSoft(Graphics g, RectangleF r, string glyph, float px, float fade, float opticalDx = 0f)
     {
         using var path = new GraphicsPath();
         using var sf = new StringFormat(StringFormat.GenericTypographic);
         path.AddString(glyph, FluentFamily, (int)FontStyle.Regular, px, PointF.Empty, sf);
+        path.Flatten(); // curve control points inflate GetBounds — flatten first for true ink bounds
         var b = path.GetBounds();
         if (b.Width <= 0 || b.Height <= 0) return;
         using var m = new Matrix();
-        m.Translate(r.X + (r.Width - b.Width) / 2f - b.X, r.Y + (r.Height - b.Height) / 2f - b.Y);
+        // snap to whole pixels so the AA edge is symmetric (half-pixel offsets read as "off centre")
+        m.Translate(MathF.Round(r.X + (r.Width - b.Width) / 2f - b.X + opticalDx),
+                    MathF.Round(r.Y + (r.Height - b.Height) / 2f - b.Y));
         path.Transform(m);
         using var br = new SolidBrush(Mul(White, fade * 0.92f));
         g.FillPath(br, path);
