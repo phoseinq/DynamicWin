@@ -89,7 +89,8 @@ internal sealed class GenericAgentWidget : IWidget
         using var b = new SolidBrush(Mul(White, fade));
         using var sf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
-        g.DrawString(text, f, b, new RectangleF(x + sz + 8, 0, w - (x + sz + 8) - 14, h), sf);
+        // rect lifted 1.5px: em-box descender space makes centred latin text sit visually low
+        g.DrawString(text, f, b, new RectangleF(x + sz + 8, -1.5f, w - (x + sz + 8) - 14, h), sf);
     }
 
     public void DrawContent(Graphics g, int w, int h, float fade)
