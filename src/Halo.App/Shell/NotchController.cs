@@ -134,11 +134,14 @@ internal sealed class NotchController
     private float _menu;        // circle → dropdown open, 0..1
     private float _drop = -1f;  // <0 idle, else 0..1 "drop into pill" animation
     private float _arrive = -1f; // <0 idle, else 0..1 new-app "opening" bloom after a swap
-    private int _pending, _dropSlot;
+    private int _pending;
+    private float _dropCX, _dropCY; // clicked/target circle centre, relative to the strip's top-left
     private bool _dropOut;      // drop runs pill → circle (new-app arrival toss)
     private string _dropIcon = "";
     private Bitmap? _dropImage;
     private readonly bool[] _prevActive;
+    private int _row = -1;      // app row whose session fan is opening
+    private float _rowOpen;
     private int _widgetVersion = -1;
     private int _lastSec = -1;
     private bool _lastMouseDown;
@@ -158,11 +161,16 @@ internal sealed class NotchController
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
         CodexLimits.UpdateFrom(_codexStore.Current);
-        _widgets = [
-            new MediaWidget(),
-            new ClaudeCodeWidget(_claudeStore, CancelClaude),
-            new CodexWidget(_codexStore, CancelCodex, () => _codexDesktopRuntime.Presence.Running),
-        ];
+        var widgets = new List<IWidget> { new MediaWidget() };
+        for (int s = 0; s < StatusStore.MaxSessions; s++)
+        {
+            int slot = s; // one widget per CC session slot; cancel targets that session's pid
+            widgets.Add(new ClaudeCodeWidget(_claudeStore, slot, () => CancelClaude(slot)));
+        }
+        widgets.Add(new CodexWidget(_codexStore, CodexSurface.Desktop, () => CancelCodex(CodexSurface.Desktop),
+            () => _codexDesktopRuntime.Presence.Running));
+        widgets.Add(new CodexWidget(_codexStore, CodexSurface.Cli, () => CancelCodex(CodexSurface.Cli)));
+        _widgets = [.. widgets];
 
         _cl = notch.WorkLeft + (notch.WorkWidth - CollapsedW) / 2;
         _ct = notch.WorkTop;
@@ -251,7 +259,7 @@ internal sealed class NotchController
                     _dropOut = true;
                     _dropIcon = _widgets[i].Icon;
                     _dropImage = _widgets[i].IconImage;
-                    _dropSlot = Math.Max(0, Array.IndexOf(AltIndices(), i));
+                    _dropCX = _dropCY = LayeredNotch.CircleD / 2f; // strip is closed — land on the circle
                     _drop = 0f;
                 }
             }
@@ -268,13 +276,23 @@ internal sealed class NotchController
         float step = 0.008f / (open ? OpenSeconds : CloseSeconds);
         float next = Math.Clamp(_progress + dir * step, 0f, 1f);
 
-        // circle dropdown: opens while hovering it, only when the pill is collapsed
+        // strip: apps open downward while hovering; the hovered row's sessions fan out rightward
         int alt = AltIndices().Length;
-        float mnext = _menu;
-        if (alt >= 2 && _progress < 0.05f && _drop < 0f && InMenu(p))
-            mnext = Math.Min(_menu + step, 1f);
-        else
-            mnext = Math.Max(_menu - step, 0f);
+        bool inMenu = _progress < 0.05f && _drop < 0f && InMenu(p);
+        float mnext = alt >= 2 && inMenu ? Math.Min(_menu + step, 1f) : Math.Max(_menu - step, 0f);
+
+        var rows = Groups();
+        int hoverRow = -1;
+        if (inMenu && p.Y >= _ct)
+        {
+            int r0 = (p.Y - _ct) / LayeredNotch.CircleD;
+            if (r0 >= 0 && r0 < rows.Count) hoverRow = r0;
+        }
+        if (hoverRow != _row && hoverRow >= 0) { _row = hoverRow; _rowOpen = 0f; }
+        float rnext = _row >= 0 && _row < rows.Count && rows[_row].Length >= 2 && inMenu && hoverRow == _row
+            ? Math.Min(_rowOpen + step, 1f)
+            : Math.Max(_rowOpen - step, 0f);
+        if (mnext <= 0f && rnext <= 0f) _row = -1;
 
         // drop-into-pill animation; on landing, kick off the "opening" bloom for the new app
         float dnext = _drop;
@@ -293,8 +311,9 @@ internal sealed class NotchController
         if (_arrive >= 0f) { anext = _arrive + 0.008f / 0.22f; if (anext >= 1f) anext = -1f; }
 
         // commit menu/drop before PollClick so a click that starts a drop isn't clobbered
-        float prevMenu = _menu, prevDrop = _drop, prevArrive = _arrive;
+        float prevMenu = _menu, prevDrop = _drop, prevArrive = _arrive, prevRowOpen = _rowOpen;
         _menu = mnext;
+        _rowOpen = rnext;
         _drop = dnext;
         _arrive = anext;
         PollClick(p);
@@ -336,21 +355,46 @@ internal sealed class NotchController
 
         int wv = WidgetVersion();
         bool changed = next != _progress || wv != _widgetVersion || deskChanged || wasEmpty != _empty
-            || refreshed || tick || _menu != prevMenu || _drop != prevDrop || _arrive != prevArrive || forceAnim || mouseMoved;
+            || refreshed || tick || _menu != prevMenu || _drop != prevDrop || _arrive != prevArrive
+            || _rowOpen != prevRowOpen || forceAnim || mouseMoved;
         _progress = next;
         _widgetVersion = wv;
         if (changed) Apply(_progress);
     }
 
-    // hover region of the (possibly open) dropdown, in screen coords
+    // hover region of the strip: the vertical app column + the open row's rightward fan
     private bool InMenu(Win32.POINT p)
     {
-        int alt = AltIndices().Length;
+        var rows = Groups();
+        if (rows.Count == 0) return false;
+        int D = LayeredNotch.CircleD;
         int x = _cl + CollapsedW + LayeredNotch.CircleGap;
-        float open = EaseOutBack(Math.Clamp(_menu, 0f, 1f));
-        float hNow = LayeredNotch.CircleD + (alt - 1) * LayeredNotch.CircleD * Math.Max(0f, open);
-        return p.X >= x && p.X < x + LayeredNotch.CircleD
-            && p.Y >= _ct && p.Y < _ct + Math.Max(LayeredNotch.CircleD, hNow);
+        float openV = EaseOutBack(Math.Clamp(_menu, 0f, 1f));
+        float hNow = D + (rows.Count - 1) * D * Math.Max(0f, openV);
+        if (p.X >= x && p.X < x + D && p.Y >= _ct && p.Y < _ct + Math.Max(D, hNow))
+            return true;
+        if (_row >= 0 && _row < rows.Count && _rowOpen > 0f)
+        {
+            float ext = rows[_row].Length * D * EaseOutBack(Math.Clamp(_rowOpen, 0f, 1f));
+            if (p.X >= x + D && p.X < x + D + ext
+                && p.Y >= _ct + _row * D && p.Y < _ct + (_row + 1) * D)
+                return true;
+        }
+        return false;
+    }
+
+    // alt widgets grouped per app (media / claude / codex), preserving widget order inside a group
+    private List<int[]> Groups()
+    {
+        var byKind = new Dictionary<int, List<int>>();
+        var order = new List<int>();
+        foreach (var i in AltIndices())
+        {
+            int kind = _widgets[i] switch { MediaWidget => 0, ClaudeCodeWidget => 1, _ => 2 };
+            if (!byKind.TryGetValue(kind, out var list)) { list = new List<int>(); byKind[kind] = list; order.Add(kind); }
+            list.Add(i);
+        }
+        return order.ConvertAll(k => byKind[k].ToArray());
     }
 
     private int[] ActiveIndices()
@@ -400,14 +444,22 @@ internal sealed class NotchController
             }
             else if (_progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && InMenu(p))
             {
-                int alt = AltIndices().Length;
-                int slot = Math.Clamp((p.Y - _ct) / LayeredNotch.CircleD, 0, alt - 1);
-                _pending = AltIndices()[slot];
+                var rows = Groups();
+                int D = LayeredNotch.CircleD;
+                int mx = _cl + CollapsedW + LayeredNotch.CircleGap;
+                int row = Math.Clamp((p.Y - _ct) / D, 0, rows.Count - 1);
+                var grp = rows[row];
+                int rel = (p.X - mx) / D; // 0 = the app row's own circle, 1.. = a fanned session
+                int pick = rel <= 0 || grp.Length == 1 ? 0 : Math.Clamp(rel - 1, 0, grp.Length - 1);
+                _pending = grp[pick];
                 _dropIcon = _widgets[_pending].Icon;
                 _dropImage = _widgets[_pending].IconImage;
-                _dropSlot = slot;
+                _dropCX = rel <= 0 ? D / 2f : (rel + 0.5f) * D; // fly from the circle actually clicked
+                _dropCY = (row + 0.5f) * D;
                 _drop = 0f;
                 _menu = 0f;
+                _rowOpen = 0f;
+                _row = -1;
             }
         }
         _lastMouseDown = down;
@@ -431,13 +483,22 @@ internal sealed class NotchController
         float arrive = _arrive < 0f ? 1f : 1f - (1f - _arrive) * (1f - _arrive); // easeOutQuad bloom after swap
         mini *= arrive;
 
-        var alts = _empty ? Array.Empty<int>() : AltIndices();
+        var groups = _empty ? new List<int[]>() : Groups();
         var frame = new MenuFrame
         {
-            Show = alts.Length >= 1,
-            Icons = Array.ConvertAll(alts, i => _widgets[i].Icon),
-            Images = Array.ConvertAll(alts, i => _widgets[i].IconImage),
+            Show = groups.Count >= 1,
+            // an app with several sessions shows its plain mark on the row; the fan carries the badges
+            RowIcons = groups.ConvertAll(gr => _widgets[gr[0]].Icon).ToArray(),
+            RowImages = groups.ConvertAll(gr => gr.Length >= 2 && _widgets[gr[0]] is ClaudeCodeWidget
+                ? ClaudeCodeWidget.PlainIcon : _widgets[gr[0]].IconImage).ToArray(),
+            RowCounts = groups.ConvertAll(gr => gr.Length >= 2 ? gr.Length : 0).ToArray(),
+            SessIcons = groups.ConvertAll(gr => gr.Length >= 2
+                ? Array.ConvertAll(gr, i => _widgets[i].Icon) : Array.Empty<string>()).ToArray(),
+            SessImages = groups.ConvertAll(gr => gr.Length >= 2
+                ? Array.ConvertAll(gr, i => _widgets[i].IconImage) : Array.Empty<Bitmap?>()).ToArray(),
             Open = EaseOutBack(Math.Clamp(_menu, 0f, 1f)),
+            OpenRow = _row,
+            RowOpen = EaseOutBack(Math.Clamp(_rowOpen, 0f, 1f)),
             Dropping = _drop >= 0f,
             DropIcon = _dropIcon,
             DropImage = _dropImage,
@@ -446,8 +507,8 @@ internal sealed class NotchController
         frame.Outward = _dropOut;
         if (frame.Dropping)
         {
-            float circleX = w + LayeredNotch.CircleGap + LayeredNotch.CircleD / 2f;
-            float circleY = LayeredNotch.CircleY + _dropSlot * LayeredNotch.CircleD + LayeredNotch.CircleD / 2f;
+            float circleX = w + LayeredNotch.CircleGap + _dropCX;
+            float circleY = LayeredNotch.CircleY + _dropCY;
             float pillX = w - h / 2f, pillY = h / 2f; // pill's rounded end (metaball dominates)
             (frame.FromX, frame.FromY, frame.ToX, frame.ToY) = _dropOut
                 ? (pillX, pillY, circleX, circleY)  // arrival: blob detaches from the pill into the circle
@@ -490,15 +551,15 @@ internal sealed class NotchController
         }
     }
 
-    private void CancelClaude()
+    private void CancelClaude(int slot)
     {
-        var pid = _claudeStore.Current?.Pid ?? 0;
+        var pid = _claudeStore.SessionLive(slot)?.Pid ?? 0;
         if (pid > 0) CcCancel.Request(pid);
     }
 
-    private void CancelCodex()
+    private void CancelCodex(CodexSurface surface)
     {
-        var snapshot = _codexStore.Current;
+        var snapshot = _codexStore.Candidate(surface);
         if (snapshot is { Source: CodexSurface.Cli, State: "working", ConsolePid: > 0 })
             CcCancel.Request(snapshot.ConsolePid);
         else if (snapshot is { Source: CodexSurface.Desktop, State: "working" })

@@ -67,7 +67,7 @@ internal sealed class MediaWidget : IWidget
             _art?.Dispose();
             _art = Decode(thumb);
             _artKey = key;
-            _accent = _art != null ? Accent(_art) : White;
+            _accent = _art != null ? Fx.Accent(_art) : White;
             _palette = Palette(_accent);
         }
     }
@@ -246,7 +246,7 @@ internal sealed class MediaWidget : IWidget
         EnsureArt();
 
         const float artX = 26, artY = 26, artSize = 132;
-        DrawGlow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 0.85f, h * 1.2f, 38);
+        Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 0.85f, h * 1.2f, 38, _accent);
         DrawArt(g, artX, artY, artSize, fade);
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
@@ -273,19 +273,66 @@ internal sealed class MediaWidget : IWidget
             g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, by + 8);
         }
 
-        // volume (left column, under the art): mute glyph + click-to-set bar
+        // volume (left column, under the art): soft glass mute chip + a bar that breathes on hover
         var (vbar, mute) = VolLayout(w);
         bool muted = _meter.Muted();
         float vol = muted ? 0f : _meter.Volume();
-        DrawGlyph(g, mute, muted ? "\uE74F" : "\uE767", 19f, muted ? fade * 0.55f : fade);
-        float vy = vbar.Y + vbar.Height / 2f;
-        Fill(g, vbar.X, vy - 2.5f, vbar.Width, 5, Mul(Track, fade));
-        if (vol > 0) Fill(g, vbar.X, vy - 2.5f, vbar.Width * vol, 5, Mul(White, fade));
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var volHit = RectangleF.Union(vbar, mute); volHit.Inflate(4f, 6f);
+        bool vHov = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
+        _volHover += ((vHov ? 1f : 0f) - _volHover) * 0.35f;
+        float vt = _volHover;
+        using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(13 + 16 * vt), 255, 255, 255), fade)))
+            g.FillEllipse(fb, mute);
+        using (var pen = new Pen(Mul(Color.FromArgb((int)(28 + 26 * vt), 255, 255, 255), fade), 1f))
+            g.DrawEllipse(pen, mute);
+        DrawGlyphSoft(g, mute, muted ? "\uE74F" : "\uE767", 16f, muted ? fade * 0.55f : fade * (0.8f + 0.2f * vt));
+        float vy = vbar.Y + vbar.Height / 2f, bh2 = 4f + 2f * vt;
+        Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width, bh2, Mul(Color.FromArgb(34, 255, 255, 255), fade));
+        if (vol > 0)
+            Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width * vol, bh2,
+                Mul(Color.FromArgb((int)(185 + 45 * vt), 255, 255, 255), fade));
 
+        // transport = glass chips; a small eased grow + brighten on hover (frames ride the
+        // mouse-move redraws while the cursor is over the open panel)
         var rects = BtnRects(w, h);
-        DrawGlyph(g, rects[0], "\uE892", 20f, fade);                    // Previous
-        DrawGlyph(g, rects[1], playing ? "\uE769" : "\uE768", 24f, fade); // Pause / Play
-        DrawGlyph(g, rects[2], "\uE893", 20f, fade);                    // Next
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        for (int i = 0; i < 3; i++)
+        {
+            var r = rects[i];
+            var hit = r; hit.Inflate(4f, 4f);
+            bool hov = WidgetInput.Over && hit.Contains(WidgetInput.Mouse);
+            _btnHover[i] += ((hov ? 1f : 0f) - _btnHover[i]) * 0.35f;
+            float t = _btnHover[i], sc = 1f + 0.09f * t, d = r.Width * sc;
+            var rr = new RectangleF(r.X + (r.Width - d) / 2f, r.Y + (r.Height - d) / 2f, d, d);
+            using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(15 + 19 * t), 255, 255, 255), fade)))
+                g.FillEllipse(fb, rr);
+            using (var pen = new Pen(Mul(Color.FromArgb((int)(34 + 30 * t), 255, 255, 255), fade), 1f))
+                g.DrawEllipse(pen, rr);
+            string glyph = i == 0 ? "\uE892" : i == 1 ? (playing ? "\uE769" : "\uE768") : "\uE893";
+            DrawGlyphSoft(g, rr, glyph, (i == 1 ? 22f : 17f) * sc, fade * (0.8f + 0.2f * t));
+        }
+    }
+
+    private readonly float[] _btnHover = new float[3];
+    private float _volHover;
+
+    private static readonly FontFamily FluentFamily = new("Segoe Fluent Icons");
+
+    // soft + truly centred: outline the glyph as a path and centre its ink bounds in the rect
+    // (font-metric centring leaves Fluent glyphs visibly off inside the chips)
+    private void DrawGlyphSoft(Graphics g, RectangleF r, string glyph, float px, float fade)
+    {
+        using var path = new GraphicsPath();
+        using var sf = new StringFormat(StringFormat.GenericTypographic);
+        path.AddString(glyph, FluentFamily, (int)FontStyle.Regular, px, PointF.Empty, sf);
+        var b = path.GetBounds();
+        if (b.Width <= 0 || b.Height <= 0) return;
+        using var m = new Matrix();
+        m.Translate(r.X + (r.Width - b.Width) / 2f - b.X, r.Y + (r.Height - b.Height) / 2f - b.Y);
+        path.Transform(m);
+        using var br = new SolidBrush(Mul(White, fade * 0.92f));
+        g.FillPath(br, path);
     }
 
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
@@ -331,28 +378,9 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
-        DrawGlow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34);
+        Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
         DrawEqualizer(g, w - 14f, h / 2f, fade, playing);
-    }
-
-    // very soft accent wash from the album art over the black pill, clipped to the pill shape
-    private void DrawGlow(Graphics g, int w, int h, float fade, float cx, float cy, float rx, float ry, int alpha)
-    {
-        if (_accent == White) return;
-        using var clip = Rounded(new RectangleF(0, 0, w, h), Math.Min(h / 2f, 30f));
-        var old = g.Clip;
-        g.SetClip(clip);
-        using var gp = new GraphicsPath();
-        gp.AddEllipse(cx - rx, cy - ry, rx * 2, ry * 2);
-        using var pgb = new PathGradientBrush(gp)
-        {
-            CenterColor = Color.FromArgb((int)(alpha * fade), _accent),
-            SurroundColors = new[] { Color.FromArgb(0, _accent) },
-            CenterPoint = new PointF(cx, cy),
-        };
-        g.FillPath(pgb, gp);
-        g.Clip = old;
     }
 
     private const int EqBars = 9;
@@ -388,8 +416,8 @@ internal sealed class MediaWidget : IWidget
 
     private static Color[] Palette(Color accent)
     {
-        RgbToHsv(accent, out float h, out float s, out float v);
-        return new[] { HsvToRgb((h - 22f + 360f) % 360f, s, v), accent, HsvToRgb((h + 22f) % 360f, s, v) };
+        Fx.RgbToHsv(accent, out float h, out float s, out float v);
+        return new[] { Fx.HsvToRgb((h - 22f + 360f) % 360f, s, v), accent, Fx.HsvToRgb((h + 22f) % 360f, s, v) };
     }
 
     private Color PaletteAt(float f)
@@ -401,67 +429,14 @@ internal sealed class MediaWidget : IWidget
     private static Color LerpColor(Color a, Color b, float t)
         => Color.FromArgb(255, (int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    // pick a vivid, mid-bright colour from the art (Apple-style accent), lifted to read on dark.
-    private static Color Accent(Bitmap art)
-    {
-        try
-        {
-            using var small = new Bitmap(12, 12, PixelFormat.Format32bppArgb);
-            using (var g = Graphics.FromImage(small))
-            {
-                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                g.DrawImage(art, 0, 0, 12, 12);
-            }
-            float best = -1f; Color pick = White;
-            for (int y = 0; y < 12; y++)
-                for (int x = 0; x < 12; x++)
-                {
-                    var p = small.GetPixel(x, y);
-                    RgbToHsv(p, out _, out float s, out float v);
-                    if (v < 0.2f || v > 0.98f) continue;
-                    float score = s * (v < 0.85f ? v : 1.7f - v);
-                    if (score > best) { best = score; pick = p; }
-                }
-            if (best <= 0f) return White;
-            RgbToHsv(pick, out float ph, out float ps, out float pv);
-            return HsvToRgb(ph, Math.Min(1f, ps * 1.1f), Math.Max(pv, 0.85f));
-        }
-        catch { return White; }
-    }
-
-    private static void RgbToHsv(Color c, out float h, out float s, out float v)
-    {
-        float r = c.R / 255f, g = c.G / 255f, b = c.B / 255f;
-        float max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
-        v = max; s = max <= 0f ? 0f : d / max; h = 0f;
-        if (d > 0f)
-        {
-            if (max == r) h = (g - b) / d % 6f;
-            else if (max == g) h = (b - r) / d + 2f;
-            else h = (r - g) / d + 4f;
-            h *= 60f; if (h < 0f) h += 360f;
-        }
-    }
-
-    private static Color HsvToRgb(float h, float s, float v)
-    {
-        float c = v * s, x = c * (1f - Math.Abs(h / 60f % 2f - 1f)), m = v - c;
-        float r = 0, g = 0, b = 0;
-        if (h < 60) { r = c; g = x; }
-        else if (h < 120) { r = x; g = c; }
-        else if (h < 180) { g = c; b = x; }
-        else if (h < 240) { g = x; b = c; }
-        else if (h < 300) { r = x; b = c; }
-        else { r = c; b = x; }
-        return Color.FromArgb(255, (int)((r + m) * 255), (int)((g + m) * 255), (int)((b + m) * 255));
-    }
-
     private void DrawGlyph(Graphics g, RectangleF r, string glyph, float px, float fade)
     {
         using var f = new Font("Segoe Fluent Icons", px, GraphicsUnit.Pixel);
-        var sz = g.MeasureString(glyph, f);
         using var b = new SolidBrush(Mul(White, fade));
-        g.DrawString(glyph, f, b, r.X + (r.Width - sz.Width) / 2, r.Y + (r.Height - sz.Height) / 2);
+        // centre via StringFormat (MeasureString padding sat glyphs off-centre in the glass chips)
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(glyph, f, b, r, sf);
     }
 
     private static Bitmap? Decode(byte[]? bytes)

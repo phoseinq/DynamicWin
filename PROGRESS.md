@@ -1,5 +1,26 @@
 # Halo — progress
 
+## DONE 2026-07-17: multi-session + strip redesign + glow everywhere (verified live, needs commit-audit only)
+- **Multi-session CC**: hook writes `status-{agentPid}.json` per session (pid stamped every event —
+  a mid-turn-born file without pid evades dedupe; session-end deletes file + legacy status.json;
+  session-start sweeps dead-pid files). `StatusStore` scans `status*.json`+`app.json` → stable slots
+  (`MaxSessions=4`, per-pid dedupe keeps freshest); `SessionLive(slot)` cached 1s (+3 tests).
+  One `ClaudeCodeWidget` per slot, cwd-initial badge composited on the icon. Codex = two widgets
+  (desktop/cli) via `Candidate(surface)`. Ceiling: N codex CLI sessions still share cli.json.
+- **Strip UI (user's design)**: circle beside pill; apps stack DOWNWARD, a row with ≥2 sessions of
+  one app fans RIGHTWARD on hover (closed circle shows the plain app mark, fan carries badges);
+  primary session excluded. Union pill-path (flat top), 2x supersampled so icons stay crisp.
+  Click maps row/fan → session; liquid drop flies from the actual clicked circle (_dropCX/_dropCY).
+  Arrival toss lands on the circle (old bug: flew to slot*D below it).
+- **Glow**: shared `Fx` helper — accent from icon (ConditionalWeakTable cache), dithered 128px
+  radial texture (PArgb premultiplied! non-premul source on the layered surface sprayed white
+  garbage), pill-shaped clip (flat top — all-corner clip left a dark crescent). Media art accent;
+  CC coral / Codex green fallbacks; strip cells get 20-alpha washes.
+- **Media polish**: iOS 9-bar center-weighted waveform; glass transport chips + eased hover; glyphs
+  centred by path ink-bounds; soft volume chip + breathing bar.
+- **Limits staleness**: 5-min heartbeat Timer in `Limits` (was: only panel-open/refresh → "59m ago").
+- **Startup lag**: autostart moved Startup-folder lnk → Scheduled Task `Halo` at logon (no stagger).
+
 Goal: smooth glass notch for Windows (Dynamic Island for desktop). C# + .NET 9, Win32 layered window
 rendered with `UpdateLayeredWindow` + GDI+. Spec in `docs/` (start at `docs/MAP.md`); current
 architecture truth is `docs/decisions.md` (it supersedes the older Composition-based docs).

@@ -42,8 +42,8 @@ internal static class Program
         {
             IWidget w = which switch
             {
-                "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), () => { }),
-                "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), () => { }),
+                "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), 0, () => { }),
+                "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 _ => new MediaWidget(),
             };
             for (int i = 0; i < 100 && !w.IsActive; i++)

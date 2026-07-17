@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -49,6 +51,8 @@ internal sealed class StatusStore
         NumberHandling = JsonNumberHandling.AllowReadingFromString,
     };
 
+    public const int MaxSessions = 4;
+
     private readonly string _path;
     private readonly string? _appPath; // the Claude desktop app's surface (CLI takes priority)
     private readonly Func<int, DateTimeOffset?> _processStartedAt;
@@ -56,6 +60,11 @@ internal sealed class StatusStore
     private readonly FileSystemWatcher? _watcher;
 
     private CcStatus? _cli, _app;
+    // multi-session: every live status*.json/app.json is pinned to a stable slot (one widget each)
+    private Dictionary<string, CcStatus> _files = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string?[] _slotPaths = new string?[MaxSessions];
+    private readonly (CcStatus? live, DateTimeOffset at, int version)[] _slotCache
+        = new (CcStatus?, DateTimeOffset, int)[MaxSessions];
     private CcStatus? _selected;
     private DateTimeOffset _selectedAt = DateTimeOffset.MinValue;
     private int _selectedVersion = -1;
@@ -197,13 +206,69 @@ internal sealed class StatusStore
     {
         try
         {
-            _cli = Read(_path, _cli);
-            _app = _appPath is null ? null : Read(_appPath, _app);
+            var dir = Path.GetDirectoryName(_path)!;
+            var pattern = Path.GetFileNameWithoutExtension(_path) + "*.json"; // status.json + status-{pid}.json
+            var next = new Dictionary<string, CcStatus>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in System.IO.Directory.EnumerateFiles(dir, pattern))
+            {
+                _files.TryGetValue(p, out var prev);
+                if (Read(p, prev) is { } st) next[p] = st;
+            }
+            if (_appPath is not null)
+            {
+                _files.TryGetValue(_appPath, out var prev);
+                _app = Read(_appPath, prev);
+                if (_app is not null) next[_appPath] = _app;
+            }
+            _files = next;
+            AssignSlots(_clock());
+            // legacy single-session consumers: freshest live CLI status
+            _cli = LiveFiles(_clock())
+                .Where(kv => !string.Equals(kv.Key, _appPath, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(kv => kv.Value.UpdatedAt, StringComparer.Ordinal)
+                .Select(kv => kv.Value).FirstOrDefault();
             Version++;
         }
         catch
         {
         }
+    }
+
+    // live files, deduped by agent pid (a session migrating from legacy status.json to
+    // status-{pid}.json briefly exists as both — keep the freshest)
+    private IEnumerable<KeyValuePair<string, CcStatus>> LiveFiles(DateTimeOffset now) =>
+        _files.Where(kv => IsLiveStatus(kv.Value, _processStartedAt, now))
+            .GroupBy(kv => kv.Value.Pid > 0 ? kv.Value.Pid.ToString() : kv.Key)
+            .Select(g => g.OrderByDescending(kv => kv.Value.UpdatedAt, StringComparer.Ordinal).First());
+
+    // pin each live file to a slot; existing assignments keep their slot so widgets don't shuffle
+    private void AssignSlots(DateTimeOffset now)
+    {
+        var live = LiveFiles(now).Select(kv => kv.Key).ToArray();
+        for (int i = 0; i < _slotPaths.Length; i++)
+            if (_slotPaths[i] is { } p && Array.FindIndex(live, x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase)) < 0)
+                _slotPaths[i] = null;
+        foreach (var p in live)
+        {
+            if (Array.FindIndex(_slotPaths, x => string.Equals(x, p, StringComparison.OrdinalIgnoreCase)) >= 0)
+                continue;
+            int free = Array.IndexOf(_slotPaths, null);
+            if (free < 0) break; // ponytail: >4 concurrent sessions drop off; bump MaxSessions if it ever hurts
+            _slotPaths[free] = p;
+        }
+    }
+
+    // the slot's status when its session is live, else null — cached 1s (hit per frame per widget)
+    public CcStatus? SessionLive(int slot)
+    {
+        var now = _clock();
+        ref var c = ref _slotCache[slot];
+        if (c.version != Version || now - c.at > TimeSpan.FromSeconds(1))
+        {
+            var st = _slotPaths[slot] is { } p && _files.TryGetValue(p, out var s) ? s : null;
+            c = (IsLiveStatus(st, _processStartedAt, now) ? st : null, now, Version);
+        }
+        return c.live;
     }
 
     // missing file = no session (null); a transient read/parse failure keeps the previous value

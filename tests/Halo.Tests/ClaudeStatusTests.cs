@@ -162,6 +162,45 @@ public sealed class ClaudeStatusTests
         Assert.True(store.IsLive);
     }
 
+    [Fact]
+    public void Sessions_EachLiveFileGetsItsOwnStableSlot()
+    {
+        using var temp = new TempStatus();
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        WriteStatus(temp.Session(100), state: "working", pid: 100, updatedAt: now);
+        WriteStatus(temp.Session(200), state: "idle", pid: 200, updatedAt: now);
+        var store = NewStore(temp, now, _ => now.AddMinutes(-10));
+
+        var pids = new[] { store.SessionLive(0)?.Pid, store.SessionLive(1)?.Pid };
+        Assert.Contains(100, pids);
+        Assert.Contains(200, pids);
+        Assert.Null(store.SessionLive(2));
+    }
+
+    [Fact]
+    public void Sessions_DedupeLegacyAndPerPidFilesBySamePid()
+    {
+        using var temp = new TempStatus();
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        WriteStatus(temp.Path, state: "working", pid: 100, updatedAt: now.AddMinutes(-1));
+        WriteStatus(temp.Session(100), state: "working", pid: 100, updatedAt: now);
+        var store = NewStore(temp, now, _ => now.AddMinutes(-10));
+
+        Assert.Equal(100, store.SessionLive(0)?.Pid);
+        Assert.Null(store.SessionLive(1)); // same session seen once, freshest file wins
+    }
+
+    [Fact]
+    public void Sessions_DeadSessionFreesItsSlot()
+    {
+        using var temp = new TempStatus();
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        WriteStatus(temp.Session(100), state: "working", pid: 100, updatedAt: now);
+        var store = NewStore(temp, now, pid => pid == 200 ? now.AddMinutes(-10) : null);
+
+        Assert.Null(store.SessionLive(0)); // pid 100 dead → no live session in the slot
+    }
+
     private static StatusStore NewStore(TempStatus temp, DateTimeOffset now,
         Func<int, DateTimeOffset?> processStartedAt) =>
         new(temp.Path, processStartedAt, watchFiles: false, clock: () => now, appPath: temp.AppPath);
@@ -175,6 +214,9 @@ public sealed class ClaudeStatusTests
 
         internal string Path { get; }
         internal string AppPath { get; }
+
+        internal string Session(int pid) =>
+            System.IO.Path.Combine(System.IO.Path.GetDirectoryName(Path)!, $"status-{pid}.json");
 
         internal TempStatus()
         {

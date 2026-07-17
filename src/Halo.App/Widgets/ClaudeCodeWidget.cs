@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using Halo.ClaudeCode;
 
 namespace Halo.Widgets;
@@ -18,23 +19,65 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
 
     private readonly StatusStore _store;
+    private readonly int _slot;
     private readonly Action _cancel;
 
-    public ClaudeCodeWidget(StatusStore store, Action cancel)
+    public ClaudeCodeWidget(StatusStore store, int slot, Action cancel)
     {
         _store = store;
+        _slot = slot;
         _cancel = cancel;
     }
 
     private static readonly Bitmap? ClaudeIcon = LoadIcon();
+    internal static Bitmap? PlainIcon => ClaudeIcon; // unbadged mark for the grouped closed circle
+    // icon-derived accent for the background wash (Claude coral); fallback if the icon is greyscale
+    private static readonly Color Accent = Fx.AccentOf(ClaudeIcon) is var a && a != Fx.White
+        ? a : Color.FromArgb(217, 119, 87);
 
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
-    public Bitmap? IconImage => ClaudeIcon;
 
-    // visible only while a Claude Code process is actually alive (user's call); the panel still
-    // shows limits when it's open with no session data yet
-    public bool IsActive => _store.IsLive;
-    private CcStatus? Live => _store.IsLive ? _store.Current : null;
+    // session icon = Claude mark + cwd-initial badge so parallel sessions are tellable apart
+    private Bitmap? _badged;
+    private string? _badgedKey;
+
+    public Bitmap? IconImage
+    {
+        get
+        {
+            var cwd = Live?.Cwd;
+            var key = string.IsNullOrEmpty(cwd) ? null : Path.GetFileName(cwd.TrimEnd('\\', '/'));
+            if (ClaudeIcon is null || string.IsNullOrEmpty(key)) return ClaudeIcon;
+            if (key != _badgedKey)
+            {
+                _badged?.Dispose();
+                _badged = Badge(ClaudeIcon, char.ToUpperInvariant(key[0]));
+                _badgedKey = key;
+            }
+            return _badged;
+        }
+    }
+
+    private static Bitmap Badge(Bitmap icon, char letter)
+    {
+        var b = new Bitmap(icon.Width, icon.Height, PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(b);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        g.DrawImage(icon, 0, 0, icon.Width, icon.Height);
+        float d = icon.Width * 0.42f, x = icon.Width - d, y = icon.Height - d;
+        using (var bg = new SolidBrush(Color.FromArgb(230, 24, 24, 26)))
+            g.FillEllipse(bg, x, y, d, d);
+        using var f = new Font("Segoe UI Semibold", d * 0.62f, GraphicsUnit.Pixel);
+        using var wb = new SolidBrush(Color.FromArgb(240, 255, 255, 255));
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(letter.ToString(), f, wb, new RectangleF(x, y - d * 0.02f, d, d), sf);
+        return b;
+    }
+
+    // one widget per session slot; visible only while that session's process is alive
+    public bool IsActive => Live is not null;
+    private CcStatus? Live => _store.SessionLive(_slot);
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
@@ -64,7 +107,12 @@ internal sealed class ClaudeCodeWidget : IWidget
         bool open = fade > 0.01f;
         if (open && !_wasOpen) Limits.OnPanelOpen(); // one refresh per open (spam-guarded)
         _wasOpen = open;
-        if (open) { NetMon.Poke(); DrawExpanded(g, w, h, fade, Live); }
+        if (open)
+        {
+            NetMon.Poke();
+            Fx.Glow(g, w, h, fade, w * 0.16f, h * 0.35f, w * 0.85f, h * 1.2f, 30, Accent);
+            DrawExpanded(g, w, h, fade, Live);
+        }
     }
 
     // collapsed pill = Claude icon on the left, what it's doing on the right (Apple-style)
@@ -73,6 +121,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         var st = Live;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);

@@ -325,6 +325,29 @@ internal sealed class CodexStatusStore : IDisposable
         get => ReevaluateCurrent();
     }
 
+    // one surface's live snapshot (desktop / cli) — each surface is its own widget, cached 1s
+    private readonly (CodexSnapshot? live, DateTimeOffset at, int version)[] _surfaceCache
+        = new (CodexSnapshot?, DateTimeOffset, int)[2];
+
+    internal CodexSnapshot? Candidate(CodexSurface surface)
+    {
+        var now = _clock();
+        int version; CodexSnapshot? snap;
+        lock (_publicationGate)
+        {
+            version = _version;
+            snap = surface == CodexSurface.Desktop ? _desktopCandidate : _cliCandidate;
+        }
+        ref var c = ref _surfaceCache[(int)surface];
+        if (c.version == version && now - c.at <= TimeSpan.FromSeconds(1))
+            return c.live;
+        snap = surface == CodexSurface.Desktop
+            ? NormalizeDesktop(RefreshProcessAlive(snap), _desktopPresence(), now)
+            : RefreshProcessAlive(snap);
+        c = (IsActive(snap, now) ? snap : null, now, version);
+        return c.live;
+    }
+
     internal int Version
     {
         get

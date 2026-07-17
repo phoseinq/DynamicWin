@@ -34,12 +34,24 @@ internal static class Program
 
             CodexSurface? surface = codex ? DetectCodexSurface() : null;
             var dir = codex ? CodexDir : ClaudeDir;
-            // claude also splits by surface: CLI keeps status.json, the desktop app gets app.json
+            // claude splits by surface: each CLI session gets status-{agentPid}.json (multi-session),
+            // the desktop app gets app.json; pid unknown → legacy status.json
+            uint agentPid = 0;
             var path = codex ? CodexStatusPath(surface!.Value)
-                : IsClaudeApp() ? Path.Combine(ClaudeDir, "app.json") : ClaudeStatusPath;
+                : IsClaudeApp() ? Path.Combine(ClaudeDir, "app.json") : ClaudeSessionPath(out agentPid);
             Directory.CreateDirectory(dir);
             var input = ReadInput();
             var status = LoadOrNew(path);
+            // the file is keyed by this pid — stamp it on every event, or a session file born from
+            // a mid-turn event stays pidless and evades the store's per-pid dedupe
+            if (agentPid != 0) status["pid"] = (int)agentPid;
+
+            if (cmd == "session-end" && !codex && path != ClaudeStatusPath)
+            {
+                try { File.Delete(path); } catch { }
+                try { File.Delete(ClaudeStatusPath); } catch { } // stale pre-multi-session leftover
+                return 0;
+            }
 
             string? Field(string name) => input?[name]?.GetValue<string>();
 
@@ -52,6 +64,7 @@ internal static class Program
             switch (cmd)
             {
                 case "session-start":
+                    if (!codex) SweepDeadSessions(); // killed terminals never fire session-end
                     status["sessionId"] = Field("session_id");
                     status["cwd"] = Field("cwd");
                     status["state"] = "idle";
@@ -147,6 +160,36 @@ internal static class Program
 
     private static string CodexStatusPath(CodexSurface surface) =>
         Path.Combine(CodexDir, surface == CodexSurface.Desktop ? "desktop.json" : "cli.json");
+
+    // drop per-session files whose claude process is gone (kill/crash skips the session-end hook)
+    private static void SweepDeadSessions()
+    {
+        try
+        {
+            foreach (var f in Directory.GetFiles(ClaudeDir, "status-*.json"))
+            {
+                try
+                {
+                    var pid = (JsonNode.Parse(File.ReadAllText(f)) as JsonObject)?["pid"]?.GetValue<int>() ?? 0;
+                    bool alive = false;
+                    if (pid > 0)
+                        try { using var p = System.Diagnostics.Process.GetProcessById(pid); alive = !p.HasExited; }
+                        catch { }
+                    if (!alive) File.Delete(f);
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    // per-session file keyed by the claude process pid — stable across compact//clear, unique per terminal
+    private static string ClaudeSessionPath(out uint pid)
+    {
+        pid = Ancestor(ProcessMap(), (uint)Environment.ProcessId,
+            n => n.Contains("claude") || n == "node.exe");
+        return pid == 0 ? ClaudeStatusPath : Path.Combine(ClaudeDir, $"status-{pid}.json");
+    }
 
     private static JsonObject LoadOrNew(string path)
     {

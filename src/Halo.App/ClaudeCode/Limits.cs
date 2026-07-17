@@ -55,6 +55,11 @@ internal static class Limits
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private static DateTime _last = DateTime.MinValue;
     private static TimeSpan _cooldown = TimeSpan.FromSeconds(30);
+
+    // without this the numbers only refresh on panel-open — "updated 59m ago" if you never reopen.
+    // the endpoint costs no tokens, so a slow heartbeat is safe (429 backoff still applies).
+    private static readonly Timer Heartbeat =
+        new(_ => Fetch(force: false), null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
     private static int _busy;
     private static readonly List<DateTime> _opens = new();
 

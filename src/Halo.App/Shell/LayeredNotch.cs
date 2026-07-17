@@ -8,17 +8,23 @@ using Halo.Interop;
 
 namespace Halo.Shell;
 
+// apps stack DOWNWARD as rows; a row with several sessions of the same app fans RIGHTWARD
 internal struct MenuFrame
 {
     public bool Show;
-    public string[] Icons;      // top-to-bottom, index 0 == the collapsed circle
-    public Bitmap?[] Images;    // parallel to Icons; non-null draws instead of the glyph
-    public float Open;          // eased 0..1
+    public string[] RowIcons;       // one row per app group, top-to-bottom; index 0 == the closed circle
+    public Bitmap?[] RowImages;     // group icon (plain mark when the app has several sessions)
+    public int[] RowCounts;         // sessions in the row's rightward fan (0 = row has no fan)
+    public Bitmap?[][] SessImages;  // per-row session icons (badged), left-to-right
+    public string[][] SessIcons;
+    public float Open;              // vertical ease 0..1
+    public int OpenRow;             // row whose fan is opening (-1 none)
+    public float RowOpen;           // horizontal ease 0..1
     public bool Dropping;
-    public bool Outward;        // true = new-app arrival: blob flows pill → circle
+    public bool Outward;            // true = new-app arrival: blob flows pill → circle
     public string DropIcon;
     public Bitmap? DropImage;
-    public float Drop;          // 0..1
+    public float Drop;              // 0..1
     public float FromX, FromY, ToX, ToY;
 }
 
@@ -198,10 +204,12 @@ internal sealed class LayeredNotch
         MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed)
     {
         int menuX = w + CircleGap;
-        int totalW = menu.Show ? menuX + CircleD : w;
-        float menuHf = menu.Show ? CircleD + (menu.Icons.Length - 1) * CircleD * Math.Max(0f, menu.Open) : 0f;
-        if (menu.Dropping) menuHf = Math.Max(menuHf, menu.Icons.Length * CircleD);
-        int totalH = Math.Max(h, (int)Math.Ceiling(menuHf));
+        // reserve the strip's max extent (transparent padding is free): widest fan + all rows
+        int maxFan = 0;
+        if (menu.Show)
+            foreach (var k in menu.RowCounts) maxFan = Math.Max(maxFan, k);
+        int totalW = menu.Show ? menuX + CircleD * (1 + maxFan) : w;
+        int totalH = Math.Max(h, menu.Show ? Math.Max(1, menu.RowIcons.Length) * CircleD : 0);
 
         var bmi = new Win32.BITMAPINFOHEADER
         {
@@ -283,49 +291,91 @@ internal sealed class LayeredNotch
     // black on desktop). Rendered into a temp bitmap so it fades uniformly on pill-expand.
     private void DrawMenu(Graphics g, int x, int pillW, int tintAlpha, bool glass, MenuFrame menu, float alpha)
     {
-        int n = menu.Icons.Length;
-        float hf = CircleD + (n - 1) * CircleD * Math.Max(0f, menu.Open);
+        int rows = menu.RowIcons.Length;
+        float openV = Math.Max(0f, menu.Open);
+        float hf = CircleD + (rows - 1) * CircleD * openV;              // apps stack downward
+        int or_ = menu.OpenRow;
+        float rowEase = Math.Max(0f, menu.RowOpen);
+        float extf = or_ >= 0 && or_ < rows ? menu.RowCounts[or_] * CircleD * rowEase : 0f;
+        if (or_ > 0 && CircleD + or_ * CircleD > hf + 0.5f) extf = 0f;  // row not revealed yet → no fan
+        int mw = (int)Math.Ceiling(CircleD + extf);
         int mh = (int)Math.Ceiling(hf);
-        var rect = new Rectangle(0, 0, CircleD, mh);
+        const int ss = 2; // supersample the whole strip so icons downscale crisp (same as the pill shape)
+        int D = CircleD * ss;
 
-        using var c = new Bitmap(CircleD, mh, PixelFormat.Format32bppPArgb);
+        using var c = new Bitmap(mw * ss, mh * ss, PixelFormat.Format32bppPArgb);
         using (var cg = Graphics.FromImage(c))
         {
             cg.SmoothingMode = SmoothingMode.AntiAlias;
+            cg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            cg.InterpolationMode = InterpolationMode.HighQualityBicubic;
             cg.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             cg.Clear(Color.Transparent);
-            using var path = Capsule(rect);
+
+            // union of the vertical app strip and the open row's rightward fan (both flat-top pills)
+            using var path = new GraphicsPath(FillMode.Winding);
+            using (var v = PillPath(D, mh * ss, D / 2))
+                path.AddPath(v, false);
+            if (extf > 0.5f)
+                using (var hp = PillPath((int)((CircleD + extf) * ss), D, D / 2))
+                {
+                    using var m = new Matrix(1, 0, 0, 1, 0, or_ * D);
+                    hp.Transform(m);
+                    path.AddPath(hp, false);
+                }
+
             int srcX = (CaptureW - pillW) / 2 + x;
             lock (_bgLock)
             {
-                if (glass && _bg != null && srcX >= 0 && srcX + CircleD <= _bg.Width && CircleY + mh <= _bg.Height)
+                if (glass && _bg != null && srcX >= 0 && srcX + mw <= _bg.Width && CircleY + mh <= _bg.Height)
                 {
-                    using var tex = new TextureBrush(_bg, new Rectangle(srcX, CircleY, CircleD, mh));
-                    cg.FillPath(tex, path);
+                    var clip = cg.Clip;
+                    cg.SetClip(path);
+                    cg.DrawImage(_bg, new Rectangle(0, 0, mw * ss, mh * ss),
+                        new Rectangle(srcX, CircleY, mw, mh), GraphicsUnit.Pixel);
+                    cg.Clip = clip;
                 }
             }
             using (var b = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8)))
                 cg.FillPath(b, path);
 
-            using var f = new Font("Segoe MDL2 Assets", CircleD * 0.45f, GraphicsUnit.Pixel);
+            using var f = new Font("Segoe MDL2 Assets", D * 0.45f, GraphicsUnit.Pixel);
             using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            for (int i = 0; i < n; i++)
+
+            void Cell(string icon, Bitmap? img, float cx, float cy, float ia)
             {
-                float ia = Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f);
-                if (ia <= 0.01f) continue;
-                var img = menu.Images != null && i < menu.Images.Length ? menu.Images[i] : null;
+                if (ia <= 0.01f) return;
                 if (img != null)
                 {
-                    DrawCircleImage(cg, img, 0, i * CircleD, CircleD, ia);
-                    continue;
+                    // faint icon-accent wash, clipped to the strip so it hugs the flat top like the pill
+                    var accent = Widgets.Fx.AccentOf(img);
+                    if (accent != Widgets.Fx.White)
+                    {
+                        var clip = cg.Clip;
+                        cg.SetClip(path);
+                        using var gb = new SolidBrush(Color.FromArgb((int)(20 * ia), accent));
+                        cg.FillRectangle(gb, new RectangleF(cx, cy, D, D));
+                        cg.Clip = clip;
+                    }
+                    DrawCircleImage(cg, img, cx, cy, D, ia);
+                    return;
                 }
                 using var ib = new SolidBrush(Color.FromArgb((int)(235 * ia), 255, 255, 255));
-                cg.DrawString(menu.Icons[i], f, ib, new RectangleF(0, i * CircleD, CircleD, CircleD), sf);
+                cg.DrawString(icon, f, ib, new RectangleF(cx, cy, D, D), sf);
             }
+
+            for (int i = 0; i < rows; i++)
+                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D, Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f));
+            if (extf > 0.5f)
+                for (int j = 0; j < menu.RowCounts[or_]; j++)
+                    Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,
+                        Math.Clamp((extf - j * CircleD) / CircleD, 0f, 1f));
         }
 
-        var dst = new Rectangle(x, CircleY, CircleD, mh);
-        if (alpha >= 0.999f) { g.DrawImage(c, dst, 0, 0, CircleD, mh, GraphicsUnit.Pixel); return; }
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        var dst = new Rectangle(x, CircleY, mw, mh);
+        if (alpha >= 0.999f) { g.DrawImage(c, dst, 0, 0, c.Width, c.Height, GraphicsUnit.Pixel); return; }
 
         // merge into the pill: as the pill expands, shrink the circle toward the pill edge while fading
         var stt = g.Save();
@@ -336,7 +386,7 @@ internal sealed class LayeredNotch
         using (var attr = new ImageAttributes())
         {
             attr.SetColorMatrix(new ColorMatrix { Matrix33 = alpha });
-            g.DrawImage(c, dst, 0, 0, CircleD, mh, GraphicsUnit.Pixel, attr);
+            g.DrawImage(c, dst, 0, 0, c.Width, c.Height, GraphicsUnit.Pixel, attr);
         }
         g.Restore(stt);
     }
@@ -446,15 +496,6 @@ internal sealed class LayeredNotch
         g.SmoothingMode = old;
     }
 
-    // flat top (flush to screen, like the pill) + rounded bottom
-    private static GraphicsPath Capsule(Rectangle r)
-    {
-        var p = new GraphicsPath();
-        p.AddLine(r.X, r.Y, r.Right, r.Y);
-        p.AddArc(r.X, r.Bottom - r.Width, r.Width, r.Width, 0, 180);
-        p.CloseFigure();
-        return p;
-    }
 
     private static Bitmap Blur(Bitmap src, int factor)
     {

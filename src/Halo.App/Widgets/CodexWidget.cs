@@ -20,34 +20,42 @@ internal sealed class CodexWidget : IWidget
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
 
     private readonly CodexStatusStore _store;
+    private readonly CodexSurface _surface;
     private readonly Action _cancel;
     private readonly Func<bool> _canCancelDesktop;
 
-    public CodexWidget(CodexStatusStore store, Action cancel, Func<bool>? canCancelDesktop = null)
+    // one widget per surface: the ChatGPT desktop app and the codex CLI are separate sessions
+    public CodexWidget(CodexStatusStore store, CodexSurface surface, Action cancel, Func<bool>? canCancelDesktop = null)
     {
         _store = store;
+        _surface = surface;
         _cancel = cancel;
         _canCancelDesktop = canCancelDesktop ?? (static () => false);
         CodexLimits.Attach(store);
     }
 
+    private CodexSnapshot? Current => _store.Candidate(_surface);
+
     private static readonly Bitmap? OpenAiIcon = LoadIcon();
+    // icon-derived accent for the background wash; the OpenAI mark is white → ChatGPT green fallback
+    private static readonly Color Accent = Fx.AccentOf(OpenAiIcon) is var a && a != Fx.White
+        ? a : Color.FromArgb(16, 163, 127);
 
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
     public Bitmap? IconImage => OpenAiIcon;
 
     public string Id => "codex";
-    public string? AgentState => _store.Current?.State;
-    // visible only while the desktop app / CLI actually runs (user's call); the panel still
+    public string? AgentState => Current?.State;
+    // visible only while this surface actually runs (user's call); the panel still
     // shows cached limits when it's open with no task in flight
-    public bool IsActive => _store.Current is not null;
+    public bool IsActive => Current is not null;
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
-    public bool IsDesktop => _store.Current?.Source == CodexSurface.Desktop;
-    public AgentNotice AgentNotice => _store.Current is { } status
+    public bool IsDesktop => _surface == CodexSurface.Desktop;
+    public AgentNotice AgentNotice => Current is { } status
         ? new AgentNotice(status.State, status.CompactedAt, status.Message)
         : AgentNotice.None;
     // text-emerge animation + the compacting pulse both need frames while collapsed
-    public bool Animating => _appear < 1f || Compacting(_store.Current);
+    public bool Animating => _appear < 1f || Compacting(Current);
 
     private string _shownKey = "";
     private float _appear = 1f;
@@ -66,7 +74,7 @@ internal sealed class CodexWidget : IWidget
     {
         get
         {
-            var snapshot = _store.Current;
+            var snapshot = Current;
             var canCancelDesktop = snapshot is { Source: CodexSurface.Desktop, State: "working" } &&
                 _canCancelDesktop();
             return GetCancelRoute(snapshot, canCancelDesktop) != CodexCancelRoute.None;
@@ -89,9 +97,10 @@ internal sealed class CodexWidget : IWidget
         _wasOpen = open;
         if (open)
         {
-            var snapshot = _store.Current;
+            var snapshot = Current;
             if (snapshot is not null) CodexLimits.UpdateFrom(snapshot);
             CodexNetMon.Poke();
+            Fx.Glow(g, w, h, fade, w * 0.16f, h * 0.35f, w * 0.85f, h * 1.2f, 30, Accent);
             DrawExpanded(g, w, h, fade, snapshot);
         }
     }
@@ -99,9 +108,10 @@ internal sealed class CodexWidget : IWidget
     // collapsed pill = OpenAI icon on the left, what it's doing on the right (Apple-style)
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
-        var st = _store.Current;
+        var st = Current;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
