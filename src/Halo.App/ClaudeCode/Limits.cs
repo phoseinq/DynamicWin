@@ -106,20 +106,10 @@ internal static class Limits
             using var resp = Http.Send(req);
             if ((int)resp.StatusCode == 429)
             {
-                // account-limit lockout 429s this endpoint too, with Retry-After = seconds to the
-                // 5h reset — that IS the current truth (100%, resets then), don't let the data rot
-                var ra = resp.Headers.RetryAfter?.Delta ?? TimeSpan.Zero;
-                if (ra > TimeSpan.FromMinutes(2))
-                {
-                    FiveHour = 1f;
-                    FiveHourReset = DateTimeOffset.UtcNow + ra;
-                    LastSuccess = DateTime.UtcNow;
-                    SaveCache();
-                    Failed = false;
-                    _cooldown = ra < TimeSpan.FromMinutes(30) ? ra : TimeSpan.FromMinutes(30);
-                }
-                else // plain endpoint rate-limit: keep the last good values and back off
-                    _cooldown = TimeSpan.FromMinutes(2);
+                // the free usage endpoint rate-limits itself long before the account does — fall
+                // back to a 1-token probe whose unified headers carry the REAL utilizations
+                Probe(tok);
+                _cooldown = TimeSpan.FromMinutes(2);
                 return;
             }
             _cooldown = TimeSpan.FromSeconds(30);
@@ -138,6 +128,37 @@ internal static class Limits
             if (u7 >= 0) { Week = u7; WeekReset = r7; }
             if (u5 >= 0 || u7 >= 0) { LastSuccess = DateTime.UtcNow; SaveCache(); }
             Failed = false;
+        }
+        catch { Failed = true; }
+    }
+
+    // POST a max_tokens:1 haiku message and read the anthropic-ratelimit-unified-* headers —
+    // fractions 0..1 + unix-second resets, present even when the call itself 429s. ~1 token.
+    private static void Probe(string tok)
+    {
+        try
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages");
+            req.Headers.TryAddWithoutValidation("authorization", "Bearer " + tok);
+            req.Headers.TryAddWithoutValidation("anthropic-beta", "oauth-2025-04-20");
+            req.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+            req.Content = new System.Net.Http.StringContent(
+                "{\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}",
+                System.Text.Encoding.UTF8, "application/json");
+            using var resp = Http.Send(req);
+
+            float H(string n) => resp.Headers.TryGetValues(n, out var v)
+                && float.TryParse(System.Linq.Enumerable.First(v),
+                    System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : -1f;
+            DateTimeOffset R(string n) => resp.Headers.TryGetValues(n, out var v)
+                && long.TryParse(System.Linq.Enumerable.First(v), out var s)
+                ? DateTimeOffset.FromUnixTimeSeconds(s) : default;
+
+            float u5 = H("anthropic-ratelimit-unified-5h-utilization");
+            float u7 = H("anthropic-ratelimit-unified-7d-utilization");
+            if (u5 >= 0) { FiveHour = Math.Min(1f, u5); FiveHourReset = R("anthropic-ratelimit-unified-5h-reset"); }
+            if (u7 >= 0) { Week = Math.Min(1f, u7); WeekReset = R("anthropic-ratelimit-unified-7d-reset"); }
+            if (u5 >= 0 || u7 >= 0) { LastSuccess = DateTime.UtcNow; SaveCache(); Failed = false; }
         }
         catch { Failed = true; }
     }
