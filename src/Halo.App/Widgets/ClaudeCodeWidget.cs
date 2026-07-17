@@ -37,24 +37,16 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
 
-    // session icon = Claude mark + cwd-initial badge so parallel sessions are tellable apart
+    // session icon = Claude mark + session-number badge (stable for the session's lifetime,
+    // easier to find than a cwd initial — user's call)
     private Bitmap? _badged;
-    private string? _badgedKey;
 
     public Bitmap? IconImage
     {
         get
         {
-            var cwd = Live?.Cwd;
-            var key = string.IsNullOrEmpty(cwd) ? null : Path.GetFileName(cwd.TrimEnd('\\', '/'));
-            if (ClaudeIcon is null || string.IsNullOrEmpty(key)) return ClaudeIcon;
-            if (key != _badgedKey)
-            {
-                _badged?.Dispose();
-                _badged = Badge(ClaudeIcon, char.ToUpperInvariant(key[0]));
-                _badgedKey = key;
-            }
-            return _badged;
+            if (ClaudeIcon is null) return null;
+            return _badged ??= Badge(ClaudeIcon, (char)('1' + _slot));
         }
     }
 
@@ -78,6 +70,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     // one widget per session slot; visible only while that session's process is alive
     public bool IsActive => Live is not null;
     private CcStatus? Live => _store.SessionLive(_slot);
+    public Color? Ring => Live is { } st ? RingColor(st) : null;
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)

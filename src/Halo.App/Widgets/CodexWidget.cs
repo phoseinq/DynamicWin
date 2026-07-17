@@ -49,6 +49,7 @@ internal sealed class CodexWidget : IWidget
     // visible only while this surface actually runs (user's call); the panel still
     // shows cached limits when it's open with no task in flight
     public bool IsActive => Current is not null;
+    public Color? Ring => Current is { } st ? RingColor(st) : null;
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
     public bool IsDesktop => _surface == CodexSurface.Desktop;
     public AgentNotice AgentNotice => Current is { } status

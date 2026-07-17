@@ -383,6 +383,19 @@ internal sealed class NotchController
         return false;
     }
 
+    // the group circle wears the "most alive" member's ring (a working green beats an idle white)
+    private Color? GroupRing(int[] gr)
+    {
+        Color? first = null;
+        foreach (var i in gr)
+        {
+            if (_widgets[i].Ring is not { } rc) continue;
+            first ??= rc;
+            if (rc.R != rc.G || rc.G != rc.B) return rc; // first non-grey = an actual state colour
+        }
+        return first;
+    }
+
     // alt widgets grouped per app (media / claude / codex), preserving widget order inside a group
     private List<int[]> Groups()
     {
@@ -496,6 +509,11 @@ internal sealed class NotchController
                 ? Array.ConvertAll(gr, i => _widgets[i].Icon) : Array.Empty<string>()).ToArray(),
             SessImages = groups.ConvertAll(gr => gr.Length >= 2
                 ? Array.ConvertAll(gr, i => _widgets[i].IconImage) : Array.Empty<Bitmap?>()).ToArray(),
+            RowRings = groups.ConvertAll(GroupRing).ToArray(),
+            // duplicates: same state = same hue, but each next session's ring is deeper/darker
+            SessRings = groups.ConvertAll(gr => gr.Length >= 2
+                ? gr.Select((i, j) => (Color?)(_widgets[i].Ring is { } rc ? Fx.Shade(rc, j) : null)).ToArray()
+                : Array.Empty<Color?>()).ToArray(),
             Open = EaseOutBack(Math.Clamp(_menu, 0f, 1f)),
             OpenRow = _row,
             RowOpen = EaseOutBack(Math.Clamp(_rowOpen, 0f, 1f)),

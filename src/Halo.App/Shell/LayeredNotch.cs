@@ -17,6 +17,8 @@ internal struct MenuFrame
     public int[] RowCounts;         // sessions in the row's rightward fan (0 = row has no fan)
     public Bitmap?[][] SessImages;  // per-row session icons (badged), left-to-right
     public string[][] SessIcons;
+    public Color?[] RowRings;       // status ring per row (null = none)
+    public Color?[][] SessRings;    // status ring per fanned session (pre-shaded for duplicates)
     public float Open;              // vertical ease 0..1
     public int OpenRow;             // row whose fan is opening (-1 none)
     public float RowOpen;           // horizontal ease 0..1
@@ -342,7 +344,7 @@ internal sealed class LayeredNotch
             using var f = new Font("Segoe MDL2 Assets", D * 0.45f, GraphicsUnit.Pixel);
             using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 
-            void Cell(string icon, Bitmap? img, float cx, float cy, float ia)
+            void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring)
             {
                 if (ia <= 0.01f) return;
                 if (img != null)
@@ -358,6 +360,12 @@ internal sealed class LayeredNotch
                         cg.Clip = clip;
                     }
                     DrawCircleImage(cg, img, cx, cy, D, ia);
+                    if (ring is { } rc) // status ring hugging the icon, same style as the pill's
+                    {
+                        float inset = D * 0.19f - 2.5f * ss, dd = D - inset * 2;
+                        using var pen = new Pen(Color.FromArgb((int)(140 * ia), rc), 1.9f * ss);
+                        cg.DrawEllipse(pen, cx + inset, cy + inset, dd, dd);
+                    }
                     return;
                 }
                 using var ib = new SolidBrush(Color.FromArgb((int)(235 * ia), 255, 255, 255));
@@ -365,11 +373,12 @@ internal sealed class LayeredNotch
             }
 
             for (int i = 0; i < rows; i++)
-                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D, Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f));
+                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D,
+                    Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i]);
             if (extf > 0.5f)
                 for (int j = 0; j < menu.RowCounts[or_]; j++)
                     Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,
-                        Math.Clamp((extf - j * CircleD) / CircleD, 0f, 1f));
+                        Math.Clamp((extf - j * CircleD) / CircleD, 0f, 1f), menu.SessRings[or_][j]);
         }
 
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;

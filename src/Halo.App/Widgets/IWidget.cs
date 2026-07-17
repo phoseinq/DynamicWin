@@ -23,6 +23,10 @@ internal interface IWidget
     // True when the widget wants continuous frames (e.g. an animated preview). Drives re-render.
     bool Animating => false;
 
+    // Status ring colour for this widget's circle in the strip (null = no ring). Mirrors the
+    // collapsed pill's ring (green working, red failed, white idle...).
+    Color? Ring => null;
+
     // Agent lifecycle events can temporarily expand the pill without coupling the controller to an agent type.
     AgentNotice AgentNotice => AgentNotice.None;
 

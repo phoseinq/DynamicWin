@@ -120,6 +120,14 @@ internal static class Fx
         catch { return White; }
     }
 
+    // progressively deeper/more saturated shade per duplicate session, so twin green rings differ
+    public static Color Shade(Color c, int step)
+    {
+        if (step <= 0) return c;
+        RgbToHsv(c, out float h, out float s, out float v);
+        return HsvToRgb(h, Math.Min(1f, s * (1f + 0.22f * step)), Math.Max(0.35f, v * (1f - 0.26f * step)));
+    }
+
     public static void RgbToHsv(Color c, out float h, out float s, out float v)
     {
         float r = c.R / 255f, g = c.G / 255f, b = c.B / 255f;
