@@ -32,6 +32,7 @@ internal static class NetMon
 
     public static void Poke()
     {
+        IpCountry.Poke();
         _until = DateTime.UtcNow.AddSeconds(8);
         if (_thread == null)
         {
@@ -77,10 +78,12 @@ internal static class NetMon
             }
             else if (DateTime.UtcNow - lastBg > TimeSpan.FromSeconds(10))
             {
-                // collapsed: slow heartbeat so the ring still knows when the API dies
+                // collapsed: slow heartbeat so the ring still knows when the API dies.
+                // fresh connection each time — a warm pooled socket can keep answering while
+                // every NEW connection gets RST (exactly the ECONNRESET storms CC dies on)
                 lastBg = DateTime.UtcNow;
-                bool apiDown = HttpLatency("https://api.anthropic.com/") == Lost;
-                bool netDown = apiDown && HttpLatency("https://1.1.1.1/") == Lost;
+                bool apiDown = HttpLatency("https://api.anthropic.com/", fresh: true) == Lost;
+                bool netDown = apiDown && HttpLatency("https://1.1.1.1/", fresh: true) == Lost;
                 SetHealth(apiDown, netDown);
             }
             else Thread.Sleep(300);
@@ -100,17 +103,47 @@ internal static class NetMon
         new System.Net.Http.SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
     { Timeout = TimeSpan.FromSeconds(2.5) };
 
-    private static int HttpLatency(string url)
+    private static int HttpLatency(string url, bool fresh = false)
     {
         try
         {
             var sw = Stopwatch.StartNew();
-            using var resp = Http.Send(
-                new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url),
-                System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+            var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
+            if (fresh) req.Headers.ConnectionClose = true; // don't let the pool hide a dead route
+            using var resp = Http.Send(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
             // 4xx = the server is fine (auth/route noise); 5xx (incl. 529 Overloaded) = it's down
             return (int)resp.StatusCode >= 500 ? Lost : (int)sw.ElapsedMilliseconds;
         }
         catch { return Lost; }
+    }
+}
+
+// Faint flag of the country the current (exit) IP sits in — shown next to the panel title.
+// One geo lookup every 5 min (no spam); the flag bitmap only changes when the IP does.
+internal static class IpCountry
+{
+    public static volatile System.Drawing.Bitmap? Flag;
+    private static string? _ip;
+    private static Timer? _timer;
+    private static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
+
+    public static void Poke() => _timer ??= new Timer(_ => Refresh(), null, 0, 300_000);
+
+    private static void Refresh()
+    {
+        try
+        {
+            var json = Http.GetStringAsync("https://ipwho.is/?fields=ip,country_code").Result;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var ip = doc.RootElement.GetProperty("ip").GetString();
+            if (ip == _ip) return;
+            var cc = doc.RootElement.GetProperty("country_code").GetString()?.ToLowerInvariant();
+            if (string.IsNullOrEmpty(cc)) return;
+            var png = Http.GetByteArrayAsync($"https://flagcdn.com/w80/{cc}.png").Result;
+            Flag = new System.Drawing.Bitmap(new System.IO.MemoryStream(png));
+            _ip = ip;
+            Interlocked.Increment(ref NetMon.Version); // repaint the open panel once
+        }
+        catch { }
     }
 }

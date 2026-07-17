@@ -221,6 +221,19 @@ internal sealed class ClaudeCodeWidget : IWidget
             g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
         using (var tb = new SolidBrush(Mul(White, a)))
             g.DrawString("Claude Code", title, tb, pad + 20, pad - 2);
+        if (IpCountry.Flag is { } flag) // faint ghost of the exit-IP's flag in the empty middle
+        {
+            float fx = pad + 20 + g.MeasureString("Claude Code", title, int.MaxValue,
+                StringFormat.GenericTypographic).Width + 18;
+            var dest = new Rectangle((int)fx, pad + 2, 30, 20);
+            using var rp = Fx.Rounded(dest, 4);
+            using var ia = new System.Drawing.Imaging.ImageAttributes();
+            ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.30f * a });
+            var clip0 = g.Clip;
+            g.SetClip(rp);
+            g.DrawImage(flag, dest, 0, 0, flag.Width, flag.Height, GraphicsUnit.Pixel, ia);
+            g.Clip = clip0;
+        }
         string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
