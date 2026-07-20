@@ -11,7 +11,7 @@
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![.NET 9](https://img.shields.io/badge/.NET-9-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-100%25-239120?logo=csharp&logoColor=white)
-![Build](https://img.shields.io/badge/build-passing-3fb950)
+[![Release](https://img.shields.io/github/v/release/phoseinq/DynamicWin?label=download&color=3fb950&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
 
 <br />
 
@@ -38,14 +38,12 @@ Halo turns the top of your screen into a live glass pill — now-playing, downlo
 
 ## 📦 Install
 
-Build the installer (see below) to get **HaloSetup.exe** — a small wizard, no admin needed. It's self-contained (no .NET to install on the target machine) and can start with Windows.
+Grab the latest **[release](https://github.com/phoseinq/DynamicWin/releases/latest)** — pick one:
 
-```powershell
-pwsh installer/build.ps1
-# → dist/HaloSetup.exe
-```
+- **[DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest)** — installer: a small wizard, no admin needed. Self-contained (no .NET to install) and can start with Windows.
+- **[DynamicWinPortable.zip](https://github.com/phoseinq/DynamicWin/releases/latest)** — no install: extract and run `Halo/Halo.App.exe`.
 
-> The installer is self-signed, so Windows SmartScreen shows an "unknown publisher" prompt on other machines — click **More info → Run anyway**, or sign with your own certificate via `build.ps1 -Thumbprint <your-cert>`.
+> The build is self-signed, so Windows SmartScreen shows an "unknown publisher" prompt — click **More info → Run anyway**.
 
 <br />
 
@@ -61,6 +59,8 @@ dotnet run --project src/Halo.App
 ```
 
 The pill launches at the top-center of your primary monitor. Hover it to expand; drag to move; use the pushpin to keep it above fullscreen apps.
+
+To roll your own release artifacts, run `pwsh installer/build.ps1` — it publishes self-contained, code-signs, and packages `DynamicWinSetup.exe` with Inno Setup. Pass `-Thumbprint <cert>` to sign with your own certificate.
 
 <br />
 

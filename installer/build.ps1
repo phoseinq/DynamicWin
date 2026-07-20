@@ -1,4 +1,4 @@
-# installer/build.ps1 — publish self-contained, code-sign, package into HaloSetup.exe, sign that.
+# installer/build.ps1 — publish self-contained, code-sign, package DynamicWinSetup.exe + DynamicWinPortable.zip.
 # Run from anywhere. Swap -Thumbprint for a REAL purchased cert to make signatures trusted on
 # other people's PCs (self-signed only clears "Unknown Publisher" where the cert is trusted).
 param([string]$Thumbprint = '2EB268F09FEA535E92FB395FA2FAB4409EC22E1D')
@@ -30,7 +30,13 @@ foreach ($proj in 'src\Halo.App\Halo.App.csproj', 'src\Halo.Hooks\Halo.Hooks.csp
 
 Sign @("$root\dist\app\Halo.App.exe", "$root\dist\app\Halo.Hooks.exe")
 & $iscc "$root\installer\Halo.iss"; if ($LASTEXITCODE) { throw 'ISCC failed' }
-Sign @("$root\dist\HaloSetup.exe")
+Sign @("$root\dist\DynamicWinSetup.exe")
+& $signtool verify /pa "$root\dist\DynamicWinSetup.exe"
 
-& $signtool verify /pa "$root\dist\HaloSetup.exe"
-Write-Host "`nBuilt + signed: $root\dist\HaloSetup.exe" -ForegroundColor Green
+# portable zip = the self-contained app under a Halo\ folder (extract and run Halo\Halo.App.exe)
+Remove-Item "$root\dist\Halo", "$root\dist\DynamicWinPortable.zip" -Recurse -Force -ErrorAction SilentlyContinue
+Copy-Item "$root\dist\app" "$root\dist\Halo" -Recurse
+Compress-Archive -Path "$root\dist\Halo" -DestinationPath "$root\dist\DynamicWinPortable.zip" -CompressionLevel Optimal
+Remove-Item "$root\dist\Halo" -Recurse -Force
+
+Write-Host "`nBuilt + signed: dist\DynamicWinSetup.exe + dist\DynamicWinPortable.zip" -ForegroundColor Green
