@@ -1,36 +1,80 @@
-# DynamicWin
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/c%23-%23239120.svg?style=for-the-badge&logo=csharp&logoColor=white">
-  <a href="https://creativecommons.org/licenses/by-sa/4.0/"><img src="https://img.shields.io/static/v1?label=License&message=CC+BY-SA+4.0&color=%23c49b04&style=for-the-badge"></a>
-  <a href="https://discord.gg/UHFuqB9NqR"><img src="https://dcbadge.limes.pink/api/server/https://discord.gg/UHFuqB9NqR)](https://discord.gg/UHFuqB9NqR"></a>
-</p>
+<img src="installer/halo.png" alt="Halo" width="112">
 
-<p align="center">
-  <img src="ReadmeFiles/preview.gif" style="border-radius:15px" alt="animated" width="1000" height="auto" />
-</p>
+# Halo
 
-<p xmlns:cc="http://creativecommons.org/ns#" xmlns:dct="http://purl.org/dc/terms/"><a property="dct:title" rel="cc:attributionURL" href="https://github.com/FlorianButz/DynamicWin">DynamicWin</a> by <a rel="cc:attributionURL dct:creator" property="cc:attributionName" href="https://github.com/FlorianButz">Florian Butz</a> is licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/?ref=chooser-v1" target="_blank" rel="license noopener noreferrer" style="display:inline-block;">CC BY-SA 4.0<img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/cc.svg?ref=chooser-v1" alt=""><img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/by.svg?ref=chooser-v1" alt=""><img style="height:22px!important;margin-left:3px;vertical-align:text-bottom;" src="https://mirrors.creativecommons.org/presskit/icons/sa.svg?ref=chooser-v1" alt=""></a></p>
+**A smooth glass notch for Windows — a Dynamic Island for the desktop.**
 
-### What is it?
-A [Dynamic Island](https://support.apple.com/de-de/guide/iphone/iph28f50d10d/ios) inspired Windows App that brings in a bunch of features like widgets or a file tray that works like a clipboard.
-Similar to dynamic notches that you can find on macOS like [NotchNook](https://lo.cafe/notchnook), this application brings the concept on Windows devices to life.
+<br />
 
-This project was made possible with [**FenUI**](https://github.com/FlorianButz/fenUISharp)
+![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
+![.NET 9](https://img.shields.io/badge/.NET-9-512BD4?logo=dotnet&logoColor=white)
+![C#](https://img.shields.io/badge/C%23-100%25-239120?logo=csharp&logoColor=white)
+![Build](https://img.shields.io/badge/build-passing-3fb950)
 
-# Features
-- A media controller
-- - Favorites
-- A calendar with Google Calendar integration
-- File Tray
-- - Files inside the Tray can be executed (e.g. a shortcut) with a double click
-- - Files can be shared using the Windows File Share dialog
-- - Files can be stored in the Tray for later use
-- - ~~Shaking a currently dragged file will open a quick drop popup~~ (This had to be cut due to massive performance issues)
-- Bluetooth view which shows the connected device and battery
-- Activity system (Currently includes media player and BT view)
-- - Spring notches (let you see or open an action which is not the current view)
-- Swapping between views can be done by scrolling
-- Auto updater
+<br />
 
-> [!NOTE] This repository currently only exists to host the releases. There is no source code here. 
+[Install](#-install) · [Build from source](#-build-from-source) · [How it works](#%EF%B8%8F-how-it-works) · [Report a bug](https://github.com/phoseinq/DynamicWin/issues)
+
+</div>
+
+<br />
+
+Halo turns the top of your screen into a live glass pill — now-playing, downloads, volume, notifications, battery — plus first-class panels for **Claude Code** and **Codex**. It's written from scratch in C# on a Win32 layered window with GDI+, so motion is synced to your monitor's refresh rate and the glass is real: it samples the wallpaper or window behind the pill, not a canned blur. It runs unpackaged, needs no admin, and stays out of your way — solid over the desktop, frosted over apps, gone in fullscreen games.
+
+<br />
+
+## ✨ What you get
+
+- 🔕 **Notifications, blocked and mirrored** — the headline feature. Halo intercepts Windows toasts, **kills the native banner and its sound**, and re-draws it inside the pill instead — one clean notification, on your terms. Windows exposes no official "suppress this toast" API, so Halo does it by writing the authoritative Do-Not-Disturb profile to the registry and nudging `WpnUserService` to re-read it, while still receiving every toast through `UserNotificationListener`. Clicking a banner opens the right app — or the exact chat, for Phone Link.
+- 🎵 **Now Playing** — album art, a live seek bar, and transport, with per-source switching (Spotify and a browser video at the same time). A real WASAPI-loopback spectrum equalizer, plus video controls: ±10s, playback speed, and subtitle / picture-in-picture hotkeys. Classic VLC (which publishes no media session) gets its own widget.
+- ⬇️ **Downloads** — a filling ring with the live percent for download managers, torrent clients, and Microsoft Store installs (real bytes, read from Delivery Optimization).
+- 🤖 **Claude Code & Codex** — live activity and current tool, this-turn tokens, context left, real **5-hour / weekly usage bars** from the live rate-limit headers, an API + internet health ring, and a **Cancel that actually interrupts the running prompt**.
+- 🔊 **Volume** · 🔋 **Battery** · 🕘 **Clock** · 🎙️ **Privacy dot** when the mic or camera is live · a language-switch banner · a screenshot & clipboard-image preview.
+- 🪟 **Feels native** — real glass over apps, solid black over the desktop, hides on fullscreen games, pin-on-top, drag to move anywhere, and excluded from screen captures.
+
+<br />
+
+## 📦 Install
+
+Build the installer (see below) to get **HaloSetup.exe** — a small wizard, no admin needed. It's self-contained (no .NET to install on the target machine) and can start with Windows.
+
+```powershell
+pwsh installer/build.ps1
+# → dist/HaloSetup.exe
+```
+
+> The installer is self-signed, so Windows SmartScreen shows an "unknown publisher" prompt on other machines — click **More info → Run anyway**, or sign with your own certificate via `build.ps1 -Thumbprint <your-cert>`.
+
+<br />
+
+## 🧩 Build from source
+
+**Prerequisites:** .NET 9 SDK · Windows 10 (build 19041) or newer.
+
+```bash
+git clone -b Boy https://github.com/phoseinq/DynamicWin
+cd DynamicWin
+dotnet build Halo.sln -c Release
+dotnet run --project src/Halo.App
+```
+
+The pill launches at the top-center of your primary monitor. Hover it to expand; drag to move; use the pushpin to keep it above fullscreen apps.
+
+<br />
+
+## 🏗️ How it works
+
+- **Layered-window render** — everything is drawn with GDI+ into a `CreateDIBSection` surface and pushed with `UpdateLayeredWindow` (true premultiplied alpha, 2× supersampled). No WPF, no WinUI — the animation loop is a dispatcher timer that adapts between 30, 60, and 120 fps based on CPU load.
+- **Real glass** — the region behind the pill is captured (`BitBlt`, falling back to `PrintWindow` for GPU-composited windows), downscaled, blurred, and tinted under the shape. On the bare desktop it goes solid; in fullscreen it hides entirely.
+- **Widgets** — each surface is an `IWidget` (icon, active state, expanded content, a status ring). The controller stacks the active ones into the pill and a side circle, with a liquid drop animation to swap the primary.
+- **Agent panels** — a tiny hook binary writes each Claude Code / Codex session's state to a JSON file; the widget watches it live. Usage numbers come from a `max_tokens: 1` probe that reads the real rate-limit headers, so the bars match the CLI exactly.
+
+Full design notes live in [`docs/`](docs/).
+
+<br />
+
+## 🙏 Credits
+
+Halo is an independent, from-scratch take on the desktop-notch idea popularized by **[DynamicWin](https://github.com/FlorianButz/DynamicWin)** by Florian Butz.

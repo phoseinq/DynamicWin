@@ -1,4 +1,10 @@
+bin/
+obj/
 .vs/
-/DynamicWin/bin/
-/DynamicWin/obj/
-/DynamicWinSetup
+*.user
+*.log
+dist/
+publish/
+_reference/
+.worktrees/
+installer/*.cer
