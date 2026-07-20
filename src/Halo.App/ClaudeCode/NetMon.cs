@@ -97,6 +97,7 @@ internal static class NetMon
         if (apiDown == ApiDown && netDown == NetDown) return;
         ApiDown = apiDown;
         NetDown = netDown;
+        IpCountry.Invalidate();
         Interlocked.Increment(ref Version);
     }
 
@@ -151,6 +152,8 @@ internal static class IpCountry
     private static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
 
     public static void Poke() => _timer ??= new Timer(_ => Refresh(), null, 0, 300_000);
+
+    public static void Invalidate() => _timer?.Change(3_000, 300_000);
 
     private static void Refresh()
     {
