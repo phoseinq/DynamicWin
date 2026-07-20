@@ -89,11 +89,11 @@ internal static class DndGate
             neu[idx - 1] = (byte)(name.Length / 2);
             Array.Copy(name, 0, neu, idx, name.Length);
             Array.Copy(d, idx + cnt * 2, neu, idx + name.Length, trailerLen);
-            if (neu.SequenceEqual(d)) return false;
+            bool nameChanged = !neu.SequenceEqual(d);
             var ft = BitConverter.GetBytes(DateTime.UtcNow.ToFileTimeUtc());
             Array.Copy(ft, 0, neu, 4, 8);
             y.SetValue("Data", neu, RegistryValueKind.Binary);
-            return true;
+            return nameChanged;
         }
         catch { return false; }
     }

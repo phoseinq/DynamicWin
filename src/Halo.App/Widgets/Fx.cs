@@ -10,6 +10,20 @@ internal static class Fx
 {
     public static readonly Color White = Color.FromArgb(238, 255, 255, 255);
 
+    public static string CleanText(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        try { return s.IsNormalized(System.Text.NormalizationForm.FormKC) ? s : s.Normalize(System.Text.NormalizationForm.FormKC); }
+        catch { return s; }
+    }
+
+    public static bool IsRtl(string? s)
+    {
+        if (s == null) return false;
+        foreach (var c in s) if (c >= 0x0590 && c <= 0x08FF) return true;
+        return false;
+    }
+
     private static readonly ConditionalWeakTable<Bitmap, object> AccentCache = new();
 
     public static Color AccentOf(Bitmap? icon)

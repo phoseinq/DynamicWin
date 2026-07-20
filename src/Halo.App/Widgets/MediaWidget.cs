@@ -116,8 +116,8 @@ internal sealed class MediaWidget : IWidget
         try
         {
             var props = await s.TryGetMediaPropertiesAsync();
-            string title = props.Title ?? "";
-            string artist = props.Artist ?? "";
+            string title = Fx.CleanText(props.Title);
+            string artist = Fx.CleanText(props.Artist);
             string key = title + "" + artist;
             byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
             bool wide = ThumbIsWide(thumb);

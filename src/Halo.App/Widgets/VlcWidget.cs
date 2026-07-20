@@ -42,7 +42,7 @@ internal static class VlcMonitor
                     if (Name != t) ExePath = p.MainModule?.FileName;
                 }
                 catch { return true; }
-                name = t.Substring(0, t.Length - Suffix.Length);
+                name = Fx.CleanText(t.Substring(0, t.Length - Suffix.Length));
                 hwnd = h;
                 return false;
             }, IntPtr.Zero);
@@ -134,7 +134,7 @@ internal sealed class VlcWidget : IWidget
         using var bodyF = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
         using (var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+        { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap | (Fx.IsRtl(name) ? StringFormatFlags.DirectionRightToLeft : 0) })
             g.DrawString(name, titleF, tb, new RectangleF(tx, 40, tw, 30), sf);
         using (var lb = new SolidBrush(Mul(Dim, fade)))
             g.DrawString("VLC media player", bodyF, lb, tx, 76);
@@ -186,7 +186,7 @@ internal sealed class VlcWidget : IWidget
         using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
         using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap, LineAlignment = StringAlignment.Center };
+        { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap | (Fx.IsRtl(name) ? StringFormatFlags.DirectionRightToLeft : 0), LineAlignment = StringAlignment.Center };
         g.DrawString(name, f, b, new RectangleF(x + sz + 10, 0, w - (x + sz + 10) - 12, h), sf);
     }
 
