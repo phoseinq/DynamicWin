@@ -130,8 +130,10 @@ internal sealed class LayeredNotch
             throw new InvalidOperationException($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOWNOACTIVATE);
-        // stay off screenshots / screen recordings — the pill is chrome, not content
-        Win32.SetWindowDisplayAffinity(Hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
+        // stay off screenshots / screen recordings — the pill is chrome, not content.
+        // HALO_CAPTURABLE=1 keeps it capturable (demo GIFs / README recordings).
+        if (Environment.GetEnvironmentVariable("HALO_CAPTURABLE") != "1")
+            Win32.SetWindowDisplayAffinity(Hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
         Win32.AddClipboardFormatListener(Hwnd); // watch for screenshot images landing on the clipboard
         // File Tray: register a real OLE drop target so dragging a file over the pill reveals the tray.
         // Keep the instance alive (field) — RegisterDragDrop only holds a COM ref, GC would collect it.
