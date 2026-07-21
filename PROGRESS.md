@@ -1,6 +1,15 @@
 # Halo — progress
 
-## 2026-07-21: RESUME HERE — File Tray (next feature) + pending un-pushed state
+## 2026-07-22: v1.0.3 RELEASED — everything below is now committed + shipped
+- **v1.0.3 = Latest** on phoseinq/DynamicWin (Setup + Portable, signed). All pending changes below are
+  in local commits `029f650` + `11276a4` and in the release build — nothing un-bundled remains.
+- Notif silence set is now banner+sound+**urgent** (`AllowUrgentNotifications=0`) — urgent toasts were
+  the "banner slips out under spam" leak.
+- New dev knob: env `HALO_CAPTURABLE=1` skips `WDA_EXCLUDEFROMCAPTURE` — without it the pill is
+  invisible to every capture API (looks like a rendering bug; it isn't). Used ffmpeg ddagrab to record
+  the README preview.gif (concise README + gif pushed to the fork's V2 branch).
+
+## 2026-07-21: RESUME HERE — File Tray (next feature) + pending un-pushed state (ALL SHIPPED in v1.0.3 ↑)
 
 ### Un-pushed / un-released changes already made this session (bundle these into the NEXT build)
 - **File Tray auto-remove + smooth reorder + pin spacing (DEPLOYED live, NOT pushed):** (1) drag-OUT now
