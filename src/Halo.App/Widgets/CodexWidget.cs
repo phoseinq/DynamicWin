@@ -68,6 +68,7 @@ internal sealed class CodexWidget : IWidget
     public AgentNotice AgentNotice => Current is { } status
         ? new AgentNotice(status.State, status.CompactedAt, status.Message)
         : AgentNotice.None;
+    public IEnumerable<int> OwnerPids => Current is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
     // text-emerge animation + the compacting pulse both need frames while collapsed
     public bool Animating => _appear < 1f || Compacting(Current);
 
@@ -114,6 +115,7 @@ internal sealed class CodexWidget : IWidget
             var snapshot = Current;
             if (snapshot is not null) CodexLimits.UpdateFrom(snapshot);
             CodexNetMon.Poke();
+            Halo.ClaudeCode.IpCountry.Poke(); // same exit IP → same flag as the CC panel
             Fx.Glow(g, w, h, fade, w * 0.16f, h * 0.35f, w * 0.85f, h * 1.2f, 30, Accent);
             DrawExpanded(g, w, h, fade, snapshot);
         }
@@ -130,7 +132,7 @@ internal sealed class CodexWidget : IWidget
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
             using var pb = new SolidBrush(Mul(Blue, fade * (0.05f + 0.11f * pulse)));
-            using var pp = Rounded(new RectangleF(0, 0, w, h), h / 2f);
+            using var pp = Fx.PillPath(w, h, h / 2f); // flat top: matches the pill, no corner crescents
             g.FillPath(pb, pp);
         }
         // subtle status ring around the (circular) icon: green working, red on error, white otherwise
@@ -143,19 +145,19 @@ internal sealed class CodexWidget : IWidget
 
         // balanced zones: verb hugs the icon, the timer owns the right edge — text length changes
         // never leave a lopsided gap. Moods (idle/offline) centre in the whole free space instead.
-        string verb = OutageText() ?? st?.State switch
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
             "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
-        };
-        string el = Elapsed(st);
-        if (Compacting(st) && el.Length > 0) el = CompactPct(st!) + " · " + el;
+        });
+        string el = LimitHit ? LimitReset() : Elapsed(st); // limit shows regardless of session state
+        if (Compacting(st) && !LimitHit && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
-        bool busy = st?.State == "working" || Compacting(st);
+        bool busy = st?.State == "working" || Compacting(st) || LimitHit;
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
@@ -234,6 +236,7 @@ internal sealed class CodexWidget : IWidget
 
         var dot = StateColor(st?.State == "compacting" && !Compacting(st) ? null : st?.State);
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        Fx.DrawFlagGhost(g, Halo.ClaudeCode.IpCountry.Flag, w, h, a); // wind-blown exit-IP flag
         using (var db = new SolidBrush(Mul(dot, a)))
             g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
         using (var tb = new SolidBrush(Mul(White, a)))
@@ -530,6 +533,7 @@ internal sealed class CodexWidget : IWidget
     // it would vanish): green = working, yellow = deep thinking / needs input, red = error, white = idle
     private static Color RingColor(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
+         : LimitHit ? Amber                 // out of juice — flag it in any session state, not just "working"
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
@@ -568,16 +572,26 @@ internal sealed class CodexWidget : IWidget
 
     private static string Activity(CodexSnapshot? st)
     {
-        string verb = OutageText() ?? st?.State switch
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
             "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
-        };
-        if (st?.State != "working" && !Compacting(st)) return verb;
-        var el = Elapsed(st);
+        });
+        if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
+        var el = LimitHit ? LimitReset() : Elapsed(st);
         return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
+    }
+
+    // Codex sits at its "limit reached" prompt still flagged "working" — swap mood + show when
+    // it comes back instead of an ever-growing turn timer (same treatment as the CC widget)
+    private static bool LimitHit => CodexLimits.FiveHour >= 0.99f || CodexLimits.Week >= 0.99f;
+
+    private static string LimitReset()
+    {
+        var r = ResetIn(CodexLimits.FiveHour >= 0.99f ? CodexLimits.FiveHourReset : CodexLimits.WeekReset);
+        return r.Length > 0 ? "back in " + r : "";
     }
 
     // minimal mood line when nothing is running

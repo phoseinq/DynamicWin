@@ -33,10 +33,21 @@ internal static class AppIcon
         {
             string? exe = ExeFromAumid(aumid);
             if (exe == null || !File.Exists(exe)) return null;
-            using var ico = Icon.ExtractAssociatedIcon(exe);
-            return ico?.ToBitmap();
+            return LargeIcon(exe) ?? Icon.ExtractAssociatedIcon(exe)?.ToBitmap();
         }
         catch { return null; }
+    }
+
+    // biggest embedded icon (up to 256px) — ExtractAssociatedIcon returns the 32px small icon, which
+    // blurs when the download panel draws it at 128px. Falls back (null) to the small icon on failure.
+    private static Bitmap? LargeIcon(string exe)
+    {
+        var h = new IntPtr[1];
+        var id = new int[1];
+        if (Halo.Interop.Win32.PrivateExtractIcons(exe, 0, 256, 256, h, id, 1, 0) < 1 || h[0] == IntPtr.Zero)
+            return null;
+        try { using var ico = Icon.FromHandle(h[0]); return ico.ToBitmap(); }
+        finally { Halo.Interop.Win32.DestroyIcon(h[0]); }
     }
 
     private static string? ExeFromAumid(string aumid)

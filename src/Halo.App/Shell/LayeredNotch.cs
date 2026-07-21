@@ -12,12 +12,14 @@ namespace Halo.Shell;
 internal struct MenuFrame
 {
     public bool Show;
+    public float Appear;            // eased 0..1 — the strip grows/fades in instead of popping
     public string[] RowIcons;       // one row per app group, top-to-bottom; index 0 == the closed circle
     public Bitmap?[] RowImages;     // group icon (plain mark when the app has several sessions)
     public int[] RowCounts;         // sessions in the row's rightward fan (0 = row has no fan)
     public Bitmap?[][] SessImages;  // per-row session icons (badged), left-to-right
     public string[][] SessIcons;
     public Color?[] RowRings;       // status ring per row (null = none)
+    public float[] RowProgress;     // per row: >=0 draws the ring as a 0..1 progress arc (download %), else -1
     public Color?[][] SessRings;    // status ring per fanned session (pre-shaded for duplicates)
     public float Open;              // vertical ease 0..1
     public int OpenRow;             // row whose fan is opening (-1 none)
@@ -36,12 +38,18 @@ internal sealed class LayeredNotch
     // ponytail: circle is full collapsed-band height (40), flush to top, hugging the pill
     public const int CircleD = 40, CircleGap = 4, CircleY = 0;
 
+    // a live privacy dot needs real space between the pill and the swap circle (4px isn't enough), so
+    // the strip slides right by this much while mic/cam is in use, and the dot centres in the gap.
+    private const int PrivacyGap = 10;
+    public static int PrivacyPad => Widgets.Privacy.Active ? PrivacyGap : 0;
+
     private Win32.WndProc _wndProc = null!;
     private int _workLeft, _workTop, _workWidth;
 
     // global pill scale (corner-drag resize). Rendering applies it as one ScaleTransform,
     // so icons/text/clips all stay in lockstep; hit-testing scales in NotchController.
     public float Scale = 1f;
+    public float OffsetX; // horizontal shift from centre (drag-to-move); the controller owns/persists it
     public float HandleAlpha; // corner resize-handle visibility, 0..1 (controller fades it)
     private static readonly string ScalePath = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "scale");
@@ -78,6 +86,20 @@ internal sealed class LayeredNotch
     public int WorkTop => _workTop;
     public int WorkWidth => _workWidth;
 
+    // fires with the captured image when a new bitmap lands on the clipboard (PrtSc / Win+Shift+S) —
+    // Windows' own screen-snip "copied" toast never reaches UserNotificationListener (verified: not in
+    // the listener, the Notification table, or TransientTable), so the controller mirrors it from here.
+    // bool = true when it's a real screen capture (snip host owns the clipboard, or a raw PrtSc with
+    // no owner), false when a normal app just copied an image — so the banner can say which it was.
+    public event Action<Bitmap, bool>? ClipboardImage;
+    private uint _lastClipSeq;
+    private long _lastClipTick;
+
+    // snip/capture tools that own the clipboard after a shot; anyone else = a plain image copy
+    private static readonly string[] SnipHosts =
+        { "screenclippinghost", "snippingtool", "screensketch", "shellexperiencehost",
+          "greenshot", "sharex", "lightshot", "flameshot", "snagit32", "snagiteditor", "picpick" };
+
     public void Show()
     {
         var hInstance = Win32.GetModuleHandle(null);
@@ -108,10 +130,26 @@ internal sealed class LayeredNotch
             throw new InvalidOperationException($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOWNOACTIVATE);
+        // stay off screenshots / screen recordings — the pill is chrome, not content
+        Win32.SetWindowDisplayAffinity(Hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
+        Win32.AddClipboardFormatListener(Hwnd); // watch for screenshot images landing on the clipboard
+        // File Tray: register a real OLE drop target so dragging a file over the pill reveals the tray.
+        // Keep the instance alive (field) — RegisterDragDrop only holds a COM ref, GC would collect it.
+        _dropTarget = new Halo.Interop.FileDropTarget();
+        Win32.RegisterDragDrop(Hwnd, _dropTarget);
     }
+
+    private Halo.Interop.FileDropTarget? _dropTarget;
 
     public void SetVisible(bool visible)
         => Win32.ShowWindow(Hwnd, visible ? Win32.SW_SHOWNOACTIVATE : Win32.SW_HIDE);
+
+    // WS_EX_TOPMOST alone loses the top z-band to a fullscreen/exclusive app (game/movie), so a pinned
+    // pill ends up visible-but-buried — especially after autostart, where the pill exists before the app.
+    // Re-assert HWND_TOPMOST (no move/size/activate) so it actually draws over them. Called ~1×/s when pinned.
+    public void AssertTopmost()
+        => Win32.SetWindowPos(Hwnd, Win32.HWND_TOPMOST, 0, 0, 0, 0,
+            Win32.SWP_NOMOVE | Win32.SWP_NOSIZE | Win32.SWP_NOACTIVATE);
 
     // A borderless/exclusive fullscreen app (game) covers the whole primary monitor.
     public bool IsFullscreen(IntPtr fg)
@@ -234,13 +272,23 @@ internal sealed class LayeredNotch
     public void Render(int w, int h, int radius, int tintAlpha, float contentFade, float collapsedFade, bool glass,
         MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed)
     {
-        int menuX = w + CircleGap;
+        int menuX = w + CircleGap + PrivacyPad; // strip slides right to open a gap for the privacy dot
         // reserve the strip's max extent (transparent padding is free): widest fan + all rows
         int maxFan = 0;
         if (menu.Show)
             foreach (var k in menu.RowCounts) maxFan = Math.Max(maxFan, k);
         int totalW = menu.Show ? menuX + CircleD * (1 + maxFan) : w;
         int totalH = Math.Max(h, menu.Show ? Math.Max(1, menu.RowIcons.Length) * CircleD : 0);
+
+        // privacy dot(s) sit in the gap between the pill and the swap circle, on neither. Reserve
+        // width (covers the case with no strip) AND enough height for a vertical stack.
+        bool privacy = Widgets.Privacy.Active;
+        if (privacy)
+        {
+            totalW = Math.Max(totalW, w + CircleGap + PrivacyGap);
+            int nDots = (Widgets.Privacy.Mic ? 1 : 0) + (Widgets.Privacy.Cam ? 1 : 0);
+            totalH = Math.Max(totalH, (int)Math.Ceiling(DotTop + (nDots - 1) * DotStep + DotR + 2f));
+        }
 
         // resize: everything is laid out in logical units, one ScaleTransform blows it all up
         // together — icons, text, clips and the strip stay in lockstep at any size
@@ -283,11 +331,12 @@ internal sealed class LayeredNotch
             float ca = 1f - contentFade;
             if (menu.Show && ca > 0.01f && !menu.Dropping) DrawMenu(g, menuX, w, tintAlpha, glass, menu, ca);
             if (menu.Dropping) DrawDrop(g, menu, tintAlpha, w, h); // the circle itself flows in (no static circle)
+            if (privacy) DrawPrivacyDots(g, w);
         }
 
         var size = new Win32.SIZE { cx = pw, cy = ph };
         var src = new Win32.POINT { X = 0, Y = 0 };
-        var dst = new Win32.POINT { X = _workLeft + (_workWidth - (int)(w * S)) / 2, Y = _workTop };
+        var dst = new Win32.POINT { X = _workLeft + (_workWidth - (int)(w * S)) / 2 + (int)OffsetX, Y = _workTop };
         var blend = new Win32.BLENDFUNCTION
         {
             BlendOp = Win32.AC_SRC_OVER,
@@ -303,7 +352,31 @@ internal sealed class LayeredNotch
         Win32.ReleaseDC(IntPtr.Zero, screenDc);
     }
 
-    private void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass)
+    // privacy indicator: small colored dot(s) centred in the gap between the pill and the swap circle,
+    // touching neither. A THIN black outline (not a fat ring — a fat ring reads as a donut/"سوراخ"), no
+    // glow. Orange = mic live, green = camera live; the first sits high in the band, extras stack below.
+    private const float DotR = 3.3f, DotRing = 0.9f, DotStep = 8.5f, DotTop = 9f;
+    private static readonly Color MicColor = Color.FromArgb(255, 159, 10);  // orange
+    private static readonly Color CamColor = Color.FromArgb(48, 209, 88);   // green
+    private static void DrawPrivacyDots(Graphics g, int pillW)
+    {
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float cx = pillW + (CircleGap + PrivacyGap) / 2f; // centre of the pill↔circle gap
+        float y = DotTop;                                 // high in the band, not centred
+        if (Widgets.Privacy.Mic) { Dot(g, cx, y, MicColor); y += DotStep; }
+        if (Widgets.Privacy.Cam) { Dot(g, cx, y, CamColor); }
+    }
+
+    private static void Dot(Graphics g, float cx, float cy, Color c)
+    {
+        using (var kb = new SolidBrush(Color.FromArgb(230, 0, 0, 0)))   // thin dark outline
+            g.FillEllipse(kb, cx - DotR, cy - DotR, DotR * 2, DotR * 2);
+        float ri = DotR - DotRing;                                      // colored centre fills most of it
+        using var cb = new SolidBrush(c);
+        g.FillEllipse(cb, cx - ri, cy - ri, ri * 2, ri * 2);
+    }
+
+    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass)
     {
         const int ss = 2;
         using var big = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
@@ -328,7 +401,10 @@ internal sealed class LayeredNotch
             using var tint = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8));
             bg.FillPath(tint, path);
         }
-        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        // bilinear, NOT bicubic: bicubic's negative lobes undershoot at the shape's dark→transparent
+        // premultiplied edge, leaving a thin dark rim ("خط سیاه") that shows over light content behind.
+        // The 2x supersample already smooths the curve, so bilinear costs no visible sharpness.
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.DrawImage(big, new Rectangle(0, 0, w, h), new Rectangle(0, 0, w * ss, h * ss), GraphicsUnit.Pixel);
     }
@@ -337,6 +413,8 @@ internal sealed class LayeredNotch
     // black on desktop). Rendered into a temp bitmap so it fades uniformly on pill-expand.
     private void DrawMenu(Graphics g, int x, int pillW, int tintAlpha, bool glass, MenuFrame menu, float alpha)
     {
+        alpha *= menu.Appear; // soft grow-out-of-the-pill entrance (the <1 path below scales + fades)
+        if (alpha <= 0.01f) return;
         int rows = menu.RowIcons.Length;
         float openV = Math.Max(0f, menu.Open);
         float hf = CircleD + (rows - 1) * CircleD * openV;              // apps stack downward
@@ -388,7 +466,7 @@ internal sealed class LayeredNotch
             using var f = new Font("Segoe MDL2 Assets", D * 0.45f, GraphicsUnit.Pixel);
             using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
 
-            void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring)
+            void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring, float progress = -1f)
             {
                 if (ia <= 0.01f) return;
                 if (img != null)
@@ -413,14 +491,29 @@ internal sealed class LayeredNotch
                 if (ring is { } rc) // status ring hugging the icon, same style as the pill's
                 {
                     float inset = D * 0.19f - 2.5f * ss, dd = D - inset * 2;
-                    using var pen = new Pen(Color.FromArgb((int)(140 * ia), rc), 1.9f * ss);
-                    cg.DrawEllipse(pen, cx + inset, cy + inset, dd, dd);
+                    var rr = new RectangleF(cx + inset, cy + inset, dd, dd);
+                    if (progress >= 0f)
+                    {
+                        // download %: dim full track + a bright arc from 12 o'clock, clockwise
+                        cg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                        using var track = new Pen(Color.FromArgb((int)(55 * ia), rc), 1.9f * ss);
+                        cg.DrawEllipse(track, rr);
+                        if (progress > 0.001f)
+                            using (var arc = new Pen(Color.FromArgb((int)(230 * ia), rc), 2.2f * ss)
+                            { StartCap = System.Drawing.Drawing2D.LineCap.Round, EndCap = System.Drawing.Drawing2D.LineCap.Round })
+                                cg.DrawArc(arc, rr, -90f, 360f * Math.Clamp(progress, 0f, 1f));
+                    }
+                    else
+                    {
+                        using var pen = new Pen(Color.FromArgb((int)(140 * ia), rc), 1.9f * ss);
+                        cg.DrawEllipse(pen, rr);
+                    }
                 }
             }
 
             for (int i = 0; i < rows; i++)
                 Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D,
-                    Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i]);
+                    Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i], menu.RowProgress[i]);
             if (extf > 0.5f)
                 for (int j = 0; j < menu.RowCounts[or_]; j++)
                     Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,
@@ -582,11 +675,64 @@ internal sealed class LayeredNotch
         return p;
     }
 
+    // a new image on the clipboard. Dedupe: one snip can raise several updates —
+    // GetClipboardSequenceNumber only bumps on a real write (our reads don't touch it), plus an 800ms
+    // guard swallows the burst a single copy sometimes fires. Text copies (no CF_BITMAP) are ignored.
+    private void HandleClipboard()
+    {
+        uint seq = Win32.GetClipboardSequenceNumber();
+        if (seq == _lastClipSeq) return;
+        _lastClipSeq = seq;
+        long now = Environment.TickCount64;
+        if (now - _lastClipTick < 800) return;
+        if (!Win32.IsClipboardFormatAvailable(Win32.CF_BITMAP)) return;
+        bool shot = OwnerIsCapture(); // read the owner BEFORE OpenClipboard (which would make US the owner)
+        var bmp = ReadClipboardBitmap();
+        if (bmp != null) { _lastClipTick = now; ClipboardImage?.Invoke(bmp, shot); }
+    }
+
+    // screen capture vs plain image copy: a snip host (or a raw PrtSc with no owner) → capture;
+    // any real app owning the clipboard (chrome, an image editor, …) → a copy
+    private static bool OwnerIsCapture()
+    {
+        try
+        {
+            IntPtr owner = Win32.GetClipboardOwner();
+            if (owner == IntPtr.Zero) return true; // PrtSc full-screen leaves no window owner
+            Win32.GetWindowThreadProcessId(owner, out uint pid);
+            if (pid == 0) return true;
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            string pn = p.ProcessName.ToLowerInvariant();
+            foreach (var s in SnipHosts) if (pn.Contains(s)) return true;
+            return false;
+        }
+        catch { return true; } // unsure → default to "Screenshot" (the historical behaviour)
+    }
+
+    private Bitmap? ReadClipboardBitmap()
+    {
+        if (!Win32.OpenClipboard(Hwnd)) return null; // another app holds it → skip; the next copy retries
+        try
+        {
+            IntPtr h = Win32.GetClipboardData(Win32.CF_BITMAP); // clipboard owns this HBITMAP — don't delete
+            if (h == IntPtr.Zero) return null;
+            using var tmp = Image.FromHbitmap(h);
+            return new Bitmap(tmp);
+        }
+        catch { return null; }
+        finally { Win32.CloseClipboard(); }
+    }
+
     private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg == Win32.WM_DESTROY)
         {
             Win32.PostQuitMessage(0);
+            return IntPtr.Zero;
+        }
+        if (msg == Win32.WM_CLIPBOARDUPDATE)
+        {
+            HandleClipboard();
             return IntPtr.Zero;
         }
         if (msg is Win32.WM_DISPLAYCHANGE or Win32.WM_SETTINGCHANGE)

@@ -94,6 +94,10 @@ internal static class Program
                     break;
                 case "tool-done":
                     status["state"] = "working";
+                    // tool finished → clear the label so the ring + verb flip to thinking (yellow) between
+                    // tool calls, not just at turn start. (Was kept to avoid flicker, but the user wants
+                    // "thinking" to read yellow; the next tool sets it green again.)
+                    status["currentTool"] = null;
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":

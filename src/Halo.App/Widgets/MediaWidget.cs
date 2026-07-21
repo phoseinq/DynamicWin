@@ -20,12 +20,18 @@ internal sealed class MediaWidget : IWidget
     private static readonly Color Track = Color.FromArgb(46, 255, 255, 255);
 
     private readonly object _lock = new();
-    private GlobalSystemMediaTransportControlsSessionManager? _mgr;
+    private readonly MediaSessions _sessions;
+    private readonly int _slot;
     private GlobalSystemMediaTransportControlsSession? _session;
 
     // snapshot (guarded by _lock)
     private string? _title, _artist, _trackKey, _appId;
-    private bool _playing;
+    private bool _playing, _isVideo; // video → transport shows seek ±10s instead of prev/next
+    private double _rate = 1.0;      // current playback rate (read from SMTC, driven by the Speed chip)
+    private bool _thumbWide;         // 16:9-ish thumbnail = a video frame (album art is square)
+    // playback status: only Playing/Paused count as a live player. Browsers keep Stopped/Closed sessions
+    // around with stale metadata after a video ends — those must NOT hold the pill open (blank black pill).
+    private GlobalSystemMediaTransportControlsSessionPlaybackStatus _status;
     private byte[]? _thumb;
     private TimeSpan _pos, _end;
     private DateTime _posAt;
@@ -36,11 +42,31 @@ internal sealed class MediaWidget : IWidget
     private Bitmap? _art;
     private Color _accent = White;
 
-    public MediaWidget() => _ = InitAsync();
+    public MediaWidget(MediaSessions sessions, int slot)
+    {
+        _sessions = sessions;
+        _slot = slot;
+        _sessions.Changed += Resync; // slots reassigned → re-point this widget at its slot's session
+        Resync();
+    }
+
+    // the process name of the app this slot mirrors (e.g. "spotify", "chrome") — for the focus-hide rule
+    public string App => _sessions.SlotApp(_slot);
 
     public string Icon => "\uE768"; // Segoe MDL2 Play — ponytail: glyph, not album art (menu draws glyphs only)
 
-    public bool IsActive { get { lock (_lock) { return _title != null; } } }
+    public bool IsActive
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _title != null
+                    && (_status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing
+                     || _status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused);
+            }
+        }
+    }
     public int Version { get { lock (_lock) { return _version; } } }
 
     // circle / dropdown = the real app icon (Spotify, Chrome, VLC...), falling back to album art
@@ -72,25 +98,22 @@ internal sealed class MediaWidget : IWidget
         }
     }
 
-    private async Task InitAsync()
-    {
-        try
-        {
-            _mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-            _mgr.CurrentSessionChanged += (_, __) => HookCurrent();
-            HookCurrent();
-        }
-        catch { }
-    }
+    // our slot's session changed (a player appeared/closed, or slots reassigned) → re-point at it
+    private void Resync() => Hook(_sessions.Session(_slot));
 
-    // ponytail: old sessions keep their handlers until GC drops them; a change is rare, so no unhook
-    private void HookCurrent()
+    // ponytail: old sessions keep their handlers until GC drops them; switches are rare, so no unhook.
+    // skips re-hooking when the slot's app is the one already showing (avoids churn on every Changed).
+    private void Hook(GlobalSystemMediaTransportControlsSession? s)
     {
+        string? newId = s?.SourceAppUserModelId;
+        lock (_lock)
+        {
+            if (s != null && _session != null && newId == _appId) return;
+            _session = s; _appId = newId;
+        }
+        if (s == null) { Clear(); return; }
         try
         {
-            var s = _mgr?.GetCurrentSession();
-            lock (_lock) { _session = s; _appId = s?.SourceAppUserModelId; }
-            if (s == null) { Clear(); return; }
             s.MediaPropertiesChanged += (_, __) => RefreshProps(s);
             s.PlaybackInfoChanged += (_, __) => RefreshPlayback(s);
             s.TimelinePropertiesChanged += (_, __) => RefreshTimeline(s);
@@ -106,20 +129,42 @@ internal sealed class MediaWidget : IWidget
         try
         {
             var props = await s.TryGetMediaPropertiesAsync();
-            string title = props.Title ?? "";
-            string artist = props.Artist ?? "";
+            string title = Fx.CleanText(props.Title);   // fold 𝗳𝗮𝗻𝗰𝘆/decorative Unicode so it isn't tofu boxes
+            string artist = Fx.CleanText(props.Artist);
             string key = title + "" + artist;
             byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
+            bool wide = ThumbIsWide(thumb); // decode dims off-lock (small image, track-change only)
+            bool trackChanged;
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return; // stale session
-                bool trackChanged = key != _trackKey;
+                trackChanged = key != _trackKey;
                 _title = title.Length > 0 ? title : (artist.Length > 0 ? artist : null);
                 _artist = artist;
                 _trackKey = key;
-                if (thumb != null || trackChanged) _thumb = thumb;
+                if (thumb != null || trackChanged) { _thumb = thumb; _thumbWide = wide; }
+                // new track: the timeline still holds the OLD track's position (e.g. 1:53 against a
+                // shorter new duration → bar pinned at the end until the real event lands). Zero it and
+                // bump the epoch so the bar restarts from 0 instead of gliding back from the end.
+                if (trackChanged) { _pos = TimeSpan.Zero; _end = TimeSpan.Zero; _posAt = DateTime.UtcNow; _trackEpoch++; }
                 _version++;
             }
+            if (trackChanged) DebugLog(title);
+        }
+        catch { }
+    }
+
+    // ponytail: one line per track change to learn what real players report (VLC's app id in particular,
+    // so we can wire its subtitle/PiP hotkey). Trim once VLC support is confirmed.
+    private void DebugLog(string title)
+    {
+        try
+        {
+            string app = App, id; bool video; lock (_lock) { id = _appId ?? ""; video = _isVideo; }
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "Halo", "media-debug.txt"),
+                $"{DateTime.Now:HH:mm:ss} app='{app}' aumid='{id}' video={video} title='{title}'\r\n");
         }
         catch { }
     }
@@ -132,7 +177,10 @@ internal sealed class MediaWidget : IWidget
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return;
+                _status = info.PlaybackStatus;
                 _playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                _isVideo = info.PlaybackType == Windows.Media.MediaPlaybackType.Video;
+                if (info.PlaybackRate is double pr && pr > 0) _rate = pr; // reflect the app's real rate
                 _version++;
             }
         }
@@ -160,6 +208,7 @@ internal sealed class MediaWidget : IWidget
     {
         lock (_lock)
         {
+            _status = GlobalSystemMediaTransportControlsSessionPlaybackStatus.Closed;
             if (_title == null) return;
             _title = _artist = _trackKey = null;
             _thumb = null;
@@ -188,6 +237,21 @@ internal sealed class MediaWidget : IWidget
     private void Toggle() { var s = Cur(); if (s != null) _ = s.TryTogglePlayPauseAsync(); }
     private void Prev() { var s = Cur(); if (s != null) _ = s.TrySkipPreviousAsync(); }
     private void Next() { var s = Cur(); if (s != null) _ = s.TrySkipNextAsync(); }
+    private void Stop() { var s = Cur(); if (s != null) _ = s.TryStopAsync(); }
+
+    // video ±10s: seek relative to the (extrapolated) current position, clamped to [0, end]
+    private void SeekBy(int secs)
+    {
+        var s = Cur();
+        TimeSpan pos, end; bool playing; DateTime at;
+        lock (_lock) { pos = _pos; end = _end; playing = _playing; at = _posAt; }
+        if (s == null) return;
+        var cur = playing ? pos + (DateTime.UtcNow - at) : pos;
+        var target = cur + TimeSpan.FromSeconds(secs);
+        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+        if (end > TimeSpan.Zero && target > end) target = end;
+        try { _ = s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
+    }
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
     private void Mute() { _meter.ToggleMute(); Bump(); }
     private void Bump() { lock (_lock) { _version++; } }
@@ -203,33 +267,168 @@ internal sealed class MediaWidget : IWidget
     private static (RectangleF bar, RectangleF mute) VolLayout(int w) => (new RectangleF(62, 178, 96, 20), new RectangleF(24, 172, 32, 32));
     private static RectangleF SeekRect(int w) { float tx = 180; return new RectangleF(tx, 108, w - tx - 26, 18); }
 
+    private enum Btn { Prev, Play, Next, Back10, Fwd10, Cc, Speed }
+
+    // playback-rate presets the Speed chip cycles through (wraps 2x → 1x).
+    private static readonly double[] Rates = { 1.0, 1.25, 1.5, 1.75, 2.0 };
+
+    // transport row: music = prev/play/next; video = ±10s seek / play-pause + a speed chip, plus CC
+    // only when the app has a known hotkey (no dead buttons). No Stop, no PiP (user removed both).
+    private Btn[] Layout()
+    {
+        var app = App;
+        if (!IsVideo()) return new[] { Btn.Prev, Btn.Play, Btn.Next };
+        var l = new List<Btn> { Btn.Back10, Btn.Play, Btn.Fwd10, Btn.Speed };
+        if (SubtitleKey(app) != 0) l.Add(Btn.Cc);
+        return l.ToArray();
+    }
+
+    // cycle to the next-higher preset (wrap to 1x past the top) and ask the session to change rate.
+    // SMTC's TryChangePlaybackRateAsync is honoured by Films&TV / WMP / most Store players and modern
+    // browsers; an app that ignores it just keeps 1x (honest no-op, not a crash).
+    private void CycleSpeed()
+    {
+        var s = Cur();
+        if (s == null) return;
+        double cur; lock (_lock) { cur = _rate; }
+        double next = Rates[0];
+        foreach (var r in Rates) if (r > cur + 0.01) { next = r; break; }
+        lock (_lock) { _rate = next; }
+        try { _ = s.TryChangePlaybackRateAsync(next); } catch { }
+        Bump();
+    }
+
+    private static string RateText(double r) =>
+        (r % 1 == 0 ? ((int)r).ToString() : r.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)) + "×";
+
+    // several signals, any one wins — players lie about PlaybackType constantly:
+    //  • PlaybackType=Video (honest apps)
+    //  • known video-player app (mpc/mpv/potplayer/…)
+    //  • video filename in the title (local files in WMP/players)
+    //  • a WIDE thumbnail — video frames are 16:9, album art is square (catches Media Player + browsers)
+    //  • a browser session with no artist or no duration — live/sports streams, not music
+    private bool IsVideo()
+    {
+        bool video, wide; string? title, artist; TimeSpan end;
+        lock (_lock) { video = _isVideo; wide = _thumbWide; title = _title; artist = _artist; end = _end; }
+        return video || wide || IsVideoApp(App) || HasVideoExt(title)
+            || (IsBrowser(App) && (string.IsNullOrEmpty(artist) || end <= TimeSpan.Zero));
+    }
+
+    private static bool ThumbIsWide(byte[]? thumb)
+    {
+        if (thumb == null || thumb.Length == 0) return false;
+        try
+        {
+            using var ms = new MemoryStream(thumb);
+            using var img = Image.FromStream(ms, useEmbeddedColorManagement: false, validateImageData: false);
+            return img.Height > 0 && img.Width >= img.Height * 1.4f;
+        }
+        catch { return false; }
+    }
+
+    private static bool IsVideoApp(string app) =>
+        app.Contains("vlc") || app.Contains("mpc") || app.Contains("mpv") || app.Contains("potplayer")
+        || app.Contains("wmplayer") || app.Contains("kmplayer") || app.Contains("gom")
+        || app.Contains("smplayer") || app.Contains("video.ui") || app.Contains("media.player");
+
+    private static readonly string[] VideoExt =
+        { ".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".flv", ".wmv", ".mpg", ".mpeg", ".ts", ".3gp", ".ogv" };
+    private static bool HasVideoExt(string? title)
+    {
+        if (string.IsNullOrEmpty(title)) return false;
+        var t = title.ToLowerInvariant();
+        foreach (var e in VideoExt) if (t.Contains(e)) return true;
+        return false;
+    }
+
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
-        var r = BtnRects(w, h);
         var (vbar, mute) = VolLayout(w);
         var seek = SeekRect(w);
-        return new (RectangleF, Action<PointF>)[]
+        var list = new List<(RectangleF, Action<PointF>)>
         {
             (seek, pt => Seek((pt.X - seek.X) / seek.Width)),
             (vbar, pt => SetVol((pt.X - vbar.X) / vbar.Width)),
             (mute, _ => Mute()),
-            (r[0], _ => Prev()),
-            (r[1], _ => Toggle()),
-            (r[2], _ => Next()),
         };
+        var layout = Layout();
+        var r = BtnRects(w, h, layout.Length);
+        for (int i = 0; i < layout.Length; i++)
+        {
+            Action act = layout[i] switch
+            {
+                Btn.Prev => Prev,
+                Btn.Next => Next,
+                Btn.Back10 => () => SeekBy(-10),
+                Btn.Fwd10 => () => SeekBy(10),
+                Btn.Speed => CycleSpeed,
+                Btn.Cc => () => SendHotkey(SubtitleKey(App)),
+                _ => Toggle,
+            };
+            list.Add((r[i], _ => act()));
+        }
+        return list;
     }
 
-    private static RectangleF[] BtnRects(int w, int h)
+    private static bool IsBrowser(string app) =>
+        app.Contains("chrome") || app.Contains("msedge") || app.Contains("edge") || app.Contains("firefox")
+        || app.Contains("brave") || app.Contains("opera") || app.Contains("vivaldi");
+
+    // best-effort per-app hotkey (needs the player focused). unknown app → 0 = no button.
+    private static byte SubtitleKey(string app) =>
+        app.Contains("vlc") || app.Contains("mpv") ? (byte)'V' : IsBrowser(app) ? (byte)'C' : (byte)0;
+
+    // focus the player's window, then inject the key (KeyInject verifies focus before typing).
+    // ponytail: fragile by nature (right app/tab must be up) — user accepted it.
+    private void SendHotkey(byte vk)
+    {
+        if (vk == 0) return;
+        string? title; lock (_lock) { title = _title; }
+        KeyInject.Send(PlayerWindow(App, title), vk);
+    }
+
+    // window of the slot's app; PREFER the one whose title contains the playing media's title —
+    // browsers have many windows, and the key must land in the one with the video ("کار نمیده" root)
+    private static IntPtr PlayerWindow(string app, string? mediaTitle)
+    {
+        if (app.Length == 0) return IntPtr.Zero;
+        string hint = (mediaTitle ?? "").Trim();
+        if (hint.Length > 24) hint = hint[..24];
+        IntPtr first = IntPtr.Zero, matched = IntPtr.Zero;
+        var buf = new System.Text.StringBuilder(512);
+        Halo.Interop.Win32.EnumWindows((h, _) =>
+        {
+            if (!Halo.Interop.Win32.IsWindowVisible(h) || Halo.Interop.Win32.GetWindowTextLengthW(h) == 0) return true;
+            try
+            {
+                Halo.Interop.Win32.GetWindowThreadProcessId(h, out uint pid);
+                using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+                string pn = p.ProcessName.ToLowerInvariant();
+                if (pn != app && !pn.Contains(app) && !app.Contains(pn)) return true;
+                if (first == IntPtr.Zero) first = h;
+                if (hint.Length >= 4)
+                {
+                    buf.Clear();
+                    Halo.Interop.Win32.GetWindowTextW(h, buf, buf.Capacity);
+                    if (buf.ToString().Contains(hint, StringComparison.OrdinalIgnoreCase)) { matched = h; return false; }
+                }
+                else return false; // no hint → first window wins (old behaviour)
+            }
+            catch { }
+            return true;
+        }, IntPtr.Zero);
+        return matched != IntPtr.Zero ? matched : first;
+    }
+
+    private static RectangleF[] BtnRects(int w, int h, int n)
     {
         const float artX = 26, artSize = 132, size = 40, gap = 18;
         float colL = artX + artSize + 22, colR = w - 26;
-        float cx = (colL + colR) / 2f, total = 3 * size + 2 * gap, x0 = cx - total / 2f, y = 158;
-        return new[]
-        {
-            new RectangleF(x0, y, size, size),
-            new RectangleF(x0 + size + gap, y, size, size),
-            new RectangleF(x0 + 2 * (size + gap), y, size, size),
-        };
+        float cx = (colL + colR) / 2f, total = n * size + (n - 1) * gap, x0 = cx - total / 2f, y = 158;
+        var r = new RectangleF[n];
+        for (int i = 0; i < n; i++) r[i] = new RectangleF(x0 + i * (size + gap), y, size, size);
+        return r;
     }
 
     public void DrawContent(Graphics g, int w, int h, float fade)
@@ -259,12 +458,17 @@ internal sealed class MediaWidget : IWidget
             using (var ab = new SolidBrush(Mul(Dim, fade)))
                 DrawLine(g, artist, bodyF, ab, tx, 66, tw);
 
-        // seek bar (extrapolate while playing so it advances between events)
+        // seek bar (extrapolate while playing so it advances between events); the SHOWN fraction eases
+        // toward the real one so seeks/track-changes glide instead of snapping ("نرم")
         var now = playing ? pos + (DateTime.UtcNow - posAt) : pos;
-        double frac = end > TimeSpan.Zero ? Math.Clamp(now / end, 0, 1) : 0;
+        float frac = end > TimeSpan.Zero ? (float)Math.Clamp(now / end, 0, 1) : 0f;
+        int epoch; lock (_lock) epoch = _trackEpoch;
+        if (epoch != _shownEpoch) { _shownEpoch = epoch; _fracShown = frac; } // new track: snap to 0:00
+        _fracShown = _fracShown < 0 ? frac : _fracShown + (frac - _fracShown) * 0.18f;
+        if (Math.Abs(frac - _fracShown) < 0.002f) _fracShown = frac;
         float by = 116, bh = 5;
         Fill(g, tx, by, tw, bh, Mul(Track, fade));
-        if (frac > 0) Fill(g, tx, by, (float)(tw * frac), bh, Mul(White, fade));
+        if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(White, fade));
         if (end > TimeSpan.Zero)
         {
             using var eb = new SolidBrush(Mul(Dim, fade));
@@ -273,10 +477,14 @@ internal sealed class MediaWidget : IWidget
             g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, by + 8);
         }
 
-        // volume (left column, under the art): soft glass mute chip + a bar that breathes on hover
+        // volume (left column, under the art): soft glass mute chip + a bar that breathes on hover;
+        // shown level eases toward the real one so click-to-set glides
         var (vbar, mute) = VolLayout(w);
         bool muted = _meter.Muted();
-        float vol = muted ? 0f : _meter.Volume();
+        float volNow = muted ? 0f : _meter.Volume();
+        _volShown = _volShown < 0 ? volNow : _volShown + (volNow - _volShown) * 0.30f;
+        if (Math.Abs(volNow - _volShown) < 0.004f) _volShown = volNow;
+        float vol = _volShown;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var volHit = RectangleF.Union(vbar, mute); volHit.Inflate(4f, 6f);
         bool vHov = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
@@ -295,9 +503,10 @@ internal sealed class MediaWidget : IWidget
 
         // transport = glass chips; a small eased grow + brighten on hover (frames ride the
         // mouse-move redraws while the cursor is over the open panel)
-        var rects = BtnRects(w, h);
+        var layout = Layout();
+        var rects = BtnRects(w, h, layout.Length);
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < layout.Length; i++)
         {
             var r = rects[i];
             var hit = r; hit.Inflate(4f, 4f);
@@ -306,18 +515,45 @@ internal sealed class MediaWidget : IWidget
             if (Math.Abs((hov ? 1f : 0f) - _btnHover[i]) < 0.03f) _btnHover[i] = hov ? 1f : 0f; // settle
             float t = _btnHover[i], sc = 1f + 0.09f * t, d = r.Width * sc;
             var rr = new RectangleF(r.X + (r.Width - d) / 2f, r.Y + (r.Height - d) / 2f, d, d);
-            using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(15 + 19 * t), 255, 255, 255), fade)))
-                g.FillEllipse(fb, rr);
-            using (var pen = new Pen(Mul(Color.FromArgb((int)(34 + 30 * t), 255, 255, 255), fade), 1f))
-                g.DrawEllipse(pen, rr);
-            string glyph = i == 0 ? "\uE892" : i == 1 ? (playing ? "\uE769" : "\uE768") : "\uE893";
-            DrawGlyphSoft(g, rr, glyph, (i == 1 ? 22f : 17f) * sc, fade * (0.8f + 0.2f * t),
-                i == 1 && !playing ? 1.5f : 0f); // play triangle: optical nudge toward its centroid
+            var kind = layout[i];
+            bool bare = kind == Btn.Cc; // toggle = bare mark, no glass chip around it
+            if (!bare)
+            {
+                using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(15 + 19 * t), 255, 255, 255), fade)))
+                    g.FillEllipse(fb, rr);
+                using (var pen = new Pen(Mul(Color.FromArgb((int)(34 + 30 * t), 255, 255, 255), fade), 1f))
+                    g.DrawEllipse(pen, rr);
+            }
+            float a = fade * (0.8f + 0.2f * t);
+            if (kind == Btn.Cc) { Fx.DrawCcMark(g, rr, a); continue; }
+            if (kind == Btn.Back10) { Fx.DrawSeekArrow(g, rr, forward: false, a); continue; }
+            if (kind == Btn.Fwd10) { Fx.DrawSeekArrow(g, rr, forward: true, a); continue; }
+            if (kind == Btn.Speed) { double rate; lock (_lock) { rate = _rate; } DrawRateLabel(g, rr, rate, a); continue; }
+            bool isPlay = kind == Btn.Play;
+            string glyph = isPlay ? Glyph(playing ? 0xE769 : 0xE768)
+                : kind == Btn.Prev ? Glyph(0xE892) : Glyph(0xE893);
+            DrawGlyphSoft(g, rr, glyph, (isPlay ? 22f : 17f) * sc, a, isPlay && !playing ? 1.5f : 0f);
         }
     }
 
-    private readonly float[] _btnHover = new float[3];
+    private static string Glyph(int codepoint) => ((char)codepoint).ToString();
+
+    // the Speed chip's label ("1×", "1.5×", "2×") centred in the chip — smaller type so "1.25×" fits.
+    private void DrawRateLabel(Graphics g, RectangleF r, double rate, float fade)
+    {
+        string t = RateText(rate);
+        float px = r.Height * (t.Length >= 5 ? 0.26f : 0.32f);
+        using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(Mul(White, fade * 0.92f));
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(t, f, b, r, sf);
+    }
+
+    private readonly float[] _btnHover = new float[8];
     private float _volHover;
+    private float _volShown = -1f, _fracShown = -1f; // eased displayed values (smooth bars)
+    private int _trackEpoch, _shownEpoch;            // bumped per track change → seek bar snaps, no glide
 
     private static readonly FontFamily FluentFamily = new("Segoe Fluent Icons");
 
@@ -345,27 +581,13 @@ internal sealed class MediaWidget : IWidget
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
     {
         using var path = Rounded(new RectangleF(x, y, size, size), radius);
-        if (_art != null)
+        // album art if the track has any; otherwise the source app's icon (podcasts, some videos and
+        // radio streams ship no thumbnail \u2014 the app icon reads far better than a generic music glyph)
+        Bitmap? img = _art;
+        if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForAumid(id); }
+        if (img != null)
         {
-            // HQ-scale the (often small) thumbnail to a square, then fill the rounded path with it
-            // as a texture so the corners are anti-aliased (SetClip gives jagged, "dirty" edges).
-            int s = Math.Max(1, (int)Math.Ceiling(size));
-            using var scaled = new Bitmap(s, s, PixelFormat.Format32bppPArgb);
-            using (var sg = Graphics.FromImage(scaled))
-            {
-                sg.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                sg.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                sg.SmoothingMode = SmoothingMode.HighQuality;
-                using var ia = new ImageAttributes();
-                ia.SetWrapMode(WrapMode.TileFlipXY);            // no edge fringe
-                ia.SetColorMatrix(new ColorMatrix { Matrix33 = fade });
-                int side = Math.Min(_art.Width, _art.Height);   // cover-fit to a centered square
-                sg.DrawImage(_art, new Rectangle(0, 0, s, s),
-                    (_art.Width - side) / 2, (_art.Height - side) / 2, side, side, GraphicsUnit.Pixel, ia);
-            }
-            using var tb = new TextureBrush(scaled) { WrapMode = WrapMode.Clamp };
-            tb.TranslateTransform(x, y);
-            g.FillPath(tb, path);
+            CoverFill(g, img, x, y, size, path, fade);
         }
         else
         {
@@ -375,7 +597,48 @@ internal sealed class MediaWidget : IWidget
         }
     }
 
+    // HQ-scale a (often small) image cover-fit to a square, then fill the rounded path with it as a
+    // texture so the corners are anti-aliased (SetClip gives jagged, "dirty" edges).
+    private static void CoverFill(Graphics g, Bitmap img, float x, float y, float size, GraphicsPath path, float fade)
+    {
+        int s = Math.Max(1, (int)Math.Ceiling(size));
+        using var scaled = new Bitmap(s, s, PixelFormat.Format32bppPArgb);
+        using (var sg = Graphics.FromImage(scaled))
+        {
+            sg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            sg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            sg.SmoothingMode = SmoothingMode.HighQuality;
+            using var ia = new ImageAttributes();
+            ia.SetWrapMode(WrapMode.TileFlipXY);            // no edge fringe
+            ia.SetColorMatrix(new ColorMatrix { Matrix33 = fade });
+            int side = Math.Min(img.Width, img.Height);     // cover-fit to a centered square
+            sg.DrawImage(img, new Rectangle(0, 0, s, s),
+                (img.Width - side) / 2, (img.Height - side) / 2, side, side, GraphicsUnit.Pixel, ia);
+        }
+        using var tb = new TextureBrush(scaled) { WrapMode = WrapMode.Clamp };
+        tb.TranslateTransform(x, y);
+        g.FillPath(tb, path);
+    }
+
     public bool Animating { get { lock (_lock) { return _title != null && _playing; } } }
+
+    // ring around the collapsed album-art circle = playback position (like the download %). Only when a
+    // real duration exists (live streams have none → no ring). Extrapolated each frame so it glides.
+    public Color? Ring
+    {
+        get { lock (_lock) return _title != null && _end > TimeSpan.Zero ? _accent : (Color?)null; }
+    }
+    public float RingProgress
+    {
+        get
+        {
+            TimeSpan pos, end; bool playing; DateTime at; string? t;
+            lock (_lock) { pos = _pos; end = _end; playing = _playing; at = _posAt; t = _title; }
+            if (t == null || end <= TimeSpan.Zero) return -1f;
+            var now = playing ? pos + (DateTime.UtcNow - at) : pos;
+            return (float)Math.Clamp(now / end, 0, 1);
+        }
+    }
 
     // Collapsed pill = album art on the left + an audio equalizer on the right (Dynamic-Island style).
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
@@ -395,23 +658,38 @@ internal sealed class MediaWidget : IWidget
     private readonly float[] _eq = new float[EqBars];
     private float _amp;
 
-    // iOS Dynamic-Island waveform: many thin rounded bars, center-weighted (tall middle, dots at
-    // the edges), driven by the real output level, tinted from the art.
+    // Same visual style, REAL tone: each bar is its own frequency band (bass → treble, left → right)
+    // from a WASAPI-loopback FFT — the bars follow what the music actually does. If capture isn't
+    // available (rare), falls back to the old peak-driven animation so the pill never looks dead.
     private void DrawEqualizer(Graphics g, float rightX, float cy, float fade, bool playing)
     {
-        float peak = playing ? _meter.Peak() : 0f;
-        _amp += (Math.Clamp((float)Math.Sqrt(peak) * 1.4f, 0f, 1f) - _amp) * 0.22f; // smoothed level
         const float barW = 2.6f, gap = 2.6f, maxH = 22f, minH = 2.6f;
-        double t = Environment.TickCount / 1000.0;
         float totalW = EqBars * barW + (EqBars - 1) * gap;
         float x0 = rightX - totalW;
+
+        float[]? bands = playing ? AudioSpectrum.Bands() : null;
+        bool live = bands != null && AudioSpectrum.Available;
+        float peak = playing ? _meter.Peak() : 0f;
+        _amp += (Math.Clamp((float)Math.Sqrt(peak) * 1.4f, 0f, 1f) - _amp) * 0.22f;
+        double t = Environment.TickCount / 1000.0;
+
         for (int i = 0; i < EqBars; i++)
         {
-            // center-weight envelope makes it read as a waveform blob, not a flat spectrum
-            float env = 0.25f + 0.75f * (float)Math.Sin(Math.PI * (i + 0.5) / EqBars);
-            float phase = 0.5f + 0.5f * (float)Math.Sin(t * (1.7 + i * 0.4) + i * 1.9);
-            float target = minH + (maxH - minH) * _amp * env * (0.35f + 0.65f * phase);
-            _eq[i] += (target - _eq[i]) * (target > _eq[i] ? 0.28f : 0.10f); // gentle rise, slow fall
+            float target;
+            if (live)
+            {
+                target = minH + (maxH - minH) * bands![i];
+            }
+            else
+            {
+                // fallback: old center-weighted peak animation
+                float env = 0.25f + 0.75f * (float)Math.Sin(Math.PI * (i + 0.5) / EqBars);
+                float phase = 0.5f + 0.5f * (float)Math.Sin(t * (1.7 + i * 0.4) + i * 1.9);
+                target = minH + (maxH - minH) * _amp * env * (0.35f + 0.65f * phase);
+            }
+            // live bands are already smoothed in the analyzer — follow them fast or shouts get flattened
+            float rise = live ? 0.80f : 0.35f, fall = live ? 0.32f : 0.12f;
+            _eq[i] += (target - _eq[i]) * (target > _eq[i] ? rise : fall);
             float bh = Math.Max(minH, _eq[i]);
             Color col = playing ? PaletteAt((float)i / (EqBars - 1)) : Color.FromArgb(120, 255, 255, 255);
             Fill(g, x0 + i * (barW + gap), cy - bh / 2f, barW, bh, Mul(col, fade));

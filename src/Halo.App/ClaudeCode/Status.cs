@@ -144,7 +144,14 @@ internal sealed class StatusStore
         _watcher.Created += (_, _) => Load();
         _watcher.Deleted += (_, _) => Load();
         _watcher.Renamed += (_, _) => Load();
+
+        // FileSystemWatcher silently drops events under bursty writes (a busy turn writes many status
+        // updates/sec), leaving the widget frozen on a stale snapshot ("asking you" stuck after you
+        // answered). A 1s poll is the safety net; the watcher stays the instant fast-path.
+        _poll = new System.Threading.Timer(_ => Load(), null, 1000, 1000);
     }
+
+    private readonly System.Threading.Timer? _poll;
 
     private static bool IsLiveStatus(CcStatus? status, Func<int, DateTimeOffset?> processStartedAt, DateTimeOffset now)
     {
@@ -204,8 +211,10 @@ internal sealed class StatusStore
         return process.HasExited ? null : new DateTimeOffset(process.StartTime);
     }
 
+    private readonly object _loadGate = new(); // watcher thread + 1s poll can both fire Load()
     private void Load()
     {
+        lock (_loadGate)
         try
         {
             var dir = Path.GetDirectoryName(_path)!;

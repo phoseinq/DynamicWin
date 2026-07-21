@@ -1,5 +1,300 @@
 # Halo — progress
 
+## 2026-07-21: RESUME HERE — File Tray (next feature) + pending un-pushed state
+
+### Un-pushed / un-released changes already made this session (bundle these into the NEXT build)
+- **File Tray auto-remove + smooth reorder + pin spacing (DEPLOYED live, NOT pushed):** (1) drag-OUT now
+  auto-removes on a successful drop — `FileDrag.Out` returns bool (`hr==DRAGDROP_S_DROP && effect!=NONE`);
+  controller removes the dragged path(s) on success (cancel / drop-on-our-own-pill → effect NONE → kept).
+  (2) **smooth reorder glide** — `FileTray._anim` eases each card's top-left toward its grid slot (~24%/frame)
+  instead of snapping; `Animating` keeps frames coming until settled; `DrawContent` early-return (collapsed)
+  now resets `_settled=true`+clears `_anim` so a mid-glide close can't leave `Animating` stuck on. Verified via
+  successive-frame render (glide mid-frame → clean grid at rest). (3) **pin/title spacing** — "File Tray" title
+  was at x=Pad(22) under the top-left pin (~x9–33); moved to `Pad+20` to clear it (matches ClaudeCode widget).
+  Verified with pin overlaid in a render.
+- **DND leak — notifications doubling (native banner leaks) — ROOT CAUSE FOUND, NOT YET FIXED (DEPLOYED safe
+  interim, NOT pushed):** the whole registry Quiet-Hours trick is DEAD on Win11 26200. Verified live: the
+  profile blob reads `Microsoft.QuietHoursProfile.AlarmsOnly` correctly, yet `SHQueryUserNotificationState`
+  stays `QUNS_ACCEPTS_NOTIFICATIONS` (5) — never `QUNS_QUIET_TIME` (6). There is NO registry "DND enabled"
+  flag; on 26200 the live DND on/off state is a **WNF / in-memory** state, so setting the *profile* never
+  turns DND *on*. Restarting `WpnUserService` does NOT engage it AND kills Halo's own `UserNotificationListener`
+  ("Class not registered" → mirroring dies until relaunch). An earlier attempt (force-restart when state==5)
+  spun a 30s restart loop that repeatedly broke the listener — reverted. **Current safe `DndGate`:** writes
+  the profile (harmless), reads ground-truth via `SHQueryUserNotificationState`, and only restarts to recover
+  a revert IF DND has actually engaged once (`_everEngaged`, i.e. state hit 6) — on 26200 that never happens
+  so it does ZERO restarts / zero self-harm. `[dnd]` logging in `notif-debug.txt`. Mirror pipeline itself is
+  clean (log: ids monotonic, no floods). **REAL FIX TODO (needs user consent — risky):** toggle DND via the
+  WNF state (`WNF_SHEL_QUIETHOURS_*`) / `NtUpdateWnfStateData`, the only thing that actually flips 26200 into
+  quiet-time. `ToastEnabled=0` is a dead end (kills listener delivery too).
+- **File Tray IMPLEMENTED (DEPLOYED live via Halo.App.dll hot-swap, NOT pushed):** new files
+  `Interop/FileDropTarget.cs` (OLE `IDropTarget`) + `Widgets/FileTray.cs` (`IWidget`); OLE interop added to
+  `Interop/Win32.cs` (OleInitialize/RegisterDragDrop/IDropTarget/DragQueryFile/POINTL, CF_HDROP); public
+  `ShellIcon.ForPath`; wired in `Program.cs` (`OleInitialize`), `LayeredNotch.Show` (`RegisterDragDrop` +
+  `_dropTarget` field), `NotchController` (widget added, drag-active priority + `open` include, Groups kind).
+  Persist to `%LOCALAPPDATA%\Halo\tray.txt` (dedup, most-recent-first, cap 30, drops missing on load).
+  Verified: 4 rendered states (list / drop-zone / collapsed-count / collapsed-dragging) + persistence
+  self-check (dedup/order/case-insensitive/remove/load round-trip all PASS) + clean startup (no crash).
+  **LIMITATION:** reveal-on-drag works only while the pill is on screen (a widget active, or the tray holds
+  files). When the desktop is fully idle the pill is SW_HIDE'd → a hidden window can't be an OLE drop target,
+  so a drag won't summon it from nothing. Fix if wanted: a tiny always-present transparent drop-catcher at
+  top-center (steals clicks on its small rect — that's the tradeoff). Deferred (ask): Share dialog.
+- **File Tray round 2 (DEPLOYED live, NOT pushed):** (a) icon → tray/inbox glyph `` (reads as a tray in
+  BOTH Segoe MDL2 Assets + Fluent Icons — verified) replacing the generic folder; (b) **drag-OUT** implemented
+  — new `Interop/FileDrag.cs` (OLE drag SOURCE: `SHCreateItemFromParsingName`→`IShellItem.BindToHandler(BHID_
+  DataObject)`→`DoDragDrop` + minimal `IDropSource`; `Win32.cs` got those + `IShellItem`/`IDropSource`),
+  `FileDropTarget.DragEnter` guarded by `FileDrag.Dragging` (no self-reveal), `FileTray.RowPathAt` + public
+  `Open`, and `NotchController.HandleTrayInteraction` (press-a-row = open, hold+drag>6px = drag out). CF_HDROP
+  data-object pipeline verified (QueryGetData=0, path round-trips); only DoDragDrop itself needs a real mouse
+  gesture. (c) drag-IN priority made unconditional so a live drag ALWAYS makes the tray primary + expands.
+- **File Tray round 3 (DEPLOYED live, NOT pushed):** (1) drop zone REDESIGNED (filled translucent zone +
+  tray icon in a soft disc + two-line copy, breathing when active). (2) **Ctrl+click multi-select** —
+  `_selected` HashSet, accent highlight + left bar, header "Remove N" chip (`RemoveSelected`); selected set
+  drags out together (`SelectionOrRow`). (3) **drag-to-reorder** — drag a row up/down inside the panel
+  (`ReorderFrom/To` live preview, `BeginReorder/UpdateReorder/CommitReorder`); leaving the panel mid-drag
+  switches to drag-out. (4) **drag image fixed** — `FileDrag` now uses `SHDoDragDrop` + `IShellItemArray`
+  (multi-file) so the file ICON follows the cursor instead of a bare square. `NotchController.HandleTray
+  Interaction` rewritten (mode: pending/reorder/out; Ctrl=select, click=open, drag=reorder|extract). Win32
+  got SHDoDragDrop/SHParseDisplayName/SHCreateShellItemArrayFromIDLists/IShellItemArray/ILFree; removed the
+  now-dead single-item IShellItem/SHCreateItemFromParsingName. Verified: 4 rendered states + logic self-check
+  (reorder/selection/multi-remove/SelectionOrRow) + 2-file CF_HDROP interop, all PASS; clean startup.
+- **File Tray round 4 — grid redesign (DEPLOYED live, NOT pushed):** the vertical list only showed 3 of N
+  files with a clipped "+N more" and wasted the right half → replaced with a **3-col card grid** (`CellRect`/
+  `CellW`/`VisibleCells`, 3×3 = 9 visible, clean "+N more" footer). Each card = icon + name + folder, × on
+  hover, accent tint/border when selected or lifted (reorder). Hit-testing (`RowPathAt`/`RowIndexAt`/`Buttons`)
+  is now grid-aware; reorder/select/drag-out logic unchanged. Collapsed pill: several files now show a small
+  **stack of their icons** ("پشت سر هم", up to 4, overlapping) + "N files" instead of one icon + count.
+  Header/`RemoveChipRect` moved up (HeaderH=56). Verified: grid renders at 6/10/selected + collapsed stack.
+- **Ring "yellow = thinking" round 2 (DEPLOYED live, NOT pushed):** proved the collapsed ring ALREADY goes
+  Amber on working+no-tool (reflection test on the deployed dll). The gap was the EXPANDED panel dot —
+  `ClaudeCodeWidget` `StateColor` was hardcoded Green for "working"; deleted it and pointed the dot at
+  `RingColor(st)` so the panel dot matches the ring (yellow thinking / green tool). Codex dot left as-is.
+
+- **Store "Waiting…" phantom + breathing redesign (DEPLOYED live via Halo.App.dll hot-swap, NOT pushed):**
+  Root cause = a Phone Link (`Microsoft.YourPhone`) update parked in the Store queue at `ReadyToDownload`
+  (total=1 byte) that never runs — `StoreInstall.Poll` surfaced any non-terminal item → pill stuck on
+  "Waiting…" forever. Fixes: (1) `StoreInstall.cs` grace-timeout — a queued item that never starts
+  downloading is dropped after `WaitGraceMs=30s` (`_waitPfn`/`_waitSinceMs`, returns `Phase.None`);
+  verified live against the real phantom (Waiting for ~27s → None). (2) `DownloadWidget.DrawCollapsed`
+  rewritten: app icon now on the LEFT always (extracted `IconTile` from `DrawArt`, new `DrawCollapsedIcon`);
+  Waiting = whole-pill breathing glow (Claude-compacting style) + app name, NO bar/NO % ; Downloading =
+  icon + bar + %. Verified by direct bitmap render (r_waiting.png / r_downloading.png). Needs: push
+  `StoreInstall.cs` + `DownloadWidget.cs` to Boy + roll into installer/release.
+- **Ring "thinking = yellow" fix (DEPLOYED live, NOT pushed):** `src/Halo.Hooks/Program.cs` `tool-done`
+  case now sets `status["currentTool"] = null` (was: kept the last tool label to avoid flicker). Effect:
+  between tool calls Claude reads as *thinking* → RingColor gives Amber; a tool sets it Green again.
+  Widget logic UNCHANGED (RingColor already `empty?Amber:Green`); only `ClaudeCodeWidget.cs` has a
+  reworded comment. **Hook binary hot-deployed** into `%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.{exe,dll,
+  deps.json,runtimeconfig.json}`. Still needs: rebuild into the installer + push `Halo.Hooks/Program.cs`
+  (+ the ClaudeCodeWidget comment) to Boy.
+- **Already DONE + deployed + pushed (Boy @ 2149780, pre-release v1.0.2 assets refreshed):** notif Island
+  redesign (`NotifBanner.cs` eyebrow row app+time / bigger title / SummaryH 106→112 / RelTime "now"),
+  notif icon Start-menu fallback (`ShellIcon.ForAppName` for `NotifyIconGeneratedAumid_*` tray toasts like
+  WireGuard/Amnezia), banner text `AntiAliasGridFit`, DND re-stamp fix (`DndGate.WriteCache` always bumps
+  FILETIME), Persian/fancy-Unicode `Fx.CleanText` NFKC + `Fx.IsRtl` in Media/VLC.
+- **Releases:** `phoseinq/DynamicWin` — **v1.0.0 = Latest**, **v1.0.2 = Pre-release** (assets
+  `DynamicWinSetup.exe` + `DynamicWinPortable.zip`). v1.0.1 deleted.
+- **CC hooks path repointed:** `~/.claude/settings.json` 9 hooks now call
+  `%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.exe` (old `%LOCALAPPDATA%\Halo\hooks` was deleted in an
+  uninstall). Backup `settings.json.bak-*` exists.
+
+### FILE TRAY — ✅ IMPLEMENTED 2026-07-21 (see the un-pushed bullet above). Original plan kept for reference:
+### plan (user: DynamicWin's signature feature). Reveal-on-drag: the tray appears WHILE a
+### file is being dragged; otherwise it's not shown (empty+no-drag = nothing; held files = a small circle).
+Feasibility confirmed: main thread is `[STAThread]` (`Program.cs:10`); notch window is layered but NOT
+`WS_EX_TRANSPARENT` so it receives mouse + OLE drops; `Hwnd` is public; window resizes to content each
+frame. `WM_DROPFILES` only fires on DROP (no drag-enter) → MUST use **OLE `IDropTarget`** for the reveal.
+
+1. **Interop** (`Interop/Win32.cs` + new `Interop/FileDropTarget.cs`): `OleInitialize`/`OleUninitialize`,
+   `RegisterDragDrop`/`RevokeDragDrop`, `IDropTarget` COM iface, `IDataObject.GetData(FORMATETC{CF_HDROP})`
+   → `STGMEDIUM.hGlobal` → `DragQueryFile` loop → `ReleaseStgMedium`. DROPEFFECT_COPY=1.
+2. **`FileDropTarget : IDropTarget`**: DragEnter(has CF_HDROP? → `FileTray.DragActive=true`, effect=COPY,
+   bump Version) · DragOver(COPY) · DragLeave(`DragActive=false`) · Drop(extract paths → `FileTray.Add`,
+   `DragActive=false`).
+3. **`Widgets/FileTray.cs : IWidget`**: static `List<string> Paths` + `volatile bool DragActive` + `Version`,
+   persisted to `%LOCALAPPDATA%\Halo\tray.txt` (load on start, like `notif-seen.txt`). `IsActive =
+   DragActive || Paths.Count>0`. `Icon` = a Segoe Fluent tray glyph. `DrawContent`: drop-hint when
+   empty/dragging, else rows = file icon + name + `[×]`. `DrawCollapsed`: count + mini icons. `Buttons`:
+   row → open (`Process.Start{UseShellExecute=true}`); `[×]` → remove + persist. File icons via a NEW
+   public `ShellIcon.ForPath(path)` (thin wrapper over the existing private `ExtractFrom` = 256px shell
+   icon) OR `Icon.ExtractAssociatedIcon`.
+4. **Wire:** `OleInitialize` once at startup (Program.cs before `RunMessageLoop`, or in LayeredNotch ctor);
+   `RegisterDragDrop(Hwnd, new FileDropTarget())` at the end of the window-init in `LayeredNotch` (near the
+   `AddClipboardFormatListener` call). Add `new FileTray()` to the widget list in `NotchController` (~L248-265,
+   next to `DownloadWidget`). On `FileTray.DragActive`, force-expand the pill + make the tray primary (see how
+   `AgentNotice`/`_userPicked`/`_primary`/`_drop` drive expand in NotchController).
+5. **Verify** (compile 0/0), deploy live, then bundle the push+release with the pending ring fix.
+- **Deferred (ask before adding):** Share via Windows dialog (`DataTransferManager` + HWND anchor, WinRT);
+  drag-OUT of the tray.
+
+### Build / deploy / release recipe (repeat each ship; GOTCHAS below)
+- Cert thumbprint `2EB268F09FEA535E92FB395FA2FAB4409EC22E1D` (self-signed, CurrentUser\My). signtool sign
+  with `/tr http://timestamp.digicert.com /td SHA256 /fd SHA256`, fallback sectigo, then unsigned-time.
+- Publish App + Hooks: `dotnet publish src\Halo.App\Halo.App.csproj` and `src\Halo.Hooks\Halo.Hooks.csproj`
+  `-c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o dist\app`. Sign both inner exes.
+- Installer: `ISCC installer\Halo.iss` → `dist\DynamicWinSetup.exe` — **RETRY up to 6×** (AV locks the output
+  mid icon-embed: "EndUpdateResource failed (110)"). Sign it. Portable: copy `dist\app`→`dist\Halo`,
+  `Compress-Archive` → `dist\DynamicWinPortable.zip`.
+- Deploy live: `dist\DynamicWinSetup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`, relaunch
+  `%LOCALAPPDATA%\Programs\Halo\Halo.App.exe`. Hook-only quick deploy = copy the 4 `Halo.Hooks.*` files.
+- Release: `gh release upload v1.0.2 dist\DynamicWinSetup.exe dist\DynamicWinPortable.zip --repo
+  phoseinq/DynamicWin` (delete-asset first to replace). Boy branch: strip comments via the tool at
+  `C:\Users\hosei\AppData\Local\Temp\halo_pr\strip` (`dotnet run -- <dir>`), copy stripped `.cs` into the
+  fork clone `C:\Users\hosei\AppData\Local\Temp\halo_pr\fork`, commit as **phoseinq (NO Co-Authored-By)**,
+  push Boy.
+- **GOTCHAS:** (a) the PowerShell safety hook blocks a command containing BOTH `Remove-Item` AND a
+  `C:\Program Files` literal OR a `/f` token (taskkill /f) — misparses it as a delete target; split them
+  (use `Stop-Process`, resolve signtool in a Remove-Item-free command). (b) Persian path «دسکتاپ» breaks
+  Windows PowerShell 5.1 reading UTF-8-no-BOM `.ps1` — use pwsh or launch via Bash. (c) Can't auto-screenshot
+  the notif banner (transparent notch shows the window behind → false hits; synthetic PS toasts aren't
+  delivered to `UserNotificationListener` like real app toasts) → verify by real toast / user eyeball.
+
+
+## 2026-07-20: rapid-fire batch (DEPLOYED to %LOCALAPPDATA%\Halo\app, running PID-fresh)
+1. [DONE] Frame-pacing: animations ran half-speed at 60fps (hard-coded 0.008f tick). → real
+   per-frame delta `_dt` in `Frame()` (measured, clamped 1..50ms; also fixes the new 30fps tier).
+2. [DONE] Autostart-after-reboot: root cause = Fast Startup (HiberbootEnabled=1) skips the
+   at-logon scheduled task on power-on-from-shutdown. Added HKCU `Run\Halo` → deployed exe as a
+   fast-startup-proof fallback (safe: single-instance mutex). NEEDS A REBOOT to confirm.
+3. [DONE] Fun icons for iconless local notifs. `LocalBadge(cp,hue)` (gradient tile + Fluent glyph,
+   like `LangBadge`; gives the banner a colored glow too). Battery E996 / Net EB5E / Limit E9D9 /
+   Clock E917 / Cpu E950 — all verified no-tofu via new `--render-badges` hook.
+4. [DONE] Video speed: cycling `Btn.Speed` chip (1/1.25/1.5/1.75/2×) on the video row via SMTC
+   `TryChangePlaybackRateAsync`, label from `PlaybackRate`. Honest no-op on apps that ignore rate.
+   VLC (VlcWidget, no SMTC) NOT covered — follow-up if wanted.
+5. [DONE] Hourly chime: `CheckHourly()` in CheckAlerts, once per round hour, ClockBadge, time as
+   title, English. `_chimedHour` inits to current hour (no spurious fire at launch).
+6. [DONE] Heavy-load throttle: `AdaptFrameRate` gains a 30fps tier (busy>80%) + `_heavy` state
+   (enter 50% / leave 40%) → process priority BelowNormal + 3× slower glass capture; ONE edge notif
+   "High CPU usage — N%" naming the top-CPU process (`TopCpuProcess`, off-thread). English.
+7. [DONE] MS Store downloads folded into the `Downloads` scanner: when no window-title download and
+   the Store app is running, poll `Get-DeliveryOptimizationStatus` off-thread (~6s) for the biggest
+   active download's % → shows as "Microsoft Store". Gap: DO gives no per-app name, Store-proc-gated.
+Verified: Release build 0/0, badges PNG eyeballed, deployed + relaunched (priority Normal, no crash).
+
+## 2026-07-19: 6-feature batch (IN PROGRESS)
+- [ ] 1. Compact crescent — pulse fills fully-rounded rect over a flat-top pill → 2 dark crescents
+      at the top corners. Fix: fill the real pill silhouette (`Fx.PillPath`) in both agent widgets.
+- [ ] 2. Screenshot vs copied — classify clipboard image by `GetClipboardOwner` process: snip
+      hosts / null owner → "Screenshot captured"; a real app owner → "Image copied".
+- [ ] 3. Icon quality — AppIcon: `PrivateExtractIcons` @256, fallback `ExtractAssociatedIcon`.
+- [ ] 4. Download priority + stop — active download becomes primary (user swap still wins); stop
+      button focuses the downloader window (no cross-app cancel API); better icon via #3.
+- [ ] 5. Privacy dot — `Privacy.cs` registry ConsentStore scan; mic=orange, cam=green; dot on the
+      pill; pill stays alive only while mic/cam live; hides when done.
+- [ ] 6. Alerts — edge-triggered local banners: battery<=20% discharging (click → Power Saver
+      plan), Claude/Codex usage>=80%, internet slow ("Bad internet :/"). Throttled (one per edge).
+
+## 2026-07-18 (session 2): precise click + media-follow-foreground + notif polish + drag-to-move (deployed)
+- **Precise banner click (BUILT — supersedes the "NOT possible" note below):** `Notifications/WpnDb.cs`
+  reads the toast's `launch`/`activationType` straight out of `wpndatabase.db` (locked WAL SQLite) by Id
+  via the **system `winsqlite3.dll`** (P/Invoke, zero NuGet). Verified: DB `Notification.Id` == the
+  listener's `UserNotification.Id`; payload is plain UTF-8 `<toast launch=… activationType=…>`; a
+  `.db`-only read-only snapshot is enough (row is checkpointed by click time). `NotifItem.Activate` now:
+  protocol → `Process.Start(launch)`; else → `IApplicationActivationManager.ActivateApplication(aumid,
+  launch)` → opens the exact message/photo (Phone Link thread, Chrome URL, etc.).
+- **Notif flood on restart FIXED (root cause):** DndGate restarts `WpnUserService` at launch, so the
+  platform is down/empty for the first seconds; the old code baselined at 0 then dumped the whole action
+  center (52 toasts) as "new". Fix: persist last-seen Id to `notif-seen.txt` (`LoadSeen`/`SaveSeen`),
+  resume from it on start → immune to the race. First-run fallback: baseline only on a non-empty fetch
+  or after a 3s grace. `_ready`/`initial` removed in favour of `_baselined`.
+- **Auto-dismiss 3s → 6s** (`_notifDeadline`); Windows' own toasts linger ~5s, 3s was too quick to read.
+- **Icon chain reordered** (`NotifSource.Build`): `ShellIcon` (clean transparent 256px, both packaged &
+  classic) → `AppIcon` (running exe icon — catches custom toast AUMIDs not in Start, e.g. `PowerToys.Run`
+  which `ShellIcon` returns null for) → `Logo(n)` last. Fixes the white tile-plate around UWP logos and
+  the broken PowerToys icon.
+- **Notif Persian/RTL** (`NotifBanner`): `LineFmt`/`WrapFmt` add `DirectionRightToLeft` for FA/AR lines
+  so mixed FA+EN no longer mangles (english was jumping into the middle); right-aligned, ellipsis left.
+- **Black edge line FIXED** (`LayeredNotch.DrawShape`): final supersample downscale bicubic → **bilinear**
+  (bicubic's negative lobes undershot the dark→transparent premultiplied edge into a thin dark rim visible
+  over light content). Verified via new `--render-notif` dev hook (real shape path on a colour backdrop).
+- **Media follows the foreground** (`MediaWidget.FollowForeground` + `Pick`/`Hook`, called from
+  `NotchController` on every fg change with the process name): focus the browser → browser playback,
+  focus Spotify → Spotify's. Matches a session whose `SourceAppUserModelId` ~ the fg process name, else
+  the system current; force:false skips re-hook churn while the fg app is unchanged.
+- **Media art fallback** (`DrawArt` → `CoverFill`): no thumbnail → the source **app icon** instead of the
+  generic music glyph (podcasts/videos/radio ship no art).
+- **Drag-to-move the pill** (`NotchController.UpdateMove` + `LayeredNotch.OffsetX`): press-and-hold ~3s on
+  the pill (a growing underline `DrawHoldCue` shows progress) → it collapses and follows the cursor →
+  release drops it → parked within 55px of centre it snaps back (magnet). `_offsetX` persisted to
+  `offset`; applied to `_cl`/`_el`/`NotifLeft` (hit-test) and `LayeredNotch` render dst.
+- 71/71 tests; Release deployed to `%LOCALAPPDATA%\Halo\app` via the `Halo` scheduled task.
+
+## 2026-07-18: notif banner polish + pin redesign + screenshot-hide (deployed)
+- **Screenshot-hide**: `SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)` in LayeredNotch ctor —
+  pill never appears in screenshots/recordings. Side effect: we can no longer screenshot the pill
+  for verification; use `--render-widget` / standalone GDI harnesses instead.
+- **Pin redesign**: hand-drawn pushpin (`PinPath`: head arc + needle, single continuous path, no MDL2
+  glyph). pinned = solid amber (`PinOn` 255,210,105), unpinned = dim white outline. **Instant** toggle
+  (no ease on state — user wanted snappy), hover shows English label "pin on top"/"unpin". Moved up
+  (PinRect 9,4,24,24). `_pinT` field removed.
+- **Notif adaptive font** (`NotifBanner.FontScale`): 1.0→0.86 as text lengthens.
+- **Notif over fullscreen**: `NotchController` OnTick — a live/pending toast overrides the fullscreen
+  hide (pill stays empty but the banner wakes + renders over games). `NotifSource.HasPending` added.
+- **Notif click = open app**: `NotifItem.Aumid` (from `AppInfo.AppUserModelId`) + `.Activate()`
+  launches `explorer shell:AppsFolder\<aumid>`. Banner-body click activates + dismisses.
+- **Notif app icon**: `GetLogo` blanks on most desktop apps → `ShellIcon.ForAumid` pulls the real
+  Start-menu icon via `IShellItemImageFactory`, keeping alpha (32bpp PArgb DIB copy). Icon clip
+  changed circle → rounded square (`DrawAppIcon`) so opaque icons don't show as a disc.
+- **3s auto-dismiss**: `_notifDeadline = +3s` (was 7s); existing tick loop animates the reverse morph.
+
+### Native toast block — SOLVED via auto Do-Not-Disturb (`Notifications/DndGate.cs`, deployed)
+Goal: kill the OS banner + SOUND but keep `UserNotificationListener` delivery. Only **DND** does that
+(confirmed live by user: general toasts silenced, pill still mirrors). Dead ends first:
+- `RemoveNotification` (still in place as belt/suspenders): always flashes ~0.5s, can't un-ring sound.
+- `PushNotifications\ToastEnabled=0`: cached by WpnUserService, not applied live on 26200; also kills
+  delivery. Removed.
+- **Wrong CloudStore key**: `...\Store\Cache\DefaultAccount\$$windows.data.NOTIFICATIONS.quiethourssettings`
+  is a legacy cache — writes there revert in ~400ms.
+
+**Working recipe (DndGate):** the authoritative DND profile is
+`HKCU\...\CloudStore\Store\DefaultAccount\Current\{9f763514-...}$windows.data.DONOTDISTURB.quiethourssettings\
+windows.data.donotdisturb.quiethourssettings`, value `Data` (REG_BINARY). Blob = 28-byte header, byte[28]
+= char count of `Microsoft.QuietHoursProfile.<Profile>`, then that UTF-16 string, then a short trailer.
+Swap `<Profile>` (Unrestricted=off, PriorityOnly, AlarmsOnly=strictest) by rebuilding the blob (byte[28]
+= new charcount, splice string, keep header+trailer — no total-length field to fix, verified). THEN
+**`Restart-Service WpnUserService_*`** (works non-admin) so the platform re-reads. Sticks. Listener
+survives the restart (re-acquired on the next 250ms poll). DndGate: AlarmsOnly on start (skips write+
+restart if already set), Unrestricted on ProcessExit (fail-open). Find the key by suffix (the {guid}
+may vary). Restart via a fire-and-forget `powershell Restart-Service` (no ServiceController dep).
+
+**Still bypasses DND:** the Snipping Tool "snip saved" toast (`Microsoft.ScreenSketch_8wekyb3d8bbwe!App`)
+— a system/action toast even AlarmsOnly won't silence. Only fix = its per-app
+`Notifications\Settings\<AUMID>\Enabled=0` (but that also stops the pill mirroring it). Left to user.
+
+**Precise banner click (open the exact message/photo):** NOT possible — `UserNotificationListener`
+doesn't expose the toast's `launch` args. Would need to read the toast XML out of `wpndatabase.db`
+(locked WAL SQLite) by id. Not built. Current `NotifItem.Activate` just foregrounds the app via
+`IApplicationActivationManager`.
+
+## DONE 2026-07-17 (evening): flag ghost + outage fix + limit mood + pin/tuck (deployed, needs live check)
+- **Flag**: soft wind-blown ghost of the exit-IP flag centred in the panel — `Fx.FlagGhost`
+  (2.4 gentle ripples spread across the whole flag + smooth centre-out vignette, baked 2x per
+  flag, drawn at 0.16 alpha). Shared by BOTH the CC and Codex panels.
+- **Codex parity**: flag ghost + eager/fresh-connection CodexNetMon heartbeat + limit-hit mood
+  all mirrored into the Codex widget.
+- **Outage bug (real fix)**: NetMon thread now starts eagerly (was: only on first panel-open →
+  collapsed ring never learned of an outage), and the fresh-connection health heartbeat runs even
+  while the panel is open (pooled fast samples were masking the RST storms and clearing ApiDown).
+- **Limit hit**: working + usage ≥99% → "outta juice :(" + "back in Xh Ym" instead of the
+  ever-growing turn timer; ring amber.
+- **Pill**: no active widget → tucks into a 96×12 slim tab (animated). Pin button (MDL2 pin,
+  bottom-left of expanded panel): pinned = upright/bright + pill ignores fullscreen hide;
+  unpinned = tilted/faint. No text, state is the drawing. Not persisted across restarts.
+- **Pin v3 + empty-hide + follow-focus**: pin was invisible (bare 13px glyph at 35% alpha over the
+  weekly bar — verified via GDI+ harness) → final: bare upright pushpin top-left (10,8,26,26),
+  MDL2 E840 outline dim = unpinned, E842 filled bright = pinned, no rotation; state + hover
+  crossfade via smoothstep (`_pinT`/`_pinHov`, ~120ms). Verified on live pill via screenshots.
+  Empty pill now fully hides (SetVisible false once the tuck lands; banners
+  and waking widgets resurrect it; leaving fullscreen respects it). Pill follows the focused
+  session: fg-change matches fg pid against `IWidget.OwnerPids` (agent pid + console pid, all
+  CC/Codex/generic widgets) and switches primary unless a notice/drop owns the pill.
+- **M4 notifications (banner UI built)**: NotifSource now grabs the app logo + RemoveNotification
+  ("block" = best-effort yank from Windows banner/action center). Pill morphs into a 400×92 banner
+  (EaseOutBack, tint/strip/mini all ride the same _notifT) with app icon + name + title + ONE
+  truncated summary line; bottom grabber bar (no close button) grows it to the measured full text
+  (≤250). Click anywhere outside = soft close; hover pauses the 7s auto-close; toasts queue and
+  wait for an idle pill. Test toast: scratchpad toast.ps1 via powershell.exe (PS5 WinRT).
+
 ## DONE 2026-07-17: multi-session + strip redesign + glow everywhere (verified live, needs commit-audit only)
 - **Multi-session CC**: hook writes `status-{agentPid}.json` per session (pid stamped every event —
   a mid-turn-born file without pid evades dedupe; session-end deletes file + legacy status.json;

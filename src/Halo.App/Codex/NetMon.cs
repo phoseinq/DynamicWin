@@ -9,7 +9,10 @@ namespace Halo.Codex;
 internal static class CodexNetMon
 {
     public const int Lost = -1, Empty = -2;
-    private const string ApiTarget = "https://chatgpt.com/";
+    // probe the REAL Codex endpoint (GET → 405 when healthy), NOT the bare chatgpt.com root: the root/
+    // marketing edge stays 200-reachable during a backend outage, so a root probe reads green while
+    // Codex is dead. This is the /backend-api/codex/responses route the CLI actually POSTs to.
+    private const string ApiTarget = "https://chatgpt.com/backend-api/codex/responses";
     private const string NetTarget = "https://1.1.1.1/";
 
     private static readonly int[] _net = CreateBuffer(), _api = CreateBuffer();
@@ -20,9 +23,18 @@ internal static class CodexNetMon
     internal static int Version;
     internal static volatile bool ApiDown, NetDown;
 
+    // eager: the heartbeat must run from boot — waiting for the first panel-open meant the
+    // collapsed ring/mood never learned about an outage until the user looked
+    static CodexNetMon() => EnsureThread();
+
     internal static void Poke()
     {
         _until = DateTime.UtcNow.AddSeconds(8);
+        EnsureThread();
+    }
+
+    private static void EnsureThread()
+    {
         if (_thread is null)
         {
             _thread = new Thread(Loop) { IsBackground = true };
@@ -58,6 +70,16 @@ internal static class CodexNetMon
         var lastBackgroundProbe = DateTime.MinValue;
         while (true)
         {
+            // health heartbeat runs ALWAYS (panel open or not): fresh connection each time — a warm
+            // pooled socket can keep answering while every NEW connection gets RST. The open-panel
+            // fast samples below use the pool and must never touch the health flags.
+            if (DateTime.UtcNow - lastBackgroundProbe > TimeSpan.FromSeconds(10))
+            {
+                lastBackgroundProbe = DateTime.UtcNow;
+                var apiDown = HttpLatency(ApiTarget, fresh: true) == Lost;
+                var netDown = apiDown && HttpLatency(NetTarget, fresh: true) == Lost;
+                SetHealth(apiDown, netDown);
+            }
             if (DateTime.UtcNow < _until)
             {
                 var apiMilliseconds = Lost;
@@ -72,16 +94,8 @@ internal static class CodexNetMon
                     _api[_index] = apiMilliseconds;
                     _index = (_index + 1) % _net.Length;
                 }
-                SetHealth(apiMilliseconds == Lost, netMilliseconds == Lost);
                 Interlocked.Increment(ref Version);
                 Thread.Sleep(700);
-            }
-            else if (DateTime.UtcNow - lastBackgroundProbe > TimeSpan.FromSeconds(10))
-            {
-                lastBackgroundProbe = DateTime.UtcNow;
-                var apiDown = HttpLatency(ApiTarget) == Lost;
-                var netDown = apiDown && HttpLatency(NetTarget) == Lost;
-                SetHealth(apiDown, netDown);
             }
             else
             {
@@ -104,16 +118,19 @@ internal static class CodexNetMon
         new System.Net.Http.SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
     { Timeout = TimeSpan.FromSeconds(2.5) };
 
-    private static int HttpLatency(string url)
+    private static int HttpLatency(string url, bool fresh = false)
     {
         try
         {
             var stopwatch = Stopwatch.StartNew();
-            using var response = Http.Send(
-                new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url),
-                System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
-            // 4xx = the server is fine (auth/route noise); 5xx (incl. 529 Overloaded) = it's down
-            return (int)response.StatusCode >= 500 ? Lost : (int)stopwatch.ElapsedMilliseconds;
+            var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
+            if (fresh) request.Headers.ConnectionClose = true; // don't let the pool hide a dead route
+            using var response = Http.Send(request, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+            int sc = (int)response.StatusCode;
+            // down = never really reached a healthy API: 5xx (incl. 529 Overloaded), plus edge blocks the
+            // client also can't get through — 403 (Cloudflare/WAF geoblock), 407 (proxy auth), 429 (rate-limited).
+            // 401/404 = server reachable, just auth/root noise → up.
+            return sc >= 500 || sc == 403 || sc == 407 || sc == 429 ? Lost : (int)stopwatch.ElapsedMilliseconds;
         }
         catch
         {

@@ -11,6 +11,25 @@ internal static class Fx
 {
     public static readonly Color White = Color.FromArgb(238, 255, 255, 255);
 
+    // Media/app titles often arrive dressed in decorative Unicode — 𝗺𝗮𝘁𝗵-𝗯𝗼𝗹𝗱, 𝓈𝒸𝓇𝒾𝓅𝓉, ｆｕｌｌｗｉｄｔｈ,
+    // ﷼ ligatures — that Segoe UI has no glyph for, so they render as tofu boxes. NFKC folds each to its
+    // plain equivalent (𝗙𝗨𝗧𝗕𝗔𝗟𝗟𝗜 𝟭𝟴+ → FUTBALLI 18+, Arabic presentation forms → normal Persian);
+    // ordinary Latin/Persian/CJK pass through untouched. Guards the rare malformed string Normalize rejects.
+    public static string CleanText(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        try { return s.IsNormalized(System.Text.NormalizationForm.FormKC) ? s : s.Normalize(System.Text.NormalizationForm.FormKC); }
+        catch { return s; }
+    }
+
+    // any Hebrew..Arabic char → lay the line out right-to-left (Persian/Arabic titles read from the right)
+    public static bool IsRtl(string? s)
+    {
+        if (s == null) return false;
+        foreach (var c in s) if (c >= 0x0590 && c <= 0x08FF) return true;
+        return false;
+    }
+
     private static readonly ConditionalWeakTable<Bitmap, object> AccentCache = new();
 
     // cached accent of an icon bitmap; near-white/grey icons yield White (callers skip the glow)
@@ -80,9 +99,14 @@ internal static class Fx
     }
 
     // flat top flush to the screen edge + rounded bottom (matches LayeredNotch.PillPath)
-    private static GraphicsPath PillClip(int w, int h)
+    private static GraphicsPath PillClip(int w, int h) => PillPath(w, h, Math.Min(h / 2f, 30f));
+
+    // flat-top / rounded-bottom pill silhouette. Public so effects that wash the whole pill (the
+    // compacting pulse) fill the TRUE outline — a fully-rounded rect over this flat top left two
+    // dark crescents at the top corners ("از بالا حلاله").
+    public static GraphicsPath PillPath(int w, int h, float r)
     {
-        float r = Math.Min(h / 2f, 30f), d = r * 2;
+        float d = Math.Min(r, Math.Min(w, h) / 2f) * 2f;
         var p = new GraphicsPath();
         p.AddLine(0, 0, w, 0);
         p.AddArc(w - d, h - d, d, d, 0, 90);
@@ -171,6 +195,163 @@ internal static class Fx
         else if (h < 300) { r = x; b = c; }
         else { r = c; b = x; }
         return Color.FromArgb(255, (int)((r + m) * 255), (int)((g + m) * 255), (int)((b + m) * 255));
+    }
+
+    // wind-blown flag ghost for the panels: a gentle ripple distributed across the WHOLE flag
+    // (several small waves, no single lifted section) + a smooth vignette — strongest in the
+    // centre, gradually melting away toward the edges. Baked once per flag at 2x, drawn faint.
+    private static Bitmap? _flagGhost;
+    private static Bitmap? _flagGhostFor;
+
+    public static Bitmap FlagGhost(Bitmap flag)
+    {
+        if (_flagGhost != null && ReferenceEquals(_flagGhostFor, flag)) return _flagGhost;
+        const int fw = 420, fh = 264, amp = 12;
+        const int oh = fh + amp * 2;
+        using var scaled = new Bitmap(fw, fh, PixelFormat.Format32bppArgb);
+        using (var sg = Graphics.FromImage(scaled))
+        {
+            sg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            sg.DrawImage(flag, new Rectangle(0, 0, fw, fh), 0, 0, flag.Width, flag.Height, GraphicsUnit.Pixel);
+        }
+        var src = scaled.LockBits(new Rectangle(0, 0, fw, fh), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var sb = new byte[src.Stride * fh];
+        System.Runtime.InteropServices.Marshal.Copy(src.Scan0, sb, 0, sb.Length);
+        int stride = src.Stride;
+        scaled.UnlockBits(src);
+
+        var bmp = new Bitmap(fw, oh, PixelFormat.Format32bppPArgb);
+        var dst = bmp.LockBits(new Rectangle(0, 0, fw, oh), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+        var ob = new byte[dst.Stride * oh];
+        for (int x = 0; x < fw; x++)
+        {
+            float ph = x / (float)fw * MathF.Tau * 2.4f; // several small ripples spread evenly
+            float dy = amp * MathF.Sin(ph);
+            float shade = 1f + 0.10f * MathF.Cos(ph);
+            float ex = (x - fw / 2f) / (fw / 2f);
+            float fadeX = 1f - ex * ex;
+            for (int y = 0; y < oh; y++)
+            {
+                float sy = y - amp - dy;
+                int y0 = (int)MathF.Floor(sy);
+                if (y0 < -1 || y0 >= fh) continue;
+                float fr = sy - y0;
+                int ia = Math.Clamp(y0, 0, fh - 1) * stride + x * 4;
+                int ib = Math.Clamp(y0 + 1, 0, fh - 1) * stride + x * 4;
+                // alpha edges use the true (unclamped) rows so the waved outline fades in softly
+                float aa = (y0 >= 0 ? sb[ia + 3] : 0) * (1f - fr) + (y0 + 1 < fh ? sb[ib + 3] : 0) * fr;
+                float ey = (sy - fh / 2f) / (fh / 2f);
+                float fadeY = Math.Max(0f, 1f - ey * ey);
+                float alpha = aa / 255f * fadeX * fadeY;
+                if (alpha <= 0.004f) continue;
+                int o = y * dst.Stride + x * 4;
+                for (int c = 0; c < 3; c++)
+                {
+                    float ch = (sb[ia + c] * (1f - fr) + sb[ib + c] * fr) * shade;
+                    ob[o + c] = (byte)(Math.Min(ch, 255f) * alpha); // premultiplied
+                }
+                ob[o + 3] = (byte)(alpha * 255f);
+            }
+        }
+        System.Runtime.InteropServices.Marshal.Copy(ob, 0, dst.Scan0, ob.Length);
+        bmp.UnlockBits(dst);
+        var old = _flagGhost;
+        _flagGhost = bmp;
+        _flagGhostFor = flag;
+        old?.Dispose();
+        return bmp;
+    }
+
+    // draw the ghost centred in a panel, very faint
+    public static void DrawFlagGhost(Graphics g, System.Drawing.Bitmap? flag, int w, int h, float a)
+    {
+        if (flag is null) return;
+        var ghost = FlagGhost(flag);
+        const int gw = 210;
+        int gh = ghost.Height * gw / ghost.Width;
+        var dest = new Rectangle((w - gw) / 2, (h - gh) / 2 + 4, gw, gh);
+        using var ia = new ImageAttributes();
+        ia.SetColorMatrix(new ColorMatrix { Matrix33 = 0.16f * a });
+        var oldInterp = g.InterpolationMode;
+        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        g.DrawImage(ghost, dest, 0, 0, ghost.Width, ghost.Height, GraphicsUnit.Pixel, ia);
+        g.InterpolationMode = oldInterp;
+    }
+
+    // ±Ns seek mark, YouTube-style: a near-full circular arc with a gap at the top, an arrowhead at
+    // the gap edge pointing in the seek direction, and the seconds number centred inside.
+    public static void DrawSeekArrow(Graphics g, RectangleF chip, bool forward, float alpha, string label = "10")
+    {
+        var c = Color.FromArgb((int)(238 * alpha), 255, 255, 255);
+        float cx = chip.X + chip.Width / 2f, cy = chip.Y + chip.Height / 2f, r = chip.Width * 0.30f;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        const float gap = 80f;
+        using (var pen = new Pen(c, 1.8f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawArc(pen, cx - r, cy - r, r * 2, r * 2, 270f + gap / 2f, 360f - gap);
+        // arrowhead at the END of travel: forward = clockwise → head at the LEFT gap edge pointing
+        // clockwise (right/up); backward = counterclockwise → head at the RIGHT gap edge pointing left/up
+        float deg = forward ? 270f - gap / 2f : 270f + gap / 2f;
+        float th = deg * MathF.PI / 180f;
+        var p = new PointF(cx + r * MathF.Cos(th), cy + r * MathF.Sin(th));
+        var dir = forward ? new PointF(-MathF.Sin(th), MathF.Cos(th)) : new PointF(MathF.Sin(th), -MathF.Cos(th));
+        var perp = new PointF(-dir.Y, dir.X);
+        float ah = chip.Width * 0.13f, aw = chip.Width * 0.10f;
+        using (var b = new SolidBrush(c))
+        using (var tri = new GraphicsPath())
+        {
+            tri.AddPolygon(new[]
+            {
+                new PointF(p.X + dir.X * ah, p.Y + dir.Y * ah),
+                new PointF(p.X - dir.X * ah * 0.4f + perp.X * aw, p.Y - dir.Y * ah * 0.4f + perp.Y * aw),
+                new PointF(p.X - dir.X * ah * 0.4f - perp.X * aw, p.Y - dir.Y * ah * 0.4f - perp.Y * aw),
+            });
+            g.FillPath(b, tri);
+        }
+        using var f = new Font("Segoe UI Semibold", chip.Width * 0.26f, GraphicsUnit.Pixel);
+        using var tb = new SolidBrush(c);
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(label, f, tb, new RectangleF(chip.X, chip.Y + 0.5f, chip.Width, chip.Height), sf);
+    }
+
+    // bare "CC" toggle mark (no chip circle — it's a toggle, not transport)
+    public static void DrawCcMark(Graphics g, RectangleF chip, float alpha)
+    {
+        using var f = new Font("Segoe UI Semibold", chip.Width * 0.34f, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(Color.FromArgb((int)(238 * alpha), 255, 255, 255));
+        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString("CC", f, b, chip, sf);
+    }
+
+    // clean miniplayer mark: a frame with a diagonal arrow shrinking INTO its bottom-right corner —
+    // "خودش کوچیک می‌شه اون گوشه". No inner rect, no chip circle, small.
+    public static void DrawPipMark(Graphics g, RectangleF chip, float alpha)
+    {
+        var c = Color.FromArgb((int)(238 * alpha), 255, 255, 255);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float w = chip.Width * 0.44f, h = w * 0.72f;
+        var f = new RectangleF(chip.X + (chip.Width - w) / 2f, chip.Y + (chip.Height - h) / 2f, w, h);
+        using (var op = Rounded(f, 2f))
+        using (var pen = new Pen(c, 1.5f))
+            g.DrawPath(pen, op);
+        // arrow: upper-left third → bottom-right inner corner
+        var a = new PointF(f.X + w * 0.30f, f.Y + h * 0.30f);
+        var b = new PointF(f.Right - w * 0.22f, f.Bottom - h * 0.26f);
+        var d = new PointF(b.X - a.X, b.Y - a.Y);
+        float len = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
+        d = new PointF(d.X / len, d.Y / len);
+        using (var pen = new Pen(c, 1.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            g.DrawLine(pen, a, b);
+        float ah = w * 0.28f;
+        var perp = new PointF(-d.Y, d.X);
+        using var tb = new SolidBrush(c);
+        using var tri = new GraphicsPath();
+        tri.AddPolygon(new[]
+        {
+            b,
+            new PointF(b.X - d.X * ah + perp.X * ah * 0.55f, b.Y - d.Y * ah + perp.Y * ah * 0.55f),
+            new PointF(b.X - d.X * ah - perp.X * ah * 0.55f, b.Y - d.Y * ah - perp.Y * ah * 0.55f),
+        });
+        g.FillPath(tb, tri);
     }
 
     public static GraphicsPath Rounded(RectangleF r, float radius)

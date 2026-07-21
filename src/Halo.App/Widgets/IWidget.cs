@@ -27,8 +27,16 @@ internal interface IWidget
     // collapsed pill's ring (green working, red failed, white idle...).
     Color? Ring => null;
 
+    // If >= 0, the circle's ring is drawn as a progress ARC (0..1) from the top instead of a full ring —
+    // used by the download widget so the closed circle fills as the download progresses. < 0 = full ring.
+    float RingProgress => -1f;
+
     // Agent lifecycle events can temporarily expand the pill without coupling the controller to an agent type.
     AgentNotice AgentNotice => AgentNotice.None;
+
+    // pids that mean "the user is inside this session" (agent process + hosting console) —
+    // focusing a window with one of these makes the widget primary. Empty = never followed.
+    IEnumerable<int> OwnerPids => Array.Empty<int>();
 
     void DrawContent(Graphics g, int w, int h, float expandFade);       // expanded pill
 

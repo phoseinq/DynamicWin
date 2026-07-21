@@ -58,6 +58,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
+    public IEnumerable<int> OwnerPids => Live is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
     // text-emerge animation + the compacting pulse both need frames while collapsed
     public bool Animating => _appear < 1f || Compacting(Live);
 
@@ -102,7 +103,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
             using var pb = new SolidBrush(Mul(Blue, fade * (0.05f + 0.11f * pulse)));
-            using var pp = Rounded(new RectangleF(0, 0, w, h), h / 2f);
+            using var pp = Fx.PillPath(w, h, h / 2f); // flat top: matches the pill, no corner crescents
             g.FillPath(pb, pp);
         }
         // subtle status ring around the (circular) icon: green working, red on error, white otherwise
@@ -115,19 +116,19 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         // balanced zones: verb hugs the icon, the timer owns the right edge — text length changes
         // never leave a lopsided gap. Moods (idle/offline) centre in the whole free space instead.
-        string verb = OutageText() ?? st?.State switch
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
             "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
-        };
-        string el = Elapsed(st);
-        if (Compacting(st) && el.Length > 0) el = CompactPct(st!) + " · " + el;
+        });
+        string el = LimitHit ? LimitReset() : Elapsed(st); // limit shows regardless of session state
+        if (Compacting(st) && !LimitHit && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
-        bool busy = st?.State == "working" || Compacting(st);
+        bool busy = st?.State == "working" || Compacting(st) || LimitHit;
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
@@ -215,25 +216,13 @@ internal sealed class ClaudeCodeWidget : IWidget
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
-        var dot = StateColor(st?.State == "compacting" && !Compacting(st) ? null : st?.State);
+        var dot = RingColor(st); // yellow while thinking, green on a tool — same as the collapsed ring
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        Fx.DrawFlagGhost(g, IpCountry.Flag, w, h, a); // wind-blown exit-IP flag, centred watermark
         using (var db = new SolidBrush(Mul(dot, a)))
             g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
         using (var tb = new SolidBrush(Mul(White, a)))
             g.DrawString("Claude Code", title, tb, pad + 20, pad - 2);
-        if (IpCountry.Flag is { } flag) // faint ghost of the exit-IP's flag in the empty middle
-        {
-            float fx = pad + 20 + g.MeasureString("Claude Code", title, int.MaxValue,
-                StringFormat.GenericTypographic).Width + 18;
-            var dest = new Rectangle((int)fx, pad + 2, 30, 20);
-            using var rp = Fx.Rounded(dest, 4);
-            using var ia = new System.Drawing.Imaging.ImageAttributes();
-            ia.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = 0.30f * a });
-            var clip0 = g.Clip;
-            g.SetClip(rp);
-            g.DrawImage(flag, dest, 0, 0, flag.Width, flag.Height, GraphicsUnit.Pixel, ia);
-            g.Clip = clip0;
-        }
         string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
@@ -262,9 +251,23 @@ internal sealed class ClaudeCodeWidget : IWidget
             return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
                        : $"{Pct(f)}  ·  {ResetIn(reset)}";
         }
+        // credits sit on the 5-hour row when the account has spent any: normally the spend, on hover the
+        // remaining IF the API exposes it (prepaid balance or a monthly cap). Note: promotional-credit
+        // balance shown on claude.ai is NOT returned to the Claude Code token, so hover falls back to spend.
         if (Limits.FiveHour >= 0)
+        {
+            bool hov5 = WidgetInput.Over && WidgetInput.Mouse.Y >= y + 40 && WidgetInput.Mouse.Y < y + 76
+                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
+            string credits = Limits.CreditsUsed <= 0 ? ""
+                : hov5
+                    ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
+                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} left of ${Limits.CreditsLimit:0}"
+                       : $"  ·  ${Limits.CreditsUsed:0.00} used")
+                    : $"  ·  ${Limits.CreditsUsed:0.00} credits";
             DrawBar(g, pad, y + 40, barW, "5-hour limit",
-                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + 40), Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
+                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + 40) + credits,
+                Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
+        }
         if (Limits.Week >= 0)
             DrawBar(g, pad, y + 80, barW, "Weekly limit",
                 LimitValue(Limits.Week, Limits.WeekReset, y + 80), Limits.Week, UsageColor(Limits.Week), a, body, small);
@@ -500,18 +503,12 @@ internal sealed class ClaudeCodeWidget : IWidget
         return Math.Clamp((double)s.ContextUsed / s.ContextMax, 0, 1);
     }
 
-    private static Color StateColor(string? state) => state switch
-    {
-        "working" => Green,
-        "compacting" => Blue,
-        "waiting_input" => Amber,
-        _ => Color.FromArgb(140, 255, 255, 255),
-    };
-
     // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
-    // it would vanish): green = working, yellow = deep thinking / needs input, red = error, white = idle
+    // it would vanish): green = running a tool, yellow = thinking / needs input, blue = compacting,
+    // red = error, white = idle
     private static Color RingColor(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
+         : LimitHit ? Amber                 // out of juice — flag it in any session state, not just "working"
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
@@ -541,16 +538,32 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     private static string Activity(CcStatus? st)
     {
-        string verb = OutageText() ?? st?.State switch
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
             "compacting" when Compacting(st) => "compacting…",
             "waiting_input" => "your move ;)",
             _ => IdleMood(st),
-        };
-        if (st?.State != "working" && !Compacting(st)) return verb;
-        var el = Elapsed(st);
+        });
+        if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
+        var el = LimitHit ? LimitReset() : Elapsed(st);
         return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
+    }
+
+    // account out of juice: the usage endpoint reports ~100%. Surface it in ANY state, not just
+    // "working" — hitting the limit usually ends the turn (idle/waiting), which is exactly when the
+    // old "working"-only check went dark and the user saw nothing. Shows the reset countdown instead.
+    // With extra-usage credits enabled the limit ISN'T a wall (work continues on credits) — so a
+    // maxed bar no longer flags "outta juice". Require CONFIRMED credit data (CreditsUsed >= 0): when
+    // /usage is rate-limited the Probe fallback can't read extra_usage, and defaulting to "off" made
+    // the pill scream "outta juice" while credits were actually covering the work.
+    private static bool LimitHit =>
+        (Limits.FiveHour >= 0.99f || Limits.Week >= 0.99f) && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0;
+
+    private static string LimitReset()
+    {
+        var r = ResetIn(Limits.FiveHour >= 0.99f ? Limits.FiveHourReset : Limits.WeekReset);
+        return r.Length > 0 ? "back in " + r : "";
     }
 
     // minimal mood line when nothing is running
@@ -558,7 +571,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         NetMon.NetDown ? "offline :("
         : NetMon.ApiDown ? "api down :("
         : JustCompacted(st) ? "compacted :)"
-        : Limits.FiveHour >= 0.95f ? "outta juice XD"
+        : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? "outta juice XD"
         : "let's work :)";
 
     private static bool JustCompacted(CcStatus? st) =>
