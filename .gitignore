@@ -7,3 +7,4 @@ _reference/
 publish/
 .worktrees/
 .superpowers/
+dist/
