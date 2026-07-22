@@ -28,6 +28,7 @@ internal sealed class MediaWidget : IWidget
     private string? _title, _artist, _trackKey, _appId;
     private bool _playing, _isVideo; // video → transport shows seek ±10s instead of prev/next
     private double _rate = 1.0;      // current playback rate (read from SMTC, driven by the Speed chip)
+    private bool _rateEnabled;       // SMTC says the app supports rate change; Telegram etc. report false -> hide the Speed chip
     private bool _thumbWide;         // 16:9-ish thumbnail = a video frame (album art is square)
     // playback status: only Playing/Paused count as a live player. Browsers keep Stopped/Closed sessions
     // around with stale metadata after a video ends — those must NOT hold the pill open (blank black pill).
@@ -202,6 +203,7 @@ internal sealed class MediaWidget : IWidget
                 _status = info.PlaybackStatus;
                 _playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
                 _isVideo = info.PlaybackType == Windows.Media.MediaPlaybackType.Video;
+                _rateEnabled = info.Controls.IsPlaybackRateEnabled;
                 if (info.PlaybackRate is double pr && pr > 0) _rate = pr; // reflect the app's real rate
                 _version++;
             }
@@ -300,7 +302,9 @@ internal sealed class MediaWidget : IWidget
     {
         var app = App;
         if (!IsVideo()) return new[] { Btn.Prev, Btn.Play, Btn.Next };
-        var l = new List<Btn> { Btn.Back10, Btn.Play, Btn.Fwd10, Btn.Speed };
+        bool rateOk; lock (_lock) { rateOk = _rateEnabled; }
+        var l = new List<Btn> { Btn.Back10, Btn.Play, Btn.Fwd10 };
+        if (rateOk) l.Add(Btn.Speed); // only when the app actually honours rate change (Telegram does not)
         if (SubtitleKey(app) != 0) l.Add(Btn.Cc);
         return l.ToArray();
     }
