@@ -5,8 +5,8 @@ using System.Threading;
 namespace Halo.ClaudeCode;
 
 // Two-path connectivity samples for the panel graph, both REAL end-to-end HTTPS round-trips
-// (a local TUN/proxy can't fake them — no HTTP answer, no sample): "net" = https://1.1.1.1
-// (your internet, via the Cloudflare edge) and "api" = the real https://api.anthropic.com/v1/messages
+// (a local TUN/proxy can't fake them — no HTTP answer, no sample): "net" = https://www.google.com/generate_204
+// (your internet, via Google's connectivity-check endpoint → HTTP 204) and "api" = the real https://api.anthropic.com/v1/messages
 // endpoint (GET → 405 when healthy). We probe the message route, NOT the bare root: root stays 404-
 // reachable during a messages-endpoint outage/overload, so a root probe reads green while CC is dead.
 // If api drops
@@ -85,7 +85,7 @@ internal static class NetMon
             {
                 lastBg = DateTime.UtcNow;
                 bool apiDown = HttpLatency(HttpApi, "https://api.anthropic.com/v1/messages", fresh: true) == Lost;
-                int netMs = HttpLatency(HttpNet, "https://1.1.1.1/", fresh: true); // always probe → latency for Slow
+                int netMs = HttpLatency(HttpNet, "https://www.google.com/generate_204", fresh: true); // always probe → latency for Slow
                 bool netDown = apiDown && netMs == Lost; // net "down" only asserted to fingerprint proxy vs internet
                 SetHealth(apiDown, netDown);
                 bool bad = netMs == Lost || netMs > SlowMs;
@@ -98,7 +98,7 @@ internal static class NetMon
                 int apiMs = Lost;
                 var apiTask = new Thread(() => apiMs = HttpLatency(HttpApi, "https://api.anthropic.com/v1/messages")) { IsBackground = true };
                 apiTask.Start();
-                int netMs = HttpLatency(HttpNet, "https://1.1.1.1/");
+                int netMs = HttpLatency(HttpNet, "https://www.google.com/generate_204");
                 apiTask.Join(2600);
 
                 lock (_net) { _net[_idx] = netMs; _api[_idx] = apiMs; _idx = (_idx + 1) % _net.Length; }

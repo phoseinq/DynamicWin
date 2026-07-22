@@ -60,6 +60,18 @@ internal sealed class FileTray : IWidget
         if (string.IsNullOrWhiteSpace(path)) return;
         string full;
         try { full = Path.GetFullPath(path); } catch { return; }
+        // a dropped shortcut stores its TARGET: dragging the item out then hands apps (Telegram…) the
+        // real file, not a .lnk that lands in the chat as a useless link
+        if (full.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                dynamic sh = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")!)!;
+                string t = sh.CreateShortcut(full).TargetPath;
+                if (!string.IsNullOrWhiteSpace(t) && (File.Exists(t) || Directory.Exists(t))) full = Path.GetFullPath(t);
+            }
+            catch { }
+        }
         if (!File.Exists(full) && !Directory.Exists(full)) return;
         lock (_lock)
         {
@@ -144,7 +156,27 @@ internal sealed class FileTray : IWidget
         Interlocked.Increment(ref _version);
     }
 
-    private static string[] Snapshot() { lock (_lock) return _paths.ToArray(); }
+    private static long _pruneAt;
+
+    // deleted-on-disk files silently leave the shelf (a dead entry can't be opened, copied or dragged);
+    // checked at most every 2s — Snapshot runs per frame
+    private static string[] Snapshot()
+    {
+        lock (_lock)
+        {
+            if (Environment.TickCount64 - _pruneAt > 2000)
+            {
+                _pruneAt = Environment.TickCount64;
+                if (_paths.RemoveAll(p => !File.Exists(p) && !Directory.Exists(p)) > 0)
+                {
+                    _selected.RemoveWhere(s => !_paths.Contains(s, StringComparer.OrdinalIgnoreCase));
+                    Save();
+                    Interlocked.Increment(ref _version);
+                }
+            }
+            return _paths.ToArray();
+        }
+    }
 
     private static void Load()
     {

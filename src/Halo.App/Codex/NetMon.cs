@@ -4,7 +4,7 @@ using System.Threading;
 
 namespace Halo.Codex;
 
-// Independent two-path HTTPS monitor for Codex: 1.1.1.1 measures local internet reachability,
+// Independent two-path HTTPS monitor for Codex: google.com/generate_204 measures local internet reachability,
 // while chatgpt.com measures the OpenAI path. It samples quickly only while the panel is open.
 internal static class CodexNetMon
 {
@@ -13,7 +13,7 @@ internal static class CodexNetMon
     // marketing edge stays 200-reachable during a backend outage, so a root probe reads green while
     // Codex is dead. This is the /backend-api/codex/responses route the CLI actually POSTs to.
     private const string ApiTarget = "https://chatgpt.com/backend-api/codex/responses";
-    private const string NetTarget = "https://1.1.1.1/";
+    private const string NetTarget = "https://www.google.com/generate_204";
 
     private static readonly int[] _net = CreateBuffer(), _api = CreateBuffer();
     private static int _index;

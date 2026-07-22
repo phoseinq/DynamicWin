@@ -129,12 +129,18 @@ internal static class ShellIcon
             Marshal.ReleaseComObject(f);
             if (hbmp == IntPtr.Zero) return null;
 
-            var bm = new BITMAP();
-            if (GetObject(hbmp, Marshal.SizeOf<BITMAP>(), ref bm) == 0 || bm.bmBits == IntPtr.Zero)
+            var ds = new DIBSECTION();
+            if (GetObject(hbmp, Marshal.SizeOf<DIBSECTION>(), ref ds) < Marshal.SizeOf<DIBSECTION>() || ds.dsBm.bmBits == IntPtr.Zero)
                 { using var fb = Image.FromHbitmap(hbmp); return new Bitmap(fb); } // DDB fallback (no alpha)
+            var bm = ds.dsBm;
             using var src = new Bitmap(bm.bmWidth, bm.bmHeight, bm.bmWidthBytes,
                 System.Drawing.Imaging.PixelFormat.Format32bppPArgb, bm.bmBits);
-            return Trim(new Bitmap(src)); // copy off the DIB bits before we delete the HBITMAP
+            var copy = new Bitmap(src); // copy off the DIB bits before we delete the HBITMAP
+            // an app's .lnk/.exe icon can come back as a BOTTOM-UP DIB (positive biHeight); read as top-down
+            // it renders upside down (Telegram's plane pointed up). AppsFolder icons are top-down (negative
+            // biHeight) and stay untouched — flip only the bottom-up ones upright.
+            if (ds.dsBmih.biHeight > 0) copy.RotateFlip(RotateFlipType.RotateNoneFlipY);
+            return Trim(copy);
         }
         catch { return null; }
         finally { if (hbmp != IntPtr.Zero) DeleteObject(hbmp); }
@@ -145,7 +151,7 @@ internal static class ShellIcon
     // (PowerToys: solid 48² at centre, haze at alpha ~8–40 out to every edge). Crop to the *solid* icon
     // (alpha > 90, above the haze) so it fills the slot like packaged apps; hi-res icons fill 256 already.
     // ponytail: GetPixel scan, but icons are ≤256² and this runs once per app (result is cached upstream).
-    private static Bitmap Trim(Bitmap b)
+    private static Bitmap? Trim(Bitmap b)
     {
         int minX = b.Width, minY = b.Height, maxX = -1, maxY = -1;
         for (int y = 0; y < b.Height; y++)
@@ -155,7 +161,10 @@ internal static class ShellIcon
                     if (x < minX) minX = x; if (x > maxX) maxX = x;
                     if (y < minY) minY = y; if (y > maxY) maxY = y;
                 }
-        if (maxX < minX) return b;                       // fully transparent — leave it
+        // blank canvas (some classic apps, e.g. Telegram, hand back a fully-transparent 256px shell image
+        // for their AppsFolder AUMID) → return null so the caller's next fallback (Start-menu .lnk icon,
+        // matched by app name) gets a real icon instead of the chain stopping on an invisible bitmap.
+        if (maxX < minX) { b.Dispose(); return null; }
         int w = maxX - minX + 1, h = maxY - minY + 1;
         if (w >= b.Width - 1 && h >= b.Height - 1) return b; // already fills the canvas
         var crop = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
@@ -179,8 +188,29 @@ internal static class ShellIcon
         public IntPtr bmBits;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth, biHeight;   // biHeight > 0 = bottom-up DIB, < 0 = top-down
+        public ushort biPlanes, biBitCount;
+        public uint biCompression, biSizeImage;
+        public int biXPelsPerMeter, biYPelsPerMeter;
+        public uint biClrUsed, biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DIBSECTION
+    {
+        public BITMAP dsBm;
+        public BITMAPINFOHEADER dsBmih;
+        public uint dsBitfield0, dsBitfield1, dsBitfield2;
+        public IntPtr dshSection;
+        public uint dsOffset;
+    }
+
     [DllImport("gdi32.dll")]
-    private static extern int GetObject(IntPtr h, int c, ref BITMAP pv);
+    private static extern int GetObject(IntPtr h, int c, ref DIBSECTION pv);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern int SHCreateItemFromParsingName(

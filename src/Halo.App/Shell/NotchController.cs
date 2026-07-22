@@ -159,6 +159,8 @@ internal sealed class NotchController
     private int _widgetVersion = -1;
     private int _lastSec = -1;
     private bool _lastMouseDown;
+    private bool _prevDragActive;   // edge-detect the end of a file drag
+    private long _trayShowUntil;    // keep the tray primary this long after a drop so the file is seen land
     // File Tray row interaction: click opens · Ctrl+click selects · drag up/down reorders · drag out extracts
     private string? _trayPressPath;
     private Win32.POINT _trayPressAt;
@@ -184,6 +186,9 @@ internal sealed class NotchController
     // notification banner: the pill itself morphs into a mirrored toast (Windows' own banner is
     // yanked by NotifSource). No close button — clicking anywhere outside dismisses it.
     private readonly Halo.Notifications.NotifSource _notifSrc = new();
+    private Halo.Notifications.BtBattery? _bt; // keeps the connect-watcher (and its timer) alive
+    private readonly Widgets.BtWidget _btWidget = new(); // transient collapsed-pill battery display on connect
+    private System.Threading.Timer? _testTrigger; // demo: file-driven fake banners for recordings (see PollTestNotif)
     private Halo.Notifications.NotifItem? _notif;
     private float _notifT;        // 0..1 pill → banner morph
     private bool _notifClosing;
@@ -256,6 +261,7 @@ internal sealed class NotchController
         widgets.Add(new VlcWidget(_mediaSessions)); // classic VLC has no SMTC — window-title + hotkey path
         widgets.Add(new DownloadWidget()); // best-effort download progress (window-title % scan)
         widgets.Add(new FileTray());       // drag-a-file-over-the-pill shelf (OLE drop target in LayeredNotch)
+        widgets.Add(_btWidget);            // transient BT battery display (collapsed-pill takeover on connect)
         Privacy.Poke(); // start the mic/camera-in-use watcher (drives the privacy dot)
         for (int s = 0; s < StatusStore.MaxSessions; s++)
         {
@@ -272,6 +278,7 @@ internal sealed class NotchController
 
         var active = ActiveIndices();
         LoadOffset(); // restore where the user last parked the pill
+        _notch.SetCapturable(_pinned); // pinned pill shows up in screenshots/recordings; unpinned stays hidden
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f; // boot straight into the right size, no opening animation
         if (!_empty) _primary = active[0];
@@ -279,6 +286,10 @@ internal sealed class NotchController
         for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = _widgets[i].IsActive;
         Apply(0f); // empty or not, the pill shows from the first frame (boot = blank pill)
         _agentNotices = new AgentNoticeCoordinator(_primary);
+
+        // headphones/AirPods/phone connect → the collapsed pill briefly shows the device + battery ring
+        _bt = new Halo.Notifications.BtBattery((name, pct) => _btWidget.Show(name, pct));
+        _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
 
         Dispatcher.Ensure();
         var dq = DispatcherQueue.GetForCurrentThread();
@@ -495,6 +506,55 @@ internal sealed class NotchController
         });
     }
 
+    // demo/test hook: write "<type>[|<arg>[|<proc>]]" into %LOCALAPPDATA%\Halo\notif-test.txt to fire a
+    // fake local banner on command for recordings (real CPU/RAM/hourly triggers are hard to time). Reuses
+    // the exact same banner shapes as the real alerts — the real alert logic is untouched.
+    //   cpu|92   ·   ram|88   ·   clock|2
+    private static readonly string TestNotifPath = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "notif-test.txt");
+    private void PollTestNotif()
+    {
+        try
+        {
+            if (!System.IO.File.Exists(TestNotifPath)) return;
+            var line = System.IO.File.ReadAllText(TestNotifPath).Trim();
+            System.IO.File.Delete(TestNotifPath);
+            if (line.Length == 0) return;
+            var parts = line.Split('|');
+            string type = parts[0].Trim().ToLowerInvariant();
+            string arg = parts.Length > 1 ? parts[1].Trim() : "";
+            string proc = parts.Length > 2 && parts[2].Trim().Length > 0 ? parts[2].Trim() : "";
+            switch (type)
+            {
+                case "cpu": case "sys": case "system":
+                    _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+                    {
+                        App = "System", Title = $"High CPU usage — {(int.TryParse(arg, out var cp) ? cp : 92)}%",
+                        Body = $"{(proc.Length > 0 ? proc : TopCpuProcess() ?? "Chrome")} is using the most.",
+                        Kind = "cpu", Duration = 7, Icon = CpuBadge(),
+                    });
+                    break;
+                case "ram": case "mem": case "memory":
+                    _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+                    {
+                        App = "System", Title = $"High memory usage — {(int.TryParse(arg, out var rp) ? rp : 88)}%",
+                        Body = $"{(proc.Length > 0 ? proc : TopRamProcess() ?? "Chrome")} is using the most.",
+                        Kind = "cpu", Duration = 7, Icon = CpuBadge(),
+                    });
+                    break;
+                case "clock": case "hour": case "hourly":
+                    var t = int.TryParse(arg, out var hr) && hr is >= 0 and <= 23 ? DateTime.Today.AddHours(hr) : DateTime.Now;
+                    _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+                    {
+                        App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
+                        Kind = "hourly", Duration = 5, Icon = ClockBadge(),
+                    });
+                    break;
+            }
+        }
+        catch { }
+    }
+
     private void CheckBattery()
     {
         if (!Win32.GetSystemPowerStatus(out var s)) return;
@@ -664,8 +724,18 @@ internal sealed class NotchController
                 if (_widgets[i] is DownloadWidget && _widgets[i].IsActive)
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
 
-        // a live file drag grabs the pill instantly so the drop zone is right there (reveal-on-drag)
-        if (_drop < 0f && FileTray.DragActive)
+        // a just-connected BT device briefly owns the collapsed pill (device + battery ring), then releases
+        if (_drop < 0f && _btWidget.IsActive)
+            for (int i = 0; i < _widgets.Length; i++)
+                if (_widgets[i] is BtWidget) { _primary = i; _agentNotices.SetPrimary(i); break; }
+
+        // a live file drag grabs the pill instantly so the drop zone is right there (reveal-on-drag),
+        // and the tray keeps the pill for ~2.5s AFTER the drop so the dropped file is actually seen land —
+        // otherwise an active download (which "outranks everything", above) snatches the pill back the
+        // instant DragActive clears and the tray never shows ("همون دانلودر باز میشه بجای File Tray").
+        if (_prevDragActive && !FileTray.DragActive) _trayShowUntil = Environment.TickCount64 + 2500;
+        _prevDragActive = FileTray.DragActive;
+        if (_drop < 0f && (FileTray.DragActive || Environment.TickCount64 < _trayShowUntil))
             for (int i = 0; i < _widgets.Length; i++)
                 if (_widgets[i] is FileTray)
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
@@ -760,7 +830,10 @@ internal sealed class NotchController
 
         int dir = open ? 1 : -1;
         float step = _dt / (open ? OpenSeconds : CloseSeconds);
-        float next = Math.Clamp(_progress + dir * step, 0f, 1f);
+        // a live file drag snaps to full size INSTANTLY (no glide): a half-grown window lets the cursor
+        // fall past the drop-zone the user sees onto the app behind, which then opens the file instead of
+        // the tray catching it ("یه صفحه دیگه باز میشه"). The reliable drop target must be full-size at once.
+        float next = open && FileTray.DragActive ? 1f : Math.Clamp(_progress + dir * step, 0f, 1f);
 
         // strip: apps open downward while hovering; the hovered row's sessions fan out rightward
         int alt = AltIndices().Length;
@@ -988,7 +1061,7 @@ internal sealed class NotchController
                 var pr = PinRect(ExpandedW, ExpandedH);
                 if (p.X >= _el + pr.X * S && p.X < _el + (pr.X + pr.Width) * S
                     && p.Y >= _et + pr.Y * S && p.Y < _et + (pr.Y + pr.Height) * S)
-                    { _pinned = !_pinned; SavePin(); }
+                    { _pinned = !_pinned; SavePin(); _notch.SetCapturable(_pinned); }
                 else
                 // widget rects are logical; the cursor is physical — compare scaled, hand back logical
                 foreach (var (r, onClick) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
@@ -1077,9 +1150,17 @@ internal sealed class NotchController
         var paths = _trayPressPath != null ? FileTray.SelectionOrRow(_trayPressPath) : Array.Empty<string>();
         _trayMode = 2;
         _trayPressPath = null;
-        // blocks in OLE's modal loop until dropped/cancelled; a real drop auto-removes the file(s) from the tray
-        if (paths.Length > 0 && Halo.Interop.FileDrag.Out(paths)) FileTray.RemovePaths(paths);
+        // blocks in OLE's modal loop until dropped/cancelled; a drop anywhere but back on the pill
+        // auto-removes the file(s) from the tray (effect is unreliable — see FileDrag.Out)
+        if (paths.Length > 0 && Halo.Interop.FileDrag.Out(paths) && !CursorOverNotch()) FileTray.RemovePaths(paths);
         _trayPressPath = null; _trayMode = -1;
+    }
+
+    // was the drag released back onto our own window? (fumbled drop → keep the files)
+    private bool CursorOverNotch()
+    {
+        return Win32.GetCursorPos(out var p) && Win32.GetWindowRect(_notch.Hwnd, out var r)
+            && p.X >= r.left && p.X < r.right && p.Y >= r.top && p.Y < r.bottom;
     }
 
     private static bool InRect(Win32.POINT p, int left, int top, int w, int h)
@@ -1512,6 +1593,7 @@ internal sealed class NotchController
     // glyphs verified via --render-notif (no tofu). hue sets the tile colour + the banner glow.
     private static Bitmap BatteryBadge() => LocalBadge(0xE996, 12);   // BatterySaver — amber/red
     private static Bitmap NetBadge()     => LocalBadge(0xEB5E, 5, 34f);// WifiWarning — red
+    private static Bitmap BtBadge()      => LocalBadge(0xE702, 215);   // Bluetooth — blue
     private static Bitmap LimitBadge()   => LocalBadge(0xE9D9, 285);   // Speed/gauge — purple
     private static Bitmap ClockBadge()   => LocalBadge(0xE917, 205);   // Recent (clock) — blue
     private static Bitmap CpuBadge()     => LocalBadge(0xE950, 28);       // Processor icon tile

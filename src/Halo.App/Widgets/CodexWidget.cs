@@ -328,7 +328,7 @@ internal sealed class CodexWidget : IWidget
         DrawNet(g, r.X - 26, a); // breathing room between the graph and the stop button
     }
 
-    // connection-to-ChatGPT graph: green = your internet (ping 1.1.1.1), blue = path to
+    // connection-to-ChatGPT graph: green = your internet (GET google.com/generate_204), blue = path to
     // chatgpt.com. Lost stretches turn red on that line — so you can tell whose fault it is.
     private static void DrawNet(Graphics g, float rightX, float a)
     {
@@ -436,7 +436,7 @@ internal sealed class CodexWidget : IWidget
         {
             ($"net {F(vN)}   api {F(vA)}", White),
             ($"loss  net {lostN}/{cntN}  ·  api {lostA}/{cntA}", Dim),
-            ("1.1.1.1  ·  chatgpt.com", Dim),
+            ("google.com  ·  chatgpt.com", Dim),
         };
         if (vA == CodexNetMon.Lost && vN >= 0) lines.Add(("OpenAI's side :(", Amber));
         else if (vN == CodexNetMon.Lost) lines.Add(("your internet :(", Red));

@@ -130,10 +130,9 @@ internal sealed class LayeredNotch
             throw new InvalidOperationException($"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOWNOACTIVATE);
-        // stay off screenshots / screen recordings — the pill is chrome, not content.
-        // HALO_CAPTURABLE=1 keeps it capturable (demo GIFs / README recordings).
-        if (Environment.GetEnvironmentVariable("HALO_CAPTURABLE") != "1")
-            Win32.SetWindowDisplayAffinity(Hwnd, Win32.WDA_EXCLUDEFROMCAPTURE);
+        // stay off screenshots / screen recordings by default — the pill is chrome, not content.
+        // Pinned flips this (SetCapturable): a pinned pill is deliberate UI the user wants in recordings.
+        SetCapturable(false);
         Win32.AddClipboardFormatListener(Hwnd); // watch for screenshot images landing on the clipboard
         // File Tray: register a real OLE drop target so dragging a file over the pill reveals the tray.
         // Keep the instance alive (field) — RegisterDragDrop only holds a COM ref, GC would collect it.
@@ -142,6 +141,13 @@ internal sealed class LayeredNotch
     }
 
     private Halo.Interop.FileDropTarget? _dropTarget;
+
+    // pinned → visible in screenshots/recorders; unpinned → excluded. HALO_CAPTURABLE=1 forces visible (demos).
+    public void SetCapturable(bool on)
+    {
+        if (Environment.GetEnvironmentVariable("HALO_CAPTURABLE") == "1") on = true;
+        Win32.SetWindowDisplayAffinity(Hwnd, on ? 0u : Win32.WDA_EXCLUDEFROMCAPTURE);
+    }
 
     public void SetVisible(bool visible)
         => Win32.ShowWindow(Hwnd, visible ? Win32.SW_SHOWNOACTIVATE : Win32.SW_HIDE);
@@ -465,9 +471,6 @@ internal sealed class LayeredNotch
             using (var b = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8)))
                 cg.FillPath(b, path);
 
-            using var f = new Font("Segoe MDL2 Assets", D * 0.45f, GraphicsUnit.Pixel);
-            using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-
             void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring, float progress = -1f)
             {
                 if (ia <= 0.01f) return;
@@ -486,10 +489,7 @@ internal sealed class LayeredNotch
                     DrawCircleImage(cg, img, cx, cy, D, ia);
                 }
                 else
-                {
-                    using var ib = new SolidBrush(Color.FromArgb((int)(235 * ia), 255, 255, 255));
-                    cg.DrawString(icon, f, ib, new RectangleF(cx, cy, D, D), sf);
-                }
+                    DrawGlyphCentered(cg, icon, cx, cy, D, D * 0.45f, (int)(235 * ia));
                 if (ring is { } rc) // status ring hugging the icon, same style as the pill's
                 {
                     float inset = D * 0.19f - 2.5f * ss, dd = D - inset * 2;
@@ -616,10 +616,34 @@ internal sealed class LayeredNotch
     private static PointF Pt(PointF c, float r, float a) => new(c.X + r * MathF.Cos(a), c.Y + r * MathF.Sin(a));
     private static float Dist(PointF a, PointF b) { float dx = a.X - b.X, dy = a.Y - b.Y; return MathF.Sqrt(dx * dx + dy * dy); }
 
+    // Centre a glyph in a circle by its true INK bounds, not font metrics — font-metric centring includes
+    // the glyph's side bearings + em padding, which shifted the media/video play mark off-centre in the
+    // swap circle. Ink-bounds centring places the visible shape dead-centre.
+    private static readonly FontFamily _cellGlyphFont = new("Segoe MDL2 Assets");
+    private static void DrawGlyphCentered(Graphics g, string glyph, float x, float y, float box, float px, int alpha)
+    {
+        if (string.IsNullOrEmpty(glyph)) return;
+        using var path = new GraphicsPath();
+        using var sf = new StringFormat(StringFormat.GenericTypographic);
+        path.AddString(glyph, _cellGlyphFont, (int)FontStyle.Regular, px, PointF.Empty, sf);
+        path.Flatten();
+        var b = path.GetBounds();
+        if (b.Width <= 0 || b.Height <= 0) return;
+        using var m = new Matrix();
+        m.Translate(MathF.Round(x + (box - b.Width) / 2f - b.X), MathF.Round(y + (box - b.Height) / 2f - b.Y));
+        path.Transform(m);
+        using var br = new SolidBrush(Color.FromArgb(alpha, 255, 255, 255));
+        var old = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.FillPath(br, path);
+        g.SmoothingMode = old;
+    }
+
     // Draw a bitmap as a circular icon (cover-fit) inset in a CircleD-ish box, with alpha.
     // HQ-scale into a square then fill an ellipse with it as a texture, so edges are anti-aliased.
     private static void DrawCircleImage(Graphics g, Bitmap img, float x, float y, float box, float alpha)
     {
+        img = CenteredSquare(img); // re-centre by true ink bounds so off-centre icons (VLC cone…) sit centred
         float inset = box * 0.19f, d = box - inset * 2; // ~10% smaller icon than before
         var circle = new RectangleF(x + inset, y + inset, d, d);
         int s = Math.Max(1, (int)Math.Ceiling(d));
@@ -646,6 +670,68 @@ internal sealed class LayeredNotch
         g.SmoothingMode = old;
     }
 
+
+    // Re-centre an icon by its true INK bounds onto a square canvas, so an icon whose art sits off-centre
+    // inside its own bitmap (VLC's cone leans; some app icons carry asymmetric padding) renders visually
+    // centred in the circle. Well-centred icons come back effectively unchanged (no regression). Cached by
+    // source bitmap ref — the pixel scan runs once per icon, not per frame; icons are cached upstream.
+    private static readonly System.Collections.Generic.Dictionary<Bitmap, Bitmap> _centered = new();
+    private static Bitmap CenteredSquare(Bitmap src)
+    {
+        lock (_centered)
+        {
+            if (_centered.TryGetValue(src, out var c)) return c;
+            var made = MakeCenteredSquare(src);
+            _centered[src] = made;
+            return made;
+        }
+    }
+
+    private static Bitmap MakeCenteredSquare(Bitmap src)
+    {
+        try
+        {
+            var data = src.LockBits(new Rectangle(0, 0, src.Width, src.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            int minX = src.Width, minY = src.Height, maxX = -1, maxY = -1;
+            try
+            {
+                int stride = data.Stride;
+                var buf = new byte[stride * src.Height];
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0, buf, 0, buf.Length);
+                for (int yy = 0; yy < src.Height; yy++)
+                    for (int xx = 0; xx < src.Width; xx++)
+                        if (buf[yy * stride + xx * 4 + 3] > 24) // alpha coverage
+                        {
+                            if (xx < minX) minX = xx; if (xx > maxX) maxX = xx;
+                            if (yy < minY) minY = yy; if (yy > maxY) maxY = yy;
+                        }
+            }
+            finally { src.UnlockBits(data); }
+            if (maxX < minX) return src; // fully transparent → leave it
+
+            // full-bleed image (a photo / video thumbnail — ink reaches an edge) → leave it; the caller's
+            // centre-crop is correct and re-centring would only letterbox it. Only re-centre PADDED icons.
+            int edge = Math.Max(1, Math.Min(src.Width, src.Height) / 64);
+            if (minX <= edge && maxX >= src.Width - 1 - edge) return src;   // spans full width
+            if (minY <= edge && maxY >= src.Height - 1 - edge) return src;  // spans full height
+
+            // shift the mark so its ink centre sits at the bitmap centre — same scale, no crop, no letterbox.
+            // (a padded icon whose mark leans off-centre becomes centred; a well-centred one shifts by ~0.)
+            float dx = (src.Width - 1) / 2f - (minX + maxX) / 2f;
+            float dy = (src.Height - 1) / 2f - (minY + maxY) / 2f;
+            if (Math.Abs(dx) < 1.5f && Math.Abs(dy) < 1.5f) return src; // already centred → no re-blit
+
+            var shifted = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppPArgb);
+            using (var g = Graphics.FromImage(shifted))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.DrawImage(src, (int)Math.Round(dx), (int)Math.Round(dy), src.Width, src.Height);
+            }
+            return shifted;
+        }
+        catch { return src; }
+    }
 
     private static Bitmap Blur(Bitmap src, int factor)
     {

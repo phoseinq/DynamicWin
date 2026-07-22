@@ -36,13 +36,59 @@ internal static class Downloads
     {
         var h = Hwnd;
         if (h == IntPtr.Zero) return;
-        try { Win32.SetForegroundWindow(h); } catch { }
+        try
+        {
+            Win32.ShowWindow(h, Win32.SW_RESTORE); // un-minimize / show if it was tucked away
+            // a bare SetForegroundWindow from our NOACTIVATE tool-window is blocked by the foreground lock
+            // (target just flashes in the taskbar). Attach our input to the current foreground thread so
+            // Windows lets us hand it the foreground for real.
+            uint fore = Win32.GetWindowThreadProcessId(Win32.GetForegroundWindow(), out _);
+            uint self = Win32.GetCurrentThreadId();
+            bool attached = fore != 0 && fore != self && Win32.AttachThreadInput(fore, self, true);
+            Win32.SetForegroundWindow(h);
+            if (attached) Win32.AttachThreadInput(fore, self, false);
+        }
+        catch { }
+    }
+
+    // Real "stop" for a window-scanned downloader (ABDownloadManager, IDM, …): there's no per-download
+    // cancel API for another app, so stop = quit the manager (its download stays paused/resumable). Kills
+    // the whole process tree behind the scanned window.
+    public static void StopProcess()
+    {
+        var h = Hwnd;
+        if (h == IntPtr.Zero) return;
+        try
+        {
+            Win32.GetWindowThreadProcessId(h, out uint pid);
+            if (pid == 0) return;
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            p.Kill(entireProcessTree: true);
+        }
+        catch { }
     }
 
     // Store install control (real, via AppInstallManager). No-ops for non-Store items.
     public static void StorePause()  { if (IsStore) StoreInstall.Pause(); }
     public static void StoreResume() { if (IsStore) StoreInstall.Resume(); }
     public static void StoreCancel() { if (IsStore) StoreInstall.Cancel(); }
+
+    // ponytail: temp diag — one line per download-state change, to learn what a "cancel doesn't work"
+    // download actually is (Store MSIX = cancel via API; window-scan = only Reveal; game = no control)
+    private static string _lastLog = "";
+    internal static void LogState()
+    {
+        try
+        {
+            string s = $"name='{Name}' store={IsStore} canControl={CanControl} hwnd={(Hwnd != IntPtr.Zero)} exe='{ExePath}' pct={Percent} inst={Installing} wait={Waiting}";
+            if (s == _lastLog) return;
+            _lastLog = s;
+            System.IO.File.AppendAllText(System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "Halo", "dl-debug.txt"),
+                $"{System.DateTime.Now:HH:mm:ss} {s}\r\n");
+        }
+        catch { }
+    }
 
     private static Timer? _timer;
     private static readonly Regex Pct = new(@"^\s*\[?\s*(\d{1,3})\s*%", RegexOptions.Compiled);
@@ -91,7 +137,7 @@ internal static class Downloads
                     {
                         Name = app; Percent = spct; Installing = installing; Waiting = waiting; Paused = paused;
                         Downloaded = done; Total = total; IsStore = true; CanControl = true; NoPct = false;
-                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version);
+                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
                     }
                     return;
                 }
@@ -110,7 +156,7 @@ internal static class Downloads
                     {
                         Name = gApp; Percent = gPct; Installing = false; Waiting = false; Paused = gStalled;
                         Downloaded = gDone; Total = gTotal; IsStore = true; CanControl = false; NoPct = gNoPct;
-                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version);
+                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
                     }
                     return;
                 }
@@ -128,7 +174,7 @@ internal static class Downloads
                 if (name != Name || IsStore) ExePath = ExeOf(hwnd); // resolve the icon only when the task changes
                 Name = name; Percent = pct; Installing = false; Waiting = false; Paused = false; IconFile = null;
                 IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0;
-                Interlocked.Increment(ref Version);
+                Interlocked.Increment(ref Version); LogState();
             }
         }
         catch { }

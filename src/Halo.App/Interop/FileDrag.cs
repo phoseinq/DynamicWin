@@ -41,11 +41,13 @@ internal static class FileDrag
                     || pdo is not ComTypes.IDataObject data)
                     return false;
                 Dragging = true;
-                int hr, effect;
-                try { hr = Win32.SHDoDragDrop(IntPtr.Zero, data, new DropSource(), Win32.DROPEFFECT_COPY | Win32.DROPEFFECT_MOVE, out effect); }
+                int hr;
+                try { hr = Win32.SHDoDragDrop(IntPtr.Zero, data, new DropSource(), Win32.DROPEFFECT_COPY | Win32.DROPEFFECT_MOVE, out _); }
                 finally { Dragging = false; }
-                // dropped on a real target (copied / moved / sent) — not cancelled and not a no-op
-                return hr == DRAGDROP_S_DROP && effect != Win32.DROPEFFECT_NONE;
+                // released on a target (not Esc / not cancelled). The returned effect is deliberately
+                // ignored: Qt apps (Telegram…) accept the files yet report DROPEFFECT_NONE, which made
+                // the tray keep items the user had really sent. Self-drops are filtered by the caller.
+                return hr == DRAGDROP_S_DROP;
             }
             finally { Marshal.ReleaseComObject(arr); }
         }

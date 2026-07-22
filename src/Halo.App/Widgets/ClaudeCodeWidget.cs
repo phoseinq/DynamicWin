@@ -306,7 +306,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         DrawNet(g, r.X - 26, a); // breathing room between the graph and the stop button
     }
 
-    // connection-to-Anthropic graph: green = your internet (ping 1.1.1.1), blue = path to
+    // connection-to-Anthropic graph: green = your internet (GET google.com/generate_204), blue = path to
     // api.anthropic.com. Lost stretches turn red on that line — so you can tell whose fault it is.
     private static void DrawNet(Graphics g, float rightX, float a)
     {
@@ -414,7 +414,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         {
             ($"net {F(vN)}   api {F(vA)}", White),
             ($"loss  net {lostN}/{cntN}  ·  api {lostA}/{cntA}", Dim),
-            ("1.1.1.1  ·  api.anthropic.com", Dim),
+            ("google.com  ·  api.anthropic.com", Dim),
         };
         if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
         else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));

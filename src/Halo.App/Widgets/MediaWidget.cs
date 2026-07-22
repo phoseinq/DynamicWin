@@ -39,7 +39,10 @@ internal sealed class MediaWidget : IWidget
 
     // UI-thread-only album-art cache
     private string? _artKey;
-    private Bitmap? _art;
+    private Bitmap? _art;            // the frame used for accent/icon (first frame of an animated cover)
+    private Bitmap[]? _frames;       // >1 when the thumbnail is an animated GIF
+    private int[]? _delays;          // per-frame duration (ms)
+    private int _totalDelay;         // sum of _delays; 0 → static
     private Color _accent = White;
 
     public MediaWidget(MediaSessions sessions, int slot)
@@ -90,12 +93,31 @@ internal sealed class MediaWidget : IWidget
         lock (_lock) { thumb = _thumb; key = _trackKey; }
         if (key != _artKey)
         {
-            _art?.Dispose();
-            _art = Decode(thumb);
+            DisposeFrames();
+            (_frames, _delays) = DecodeFrames(thumb);
+            _art = _frames is { Length: > 0 } ? _frames[0] : null;
+            _totalDelay = 0;
+            if (_delays != null) foreach (var d in _delays) _totalDelay += d;
             _artKey = key;
             _accent = _art != null ? Fx.Accent(_art) : White;
             _palette = Palette(_accent);
         }
+    }
+
+    private void DisposeFrames()
+    {
+        if (_frames != null) foreach (var f in _frames) f?.Dispose();
+        _frames = null; _delays = null; _art = null;
+    }
+
+    // frame to paint right now: static cover → itself; animated GIF → the frame for the elapsed time (loops)
+    private Bitmap? CurArt()
+    {
+        if (_frames == null || _frames.Length == 0) return null;
+        if (_frames.Length == 1 || _totalDelay <= 0) return _frames[0];
+        int t = (int)(Environment.TickCount64 % _totalDelay);
+        for (int i = 0; i < _frames.Length; i++) { t -= _delays![i]; if (t < 0) return _frames[i]; }
+        return _frames[^1];
     }
 
     // our slot's session changed (a player appeared/closed, or slots reassigned) → re-point at it
@@ -583,7 +605,7 @@ internal sealed class MediaWidget : IWidget
         using var path = Rounded(new RectangleF(x, y, size, size), radius);
         // album art if the track has any; otherwise the source app's icon (podcasts, some videos and
         // radio streams ship no thumbnail \u2014 the app icon reads far better than a generic music glyph)
-        Bitmap? img = _art;
+        Bitmap? img = CurArt();
         if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForAumid(id); }
         if (img != null)
         {
@@ -724,16 +746,33 @@ internal sealed class MediaWidget : IWidget
         g.DrawString(glyph, f, b, r, sf);
     }
 
-    private static Bitmap? Decode(byte[]? bytes)
+    // decode the thumbnail into one or more frames. A single image → one frame; an animated GIF cover →
+    // all its frames + per-frame delays so DrawArt can play it inside the pill (collapsed and expanded).
+    private static (Bitmap[]? frames, int[]? delays) DecodeFrames(byte[]? bytes)
     {
-        if (bytes == null || bytes.Length == 0) return null;
+        if (bytes == null || bytes.Length == 0) return (null, null);
         try
         {
             using var ms = new MemoryStream(bytes);
             using var img = Image.FromStream(ms);
-            return new Bitmap(img); // detach from the stream
+            int n = 1;
+            try { n = img.GetFrameCount(FrameDimension.Time); } catch { }
+            if (n <= 1) return (new[] { new Bitmap(img) }, new[] { 0 }); // detach from the stream
+
+            var frames = new Bitmap[n];
+            var delays = new int[n];
+            byte[]? pd = null;
+            try { pd = img.GetPropertyItem(0x5100)?.Value; } catch { } // PropertyTagFrameDelay: n×int32, centiseconds
+            for (int i = 0; i < n; i++)
+            {
+                img.SelectActiveFrame(FrameDimension.Time, i);
+                frames[i] = new Bitmap(img); // clone — SelectActiveFrame mutates img in place
+                int cs = pd != null && pd.Length >= (i + 1) * 4 ? BitConverter.ToInt32(pd, i * 4) : 10;
+                delays[i] = Math.Max(20, cs * 10); // centiseconds→ms, floored so a 0-delay GIF isn't a strobe
+            }
+            return (frames, delays);
         }
-        catch { return null; }
+        catch { return (null, null); }
     }
 
     // one line, single-line ellipsis, right-aligned + RTL for Persian/Arabic titles

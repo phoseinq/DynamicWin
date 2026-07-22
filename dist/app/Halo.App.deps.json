@@ -7,7 +7,7 @@
   "targets": {
     ".NETCoreApp,Version=v9.0": {},
     ".NETCoreApp,Version=v9.0/win-x64": {
-      "Halo.App/1.0.0": {
+      "Halo.App/3.0.0": {
         "dependencies": {
           "System.Drawing.Common": "9.0.0",
           "runtimepack.Microsoft.NETCore.App.Runtime.win-x64": "9.0.17",
@@ -782,7 +782,7 @@
     }
   },
   "libraries": {
-    "Halo.App/1.0.0": {
+    "Halo.App/3.0.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

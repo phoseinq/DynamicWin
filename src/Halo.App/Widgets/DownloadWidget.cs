@@ -83,9 +83,13 @@ internal sealed class DownloadWidget : IWidget
                 (r[1], _ => Downloads.StoreCancel()),
             };
         }
-        return Downloads.Hwnd == IntPtr.Zero
-            ? Array.Empty<(RectangleF, Action<PointF>)>()
-            : new (RectangleF, Action<PointF>)[] { (CtlRects(w, 1)[0], _ => Downloads.Reveal()) };
+        if (Downloads.Hwnd == IntPtr.Zero) return Array.Empty<(RectangleF, Action<PointF>)>();
+        var wr = CtlRects(w, 2); // window-scanned downloader: open it, or stop (quit) it
+        return new (RectangleF, Action<PointF>)[]
+        {
+            (wr[0], _ => Downloads.Reveal()),
+            (wr[1], _ => Downloads.StopProcess()),
+        };
     }
 
     private static float _fracShown = -1f;
@@ -156,7 +160,12 @@ internal sealed class DownloadWidget : IWidget
             DrawCtl(g, r[0], paused ? 0xE768 : 0xE769, fade, danger: false); // resume ▶ / pause ⏸
             DrawCtl(g, r[1], 0xE711, fade, danger: true);                    // cancel ✕
         }
-        else if (Downloads.Hwnd != IntPtr.Zero) DrawStop(g, CtlRects(w, 1)[0], fade);
+        else if (Downloads.Hwnd != IntPtr.Zero)
+        {
+            var wr = CtlRects(w, 2);
+            DrawCtl(g, wr[0], 0xE838, fade, danger: false); // FolderOpen — bring the downloader to front
+            DrawStop(g, wr[1], fade);                        // real stop — quits the download manager
+        }
     }
 
     private static void DrawArt(Graphics g, Bitmap? icon, float fade)
@@ -275,8 +284,8 @@ internal sealed class DownloadWidget : IWidget
         Fill(g, tx, by, bw2 * pct / 100f, bh, Downloads.Paused ? Dim : accent, bh / 2);
     }
 
-    // round "stop" button — reveals the downloader so the user cancels there. Soft red so it reads
-    // as stop/cancel; brightens on hover. A filled rounded square is the stop mark.
+    // round "stop" button — quits the download manager (Downloads.StopProcess), the only reliable way to
+    // stop another app's download. Soft red so it reads as stop; brightens on hover. Filled rounded square.
     private static readonly Color Red = Color.FromArgb(255, 120, 110);
     private static void DrawStop(Graphics g, RectangleF r, float fade)
     {
