@@ -55,9 +55,10 @@ internal static class StoreInstall
                 {
                     AppInstallState.Paused or AppInstallState.PausedLowBattery
                         or AppInstallState.PausedWiFiRecommended or AppInstallState.PausedWiFiRequired => 1,
-                    AppInstallState.Pending or AppInstallState.ReadyToDownload => 0,
+                    AppInstallState.Pending or AppInstallState.ReadyToDownload => -1, // queued/stuck Store update -> never surface (the phantom "Waiting" pill)
                     _ => 2, // downloading/installing/starting/licensing — live
                 };
+                if (rank < 0) continue; // skip queued/stuck items entirely
                 if (rank > bestRank) { bestRank = rank; active = it; st = s; }
                 if (rank == 2) break;
             }

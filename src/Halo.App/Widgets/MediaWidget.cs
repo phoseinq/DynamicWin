@@ -29,6 +29,7 @@ internal sealed class MediaWidget : IWidget
     private bool _playing, _isVideo; // video → transport shows seek ±10s instead of prev/next
     private double _rate = 1.0;      // current playback rate (read from SMTC, driven by the Speed chip)
     private bool _rateEnabled;       // SMTC says the app supports rate change; Telegram etc. report false -> hide the Speed chip
+    private bool _seekEnabled;       // SMTC says seek/position change is supported (Telegram video reports false)
     private bool _thumbWide;         // 16:9-ish thumbnail = a video frame (album art is square)
     // playback status: only Playing/Paused count as a live player. Browsers keep Stopped/Closed sessions
     // around with stale metadata after a video ends — those must NOT hold the pill open (blank black pill).
@@ -204,6 +205,7 @@ internal sealed class MediaWidget : IWidget
                 _playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
                 _isVideo = info.PlaybackType == Windows.Media.MediaPlaybackType.Video;
                 _rateEnabled = info.Controls.IsPlaybackRateEnabled;
+                _seekEnabled = info.Controls.IsPlaybackPositionEnabled;
                 if (info.PlaybackRate is double pr && pr > 0) _rate = pr; // reflect the app's real rate
                 _version++;
             }
@@ -302,8 +304,11 @@ internal sealed class MediaWidget : IWidget
     {
         var app = App;
         if (!IsVideo()) return new[] { Btn.Prev, Btn.Play, Btn.Next };
-        bool rateOk; lock (_lock) { rateOk = _rateEnabled; }
-        var l = new List<Btn> { Btn.Back10, Btn.Play, Btn.Fwd10 };
+        bool rateOk, seekOk; lock (_lock) { rateOk = _rateEnabled; seekOk = _seekEnabled; }
+        var l = new List<Btn>();
+        if (seekOk) l.Add(Btn.Back10);
+        l.Add(Btn.Play);
+        if (seekOk) l.Add(Btn.Fwd10);
         if (rateOk) l.Add(Btn.Speed); // only when the app actually honours rate change (Telegram does not)
         if (SubtitleKey(app) != 0) l.Add(Btn.Cc);
         return l.ToArray();
@@ -374,10 +379,11 @@ internal sealed class MediaWidget : IWidget
         var seek = SeekRect(w);
         var list = new List<(RectangleF, Action<PointF>)>
         {
-            (seek, pt => Seek((pt.X - seek.X) / seek.Width)),
             (vbar, pt => SetVol((pt.X - vbar.X) / vbar.Width)),
             (mute, _ => Mute()),
         };
+        bool seekOk2; lock (_lock) { seekOk2 = _seekEnabled; }
+        if (seekOk2) list.Insert(0, (seek, pt => Seek((pt.X - seek.X) / seek.Width))); // no dead scrub when the app cannot seek (Telegram)
         var layout = Layout();
         var r = BtnRects(w, h, layout.Length);
         for (int i = 0; i < layout.Length; i++)
