@@ -20,6 +20,8 @@ internal sealed class NotifItem
     public string Kind = "";            // groups replaceable banners (e.g. "language") so rapid ones don't queue
     public double Duration = 6;         // seconds the banner lingers before auto-dismiss
     public Action? OnActivate;          // local banners (e.g. battery) run this on click instead of launching an app
+    public string Code = "";              // 2FA / verification code detected in the text (6 or 8 digits) -> a Copy button
+    public bool Copied;                  // set once the Copy button is clicked -> the button shows a check
 
     // clicking the banner reproduces the real toast's click: WpnDb digs the toast's launch args out of
     // wpndatabase.db (the listener API hides them), so we jump to the exact message/photo — not just
@@ -292,9 +294,24 @@ internal sealed class NotifSource
         icon ??= Halo.Widgets.AppIcon.ForAumid(aumid);
         if (icon == null) { try { icon = Logo(n); } catch { } }
         icon ??= ShellIcon.ForAppName(app); // tray-balloon toasts (WireGuard/Amnezia): match the Start-menu shortcut by name
-        return new NotifItem { Id = n.Id, App = app, Title = title, Body = body, Aumid = aumid, Icon = icon };
+        return new NotifItem { Id = n.Id, App = app, Title = title, Body = body, Aumid = aumid, Icon = icon, Code = DetectCode(title, body) };
     }
 
+    // find a one-time / 2FA code in the toast text: a standalone run of exactly 6 or 8 digits (the common
+    // OTP lengths), not glued to other digits, and skipping anything that reads like a year/price/phone by
+    // requiring it to stand alone. First match wins; empty string = no code, so no Copy button is shown.
+    private static readonly System.Text.RegularExpressions.Regex CodeRx =
+        new(@"(?<![\d])(\d{6}|\d{8})(?![\d])", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static string DetectCode(string title, string body)
+    {
+        foreach (var text in new[] { title, body })
+        {
+            if (string.IsNullOrEmpty(text)) continue;
+            var m = CodeRx.Match(text);
+            if (m.Success) return m.Groups[1].Value;
+        }
+        return "";
+    }
     private static System.Drawing.Bitmap? Logo(UserNotification n)
     {
         try

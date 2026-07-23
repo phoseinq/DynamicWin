@@ -1041,8 +1041,18 @@ internal sealed class NotchController
             // no close button by design: a click outside dismisses (softly); the grabber strip
             // grows it into the full message; a click on the banner body opens the source app
             // (like clicking the real toast would) and dismisses.
+            var copyR = NotifBanner.CopyRect(_notif, _curW);
             if (!InRect(p, NotifLeft(), _ct, Sc(_curW), Sc(_curH)))
                 _notifClosing = true;
+            // Copy-code button: copy the detected 2FA code, flash "Copied", keep the banner open
+            else if (!copyR.IsEmpty
+                && p.X >= NotifLeft() + copyR.X * S && p.X < NotifLeft() + copyR.Right * S
+                && p.Y >= _ct + copyR.Y * S && p.Y < _ct + copyR.Bottom * S)
+            {
+                Halo.Interop.Clipboard.SetText(_notif.Code);
+                _notif.Copied = true;
+                _notifDeadline = Max(_notifDeadline, DateTime.UtcNow.AddSeconds(2)); // give a beat to see "Copied"
+            }
             else if (!_notifDetailOn && _notif.Body.Length > 0 && p.Y >= _ct + Sc(_curH - 22))
             {
                 _notifDetailOn = true;

@@ -18,6 +18,38 @@ internal static class NotifBanner
 
     private static float TextX => IconX + IconD + 14;
 
+    // Copy-code button: a small pill on the right of the eyebrow row, shown only when the toast carries a
+    // detected verification code. Returns Empty when there's no code (so NotchController skips the hit-test).
+    public static RectangleF CopyRect(NotifItem n, int w)
+    {
+        if (string.IsNullOrEmpty(n.Code)) return RectangleF.Empty;
+        float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f, bh = 22; // fit "Copied" (6) too
+        return new RectangleF(w - bw - 20, 40, bw, bh);
+    }
+
+    private static void DrawCopyButton(Graphics g, NotifItem n, int w, float a)
+    {
+        var r = CopyRect(n, w);
+        if (r.IsEmpty) return;
+        bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        var accent = Color.FromArgb(120, 185, 255);
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 64 : 34, accent), a)))
+        using (var p = Fx.Rounded(r, r.Height / 2f))
+            g.FillPath(bg, p);
+        using (var pen = new Pen(Mul(Color.FromArgb(hov ? 120 : 70, accent), a), 1f))
+        using (var p = Fx.Rounded(r, r.Height / 2f))
+            g.DrawPath(pen, p);
+        // copy glyph (Segoe MDL2 "Copy" E8C8) + the code
+        using var gf = new Font("Segoe MDL2 Assets", 11f, GraphicsUnit.Pixel);
+        using var cf = new Font("Segoe UI Semibold", 12.5f, GraphicsUnit.Pixel);
+        using var b = new SolidBrush(Mul(White, a * (hov ? 1f : 0.9f)));
+        using var sf = new StringFormat(StringFormat.GenericTypographic) { LineAlignment = StringAlignment.Center };
+        string glyph = n.Copied ? "" : ""; // Accept (check) once copied, else Copy
+        string label = n.Copied ? "Copied" : n.Code;
+        g.DrawString(glyph, gf, b, new RectangleF(r.X + 9, r.Y, 16, r.Height), sf);
+        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y, r.Width - 26, r.Height), sf);
+    }
+
     // slightly smaller type overall, shrinking a touch more as the toast's text gets longer
     // (1.0 for short toasts → 0.86 for walls of text), so long titles/bodies fit gracefully
     private static float FontScale(NotifItem n)
@@ -104,6 +136,8 @@ internal static class NotifBanner
             using (var b = new SolidBrush(Mul(Dim, a * detail)))
             using (var f = WrapFmt(n.Body))
                 g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, h - 70 - 14), f);
+
+        DrawCopyButton(g, n, w, a); // Copy button for a detected verification code
 
         if (!detailOn && n.Body.Length > 0) // grabber bar = "there's more" (no close button by design)
         {
