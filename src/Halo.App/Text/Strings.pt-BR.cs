@@ -48,6 +48,7 @@ internal static class PtBr
         ["OpenAI's side :("] = "lado da OpenAI :(",
         ["Bad internet :/"] = "Internet ruim :/",
         ["loss"] = "perda",
+        ["net"] = "rede",
 
         // ── panels ────────────────────────────────────────────────────────
         ["No active Claude Code session"] = "Nenhuma sessão do Claude Code ativa",
