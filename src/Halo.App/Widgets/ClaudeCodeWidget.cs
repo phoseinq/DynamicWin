@@ -5,6 +5,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using Halo.ClaudeCode;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -110,11 +111,11 @@ internal sealed class ClaudeCodeWidget : IWidget
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))
                 g.FillEllipse(db, x, y, sz, sz);
 
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        string verb = OutageText() ?? (LimitHit ? Loc.T("outta juice :(") : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
+            "compacting" when Compacting(st) => Loc.T("compacting…"),
+            "waiting_input" => Loc.T("your move ;)"),
             _ => IdleMood(st),
         });
         string el = LimitHit ? LimitReset() : Elapsed(st);
@@ -227,19 +228,19 @@ internal sealed class ClaudeCodeWidget : IWidget
             double ctx = ContextFrac(st);
             long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
             string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+            DrawBar(g, pad, y, barW, Loc.T("Context"), $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
         }
         else
         {
             using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Claude Code session", body, nb, pad, y + 4);
+            g.DrawString(Loc.T("No active Claude Code session"), body, nb, pad, y + 4);
         }
 
         string LimitValue(float f, DateTimeOffset reset, float rowY)
         {
             bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
                 && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
+            return hov ? $"{f * 100:0.#}%  ·  " + Loc.T("resets {0}", reset.ToLocalTime().ToString("ddd HH:mm"))
                        : $"{Pct(f)}  ·  {ResetIn(reset)}";
         }
 
@@ -247,25 +248,26 @@ internal sealed class ClaudeCodeWidget : IWidget
         {
             bool hov5 = WidgetInput.Over && WidgetInput.Mouse.Y >= y + 40 && WidgetInput.Mouse.Y < y + 76
                 && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            string credits = Limits.CreditsUsed <= 0 ? ""
-                : hov5
-                    ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
-                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} left of ${Limits.CreditsLimit:0}"
-                       : $"  ·  ${Limits.CreditsUsed:0.00} used")
-                    : $"  ·  ${Limits.CreditsUsed:0.00} credits";
-            DrawBar(g, pad, y + 40, barW, "5-hour limit",
+            string credits = Limits.CreditsUsed <= 0 ? "" : "  ·  " + (
+                hov5
+                    ? (Limits.CreditsBalance >= 0 ? Loc.T("${0} left", $"{Limits.CreditsBalance:0.00}")
+                       : Limits.CreditsLimit > 0 ? Loc.T("${0} left of ${1}",
+                             $"{Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00}", $"{Limits.CreditsLimit:0}")
+                       : Loc.T("${0} used", $"{Limits.CreditsUsed:0.00}"))
+                    : Loc.T("${0} credits", $"{Limits.CreditsUsed:0.00}"));
+            DrawBar(g, pad, y + 40, barW, Loc.T("5-hour limit"),
                 LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + 40) + credits,
                 Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
         }
         if (Limits.Week >= 0)
-            DrawBar(g, pad, y + 80, barW, "Weekly limit",
+            DrawBar(g, pad, y + 80, barW, Loc.T("Weekly limit"),
                 LimitValue(Limits.Week, Limits.WeekReset, y + 80), Limits.Week, UsageColor(Limits.Week), a, body, small);
 
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
-        string age = Limits.LastSuccess == DateTime.MinValue ? "usage never fetched"
-            : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}";
-        string rtxt = $"{age}  ·  ⟳ refresh";
+        string age = Limits.LastSuccess == DateTime.MinValue ? Loc.T("usage never fetched")
+            : Loc.T("updated {0}", AgeText(DateTime.UtcNow - Limits.LastSuccess));
+        string rtxt = $"{age}  ·  ⟳ " + Loc.T("refresh");
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
@@ -398,8 +400,8 @@ internal sealed class ClaudeCodeWidget : IWidget
             ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
             ("google.com  ·  api.anthropic.com", Dim),
         };
-        if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
-        else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));
+        if (vA == NetMon.Lost && vN >= 0) lines.Add((Loc.T("Anthropic's side :("), Amber));
+        else if (vN == NetMon.Lost) lines.Add((Loc.T("your internet :("), Red));
 
         using var f2 = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
         float bw2 = 0;
@@ -426,10 +428,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static RectangleF RefreshRect(int w, int h) => new(w - 26 - 220, h - 26, 220, 20);
 
     private static string AgeText(TimeSpan d) =>
-        d.TotalMinutes < 1 ? "just now"
-        : d.TotalHours < 1 ? $"{(int)d.TotalMinutes}m ago"
-        : d.TotalDays < 1 ? $"{(int)d.TotalHours}h ago"
-        : $"{(int)d.TotalDays}d ago";
+        d.TotalMinutes < 1 ? Loc.T("just now")
+        : d.TotalHours < 1 ? Loc.T("{0}m ago", (int)d.TotalMinutes)
+        : d.TotalDays < 1 ? Loc.T("{0}h ago", (int)d.TotalHours)
+        : Loc.T("{0}d ago", (int)d.TotalDays);
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
         => new[]
@@ -508,7 +510,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     {
         if (r == default) return "";
         var d = r - DateTimeOffset.UtcNow;
-        if (d.TotalSeconds <= 0) return "now";
+        if (d.TotalSeconds <= 0) return Loc.T("now");
         if (d.TotalDays >= 1) return $"{(int)d.TotalDays}d {d.Hours}h";
         if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes}m";
         return $"{d.Minutes}m";
@@ -516,11 +518,11 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     private static string Activity(CcStatus? st)
     {
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        string verb = OutageText() ?? (LimitHit ? Loc.T("outta juice :(") : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
+            "compacting" when Compacting(st) => Loc.T("compacting…"),
+            "waiting_input" => Loc.T("your move ;)"),
             _ => IdleMood(st),
         });
         if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
@@ -534,24 +536,24 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string LimitReset()
     {
         var r = ResetIn(Limits.FiveHour >= 0.99f ? Limits.FiveHourReset : Limits.WeekReset);
-        return r.Length > 0 ? "back in " + r : "";
+        return r.Length > 0 ? Loc.T("back in {0}", r) : "";
     }
 
-    private static string IdleMood(CcStatus? st) =>
+    private static string IdleMood(CcStatus? st) => Loc.T(
         NetMon.NetDown ? "offline :("
         : NetMon.ApiDown ? "api down :("
         : JustCompacted(st) ? "compacted :)"
         : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? "outta juice XD"
-        : "let's work :)";
+        : "let's work :)");
 
     private static bool JustCompacted(CcStatus? st) =>
         DateTimeOffset.TryParse(st?.CompactedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)
         && DateTimeOffset.UtcNow - t < TimeSpan.FromSeconds(20);
 
     private static string? OutageText() =>
-        NetMon.NetDown ? "net error :(" : NetMon.ApiDown ? "api error :(" : null;
+        NetMon.NetDown ? Loc.T("net error :(") : NetMon.ApiDown ? Loc.T("api error :(") : null;
 
-    private static string ToolVerb(string? tool) => tool switch
+    private static string ToolVerb(string? tool) => Loc.T(tool switch
     {
         "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",
         "Read" => "reading…",
@@ -565,7 +567,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         "AskUserQuestion" => "asking you :)",
         null or "" => "hmm…",
         _ => tool!.ToLowerInvariant() + "…",
-    };
+    });
 
     private static string Elapsed(CcStatus? st)
     {

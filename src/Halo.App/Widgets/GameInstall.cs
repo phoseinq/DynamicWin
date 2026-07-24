@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -20,7 +21,7 @@ internal static class GameInstall
 
     public static bool Poll(out string name, out long done, out long total, out bool stalled)
     {
-        name = "Xbox game"; done = 0; total = 0; stalled = false;
+        name = Loc.T("Xbox game"); done = 0; total = 0; stalled = false;
 
         string? folder = FindStagingFolder();
         if (folder == null) { lock (_lock) { _folder = null; _name = null; _bytes = _total = 0; } _startupDone = true; return false; }
@@ -44,7 +45,7 @@ internal static class GameInstall
         }
 
         if (sinceGrew > 90_000) return false;
-        lock (_lock) { name = _name ?? "Xbox game"; done = _bytes; total = _total; }
+        lock (_lock) { name = _name ?? Loc.T("Xbox game"); done = _bytes; total = _total; }
         stalled = !active;
         return true;
     }
