@@ -280,7 +280,10 @@ internal sealed class NotchController
         Apply(0f);
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
-        _bt = new Halo.Notifications.BtBattery((name, pct) => _btWidget.Show(name, pct));
+        _bt = new Halo.Notifications.BtBattery(
+            (name, pct) => _btWidget.Connect(name, pct),
+            name => _btWidget.Disconnect(name),
+            pct => _btWidget.UpdateBattery(pct));
         _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
 
         Dispatcher.Ensure();
@@ -656,7 +659,10 @@ internal sealed class NotchController
                 if (_widgets[i] is DownloadWidget && _widgets[i].IsActive)
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
 
-        if (_drop < 0f && _btWidget.IsActive)
+        // Only steal focus for a few seconds right after connecting -- once JustConnected
+        // elapses, the widget stays active (persistent) but settles into the row like the
+        // other widgets instead of pinning itself as primary forever.
+        if (_drop < 0f && _btWidget.JustConnected)
             for (int i = 0; i < _widgets.Length; i++)
                 if (_widgets[i] is BtWidget) { _primary = i; _agentNotices.SetPrimary(i); break; }
 

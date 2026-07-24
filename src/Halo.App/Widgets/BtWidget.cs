@@ -8,7 +8,8 @@ namespace Halo.Widgets;
 
 internal sealed class BtWidget : IWidget
 {
-    private const int HoldMs = 6000;
+    /// <summary>How long after connecting the widget is allowed to grab focus as primary.</summary>
+    private const int FlashMs = 6000;
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
     private static readonly Color Track = Color.FromArgb(46, 255, 255, 255);
@@ -18,26 +19,55 @@ internal sealed class BtWidget : IWidget
     private string _name = "";
     private int _pct;
     private int _glyph = 0xE702;
-    private long _until;
+    private bool _connected;
+    private long _connectedAtMs;
     private int _version;
     private float _fillShown = -1f;
 
-    public void Show(string name, int pct)
+    /// <summary>A (possibly new) device just connected -- becomes the featured device.</summary>
+    public void Connect(string name, int pct)
     {
         lock (_lock)
         {
+            bool isNewDevice = !_connected || !string.Equals(_name, name, StringComparison.OrdinalIgnoreCase);
             _name = name;
             _pct = Math.Clamp(pct, 0, 100);
             _glyph = GlyphFor(name);
-            _fillShown = 0f;
-            _until = Environment.TickCount64 + HoldMs;
+            _connected = true;
+            if (isNewDevice) { _fillShown = -1f; _connectedAtMs = Environment.TickCount64; }
             _version++;
         }
     }
 
-    public bool IsActive { get { lock (_lock) return Environment.TickCount64 < _until; } }
+    /// <summary>Silent battery-level refresh for the currently featured device -- no re-flash.</summary>
+    public void UpdateBattery(int pct)
+    {
+        lock (_lock)
+        {
+            if (!_connected) return;
+            _pct = Math.Clamp(pct, 0, 100);
+            _version++;
+        }
+    }
+
+    /// <summary>The featured device disconnected. Ignored if <paramref name="name"/> isn't the one shown.</summary>
+    public void Disconnect(string name)
+    {
+        lock (_lock)
+        {
+            if (!_connected || !string.Equals(_name, name, StringComparison.OrdinalIgnoreCase)) return;
+            _connected = false;
+            _version++;
+        }
+    }
+
+    public bool IsActive { get { lock (_lock) return _connected; } }
+
+    /// <summary>True for a short window right after connecting -- lets the shell flash it to primary once.</summary>
+    public bool JustConnected { get { lock (_lock) return _connected && Environment.TickCount64 - _connectedAtMs < FlashMs; } }
+
     public int Version { get { lock (_lock) return _version; } }
-    public bool Animating => IsActive;
+    public bool Animating { get { lock (_lock) return _connected && Environment.TickCount64 - _connectedAtMs < 1200; } }
 
     public string Icon => ((char)0xE702).ToString();
 
