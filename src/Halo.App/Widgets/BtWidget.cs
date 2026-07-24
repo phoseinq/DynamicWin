@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -122,7 +123,7 @@ internal sealed class BtWidget : IWidget
         using (var nb = new SolidBrush(Mul(White, fade)))
             g.DrawString(name, nf, nb, tx, cy - 26);
         using (var bb = new SolidBrush(Mul(Dim, fade)))
-            g.DrawString($"{pct}% battery", bf, bb, tx, cy + 4);
+            g.DrawString(Loc.T("{0}% battery", pct), bf, bb, tx, cy + 4);
     }
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)

@@ -101,5 +101,9 @@ internal static class PtBr
         ["Battery"] = "Bateria",
         ["Network"] = "Rede",
         ["Screenshot"] = "Captura de tela",
+
+        // ── bluetooth ─────────────────────────────────────────────────────
+        ["Bluetooth device"] = "Dispositivo Bluetooth",
+        ["{0}% battery"] = "{0}% de bateria",
     };
 }

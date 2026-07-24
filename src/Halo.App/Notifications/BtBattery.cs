@@ -62,7 +62,7 @@ internal sealed class BtBattery
         try
         {
             if (!_live) { Log($"seed (already connected): {info.Name}"); return; }
-            string name = info.Name?.Length > 0 ? info.Name : "Bluetooth device";
+            string name = info.Name?.Length > 0 ? info.Name : Halo.Text.Loc.T("Bluetooth device");
             Log($"connected: {name}");
             int pct = await Battery(name);
             if (pct < 0) { await Task.Delay(2500); pct = await Battery(name); }
