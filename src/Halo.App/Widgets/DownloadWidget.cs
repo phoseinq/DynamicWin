@@ -74,18 +74,11 @@ internal sealed class DownloadWidget : IWidget
     // the collapsed pill's own Stop, so a runaway download can be killed at a glance without opening the
     // panel first. Same two actions as the panel: Store items cancel through AppInstallManager, everything
     // else quits the downloader, since no cross-app per-download cancel exists.
+    // Deliberately none. A Stop lived here briefly and was removed: the collapsed pill is a glance
+    // surface the user reaches toward, so a control on it fires by accident. Stop, cancel and the file
+    // path all live in the expanded panel, where there is room to label them.
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> CollapsedButtons(int w, int h)
-    {
-        if (Downloads.Name == null) return Array.Empty<(RectangleF, Action<PointF>)>();
-        return new (RectangleF, Action<PointF>)[]
-        {
-            (CollapsedStopRect(w, h), _ =>
-            {
-                if (Downloads.IsStore && Downloads.CanControl) Downloads.StoreCancel();
-                else Downloads.StopProcess();
-            }),
-        };
-    }
+        => Array.Empty<(RectangleF, Action<PointF>)>();
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
@@ -99,7 +92,17 @@ internal sealed class DownloadWidget : IWidget
                 (r[1], _ => Downloads.StoreCancel()),
             };
         }
-        if (Downloads.Hwnd == IntPtr.Zero) return Array.Empty<(RectangleF, Action<PointF>)>();
+        if (Downloads.Hwnd == IntPtr.Zero)
+        {
+            // browser/partial download: reveal the file, or bring the fetching app forward to cancel there
+            if (Downloads.FilePath is not { Length: > 0 }) return Array.Empty<(RectangleF, Action<PointF>)>();
+            var pr = CtlRects(w, 2);
+            return new (RectangleF, Action<PointF>)[]
+            {
+                (pr[0], _ => Downloads.ShowInFolder()),
+                (pr[1], _ => Downloads.RevealOwner()),
+            };
+        }
         var wr = CtlRects(w, 2); // window-scanned downloader: open it, or stop (quit) it
         return new (RectangleF, Action<PointF>)[]
         {
@@ -173,6 +176,19 @@ internal sealed class DownloadWidget : IWidget
             }
         }
 
+        // where the file is landing — the question the panel could not answer before. Folder only, since
+        // the filename is already the title, and the middle is elided so a deep path still reads.
+        if (Downloads.FilePath is { Length: > 0 } fp)
+        {
+            string? dir = null;
+            try { dir = System.IO.Path.GetDirectoryName(fp); } catch { }
+            if (!string.IsNullOrEmpty(dir))
+                using (var pb = new SolidBrush(Mul(Color.FromArgb(120, 255, 255, 255), fade)))
+                using (var psf = new StringFormat(StringFormat.GenericTypographic)
+                { Trimming = StringTrimming.EllipsisPath, FormatFlags = StringFormatFlags.NoWrap })
+                    g.DrawString(dir, timeF, pb, new RectangleF(tx, by + 26, tw, 18), psf);
+        }
+
         // control chips, centred in the right column at y=158
         if (Downloads.IsStore && Downloads.CanControl)
         {
@@ -185,6 +201,17 @@ internal sealed class DownloadWidget : IWidget
             var wr = CtlRects(w, 2);
             DrawCtl(g, wr[0], 0xE838, fade, danger: false); // FolderOpen — bring the downloader to front
             DrawStop(g, wr[1], fade);                        // real stop — quits the download manager
+        }
+        else if (Downloads.FilePath is { Length: > 0 })
+        {
+            // A browser download had no controls at all, because it has no window we scanned. Two honest
+            // ones: show the file, and surface the app that is fetching it so the download can be cancelled
+            // where it actually lives. No "stop" chip here — for a browser the only stop we could implement
+            // is killing the browser or deleting the half-written file, and the project's rule is to hide a
+            // control the underlying app cannot honour rather than ship a silent no-op.
+            var br = CtlRects(w, 2);
+            DrawCtl(g, br[0], 0xE838, fade, danger: false); // FolderOpen — reveal the file
+            DrawCtl(g, br[1], 0xE7C4, fade, danger: false); // Switch app — bring the downloader forward
         }
     }
 
@@ -339,9 +366,6 @@ internal sealed class DownloadWidget : IWidget
         // the app writes compound status ("net 15 · api 210 ms"). The bytes are the honest number — they
         // come off the file itself — so they lead, and the percentage follows as the derived figure.
         long done = Downloads.Downloaded, tot = Downloads.Total;
-        string text = done > 1_048_576 && tot > 1_048_576
-            ? $"{Bytes(done)} / {Bytes(tot)}  ·  {pct}%"
-            : done > 1_048_576 ? $"{Bytes(done)}  ·  {pct}%" : $"{pct}%";
 
         var oldHint = g.TextRenderingHint;
         // ClearType paints orange/blue subpixel fringes, which on a layered per-pixel-alpha surface read as
@@ -351,7 +375,19 @@ internal sealed class DownloadWidget : IWidget
         using var sf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
 
-        float left = iconRight + 8f, right = w - (StopSize + 16f);   // leave the stop button its corner
+        float left = iconRight + 8f, right = w - 12f;
+        // 220px is not much once an icon has taken its share, so offer the fullest line that actually fits
+        // and step down rather than letting it clip — the percentage is the part that must never be lost.
+        string text = $"{pct}%";
+        foreach (var candidate in new[]
+        {
+            done > 1_048_576 && tot > 1_048_576 ? $"{Bytes(done)} / {Bytes(tot)}  ·  {pct}%" : null,
+            done > 1_048_576 ? $"{Bytes(done)}  ·  {pct}%" : null,
+        })
+        {
+            if (candidate == null) continue;
+            if (g.MeasureString(candidate, f, int.MaxValue, sf).Width <= right - left) { text = candidate; break; }
+        }
         var zone = new RectangleF(left, -Fx.CenterLift(f), right - left, h);
         using (var shadow = new SolidBrush(Mul(Color.FromArgb(110, 0, 0, 0), fade)))
             g.DrawString(text, f, shadow, new RectangleF(zone.X + 0.6f, zone.Y + 0.6f, zone.Width, zone.Height), sf);
@@ -359,29 +395,11 @@ internal sealed class DownloadWidget : IWidget
             g.DrawString(text, f, nb, zone, sf);
         g.TextRenderingHint = oldHint;
 
-        DrawCollapsedStop(g, w, h, fade);
     }
 
     // Stop, right there on the collapsed pill — reaching it used to mean opening the panel first. Same
     // action as the panel's: there is no cross-app cancel API, so it quits the downloader (the download
     // stays resumable) or, for a Store item, cancels through AppInstallManager.
-    internal const float StopSize = 22f;
-    internal static RectangleF CollapsedStopRect(int w, int h)
-        => new(w - StopSize - 9f, (h - StopSize) / 2f, StopSize, StopSize);
-
-    private static void DrawCollapsedStop(Graphics g, int w, int h, float fade)
-    {
-        var r = CollapsedStopRect(w, h);
-        bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
-        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 150 : 90, 12, 12, 14), fade)))
-            g.FillEllipse(bg, r);
-        using (var pen = new Pen(Mul(Color.FromArgb(hov ? 235 : 150, 255, 160, 150), fade), 1.2f))
-            g.DrawEllipse(pen, r.X + 0.6f, r.Y + 0.6f, r.Width - 1.2f, r.Height - 1.2f);
-        float s = r.Width * 0.30f;
-        using var b = new SolidBrush(Mul(hov ? Color.FromArgb(255, 120, 110) : Color.FromArgb(210, 255, 130, 120), fade));
-        g.FillRectangle(b, r.X + (r.Width - s) / 2f, r.Y + (r.Height - s) / 2f, s, s);
-    }
-
     // A stopped/paused download keeps its app icon so you still know what it is; the state goes on top as a
     // small badge, the way the strip badges sessions.
     private static void DrawPausedBadge(Graphics g, float x, float y, float sz, float fade)

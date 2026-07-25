@@ -19,6 +19,8 @@ internal static class Downloads
     public static volatile string? Name;   // cleaned file/task name (or the Store app name)
     public static volatile int Percent;     // 0..100
     public static volatile string? ExePath; // downloader exe (or Store AUMID), for its icon
+    public static volatile string? FilePath; // where the file is landing, when we know it (partial-file scans)
+    public static volatile int OwnerPid;     // process writing that file, so we can surface it on demand
     public static volatile string? IconFile; // direct image file for the icon (GDK game's staged logo)
     public static volatile bool Installing; // Store: past download, package deploying (indeterminate)
     public static volatile bool Waiting;    // Store: queued (Pending/ReadyToDownload), download not started
@@ -135,7 +137,7 @@ internal static class Downloads
                     if (!IsStore || Name != app || Percent != spct || Installing != installing
                         || Waiting != waiting || Paused != paused || Downloaded != done || Total != total)
                     {
-                        Name = app; Percent = spct; Installing = installing; Waiting = waiting; Paused = paused;
+                        Name = app; Percent = spct; Installing = installing; Waiting = waiting; Paused = paused; FilePath = null; OwnerPid = 0;
                         Downloaded = done; Total = total; IsStore = true; CanControl = true; NoPct = false;
                         Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
                     }
@@ -154,7 +156,7 @@ internal static class Downloads
                     if (!IsStore || Name != gApp || Downloaded != gDone || Total != gTotal
                         || Percent != gPct || Paused != gStalled || NoPct != gNoPct)
                     {
-                        Name = gApp; Percent = gPct; Installing = false; Waiting = false; Paused = gStalled;
+                        Name = gApp; Percent = gPct; Installing = false; Waiting = false; Paused = gStalled; FilePath = null; OwnerPid = 0;
                         Downloaded = gDone; Total = gTotal; IsStore = true; CanControl = false; NoPct = gNoPct;
                         Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
                     }
@@ -167,7 +169,7 @@ internal static class Downloads
                     int sPct = (int)Math.Clamp(steam.Done * 100 / Math.Max(steam.Total, 1), 0, 99);
                     if (Name != steam.Name || Downloaded != steam.Done || Total != steam.Total || Percent != sPct || IsStore)
                     {
-                        Name = steam.Name; Percent = sPct; Installing = false; Waiting = false; Paused = false;
+                        Name = steam.Name; Percent = sPct; Installing = false; Waiting = false; Paused = false; FilePath = null; OwnerPid = 0;
                         Downloaded = steam.Done; Total = steam.Total; IsStore = false; CanControl = false; NoPct = false;
                         ExePath = SteamExe(); IconFile = null; Hwnd = IntPtr.Zero;
                         Interlocked.Increment(ref Version); LogState();
@@ -194,6 +196,7 @@ internal static class Downloads
                         Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = false;
                         Downloaded = part.Bytes; Total = noPct ? 0 : pTotal; IsStore = false; CanControl = false;
                         NoPct = noPct; IconFile = null; Hwnd = IntPtr.Zero;
+                        FilePath = part.Path; OwnerPid = part.OwnerPid;
                         ExePath = part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null;
                         Interlocked.Increment(ref Version); LogState();
                     }
@@ -203,6 +206,7 @@ internal static class Downloads
                 {
                     Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false; Paused = false;
                     IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0; Hwnd = IntPtr.Zero;
+                    FilePath = null; OwnerPid = 0;
                     Interlocked.Increment(ref Version);
                 }
                 return;
@@ -211,10 +215,52 @@ internal static class Downloads
             if (name != Name || pct != Percent || IsStore)
             {
                 if (name != Name || IsStore) ExePath = ExeOf(hwnd); // resolve the icon only when the task changes
-                Name = name; Percent = pct; Installing = false; Waiting = false; Paused = false; IconFile = null;
+                Name = name; Percent = pct; Installing = false; Waiting = false; Paused = false; IconFile = null; FilePath = null; OwnerPid = 0;
                 IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0;
                 Interlocked.Increment(ref Version); LogState();
             }
+        }
+        catch { }
+    }
+
+    // Select the file in Explorer. For a partial download that means the .crdownload, which is still the
+    // right place to land: the folder is what the user wants, and the file appears there when it finishes.
+    public static void ShowInFolder()
+    {
+        var path = FilePath;
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            { FileName = "explorer.exe", Arguments = $"/select,\"{path}\"", UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    // Bring the app doing the downloading to the front so the user can cancel it there. No cross-app API
+    // stops another program's download, and for a browser the only "stop" we could implement ourselves
+    // would be killing the browser or deleting the half-written file — both worse than the problem.
+    public static void RevealOwner()
+    {
+        int pid = OwnerPid;
+        if (pid == 0) { Reveal(); return; }
+        try
+        {
+            IntPtr found = IntPtr.Zero;
+            Win32.EnumWindows((h, _) =>
+            {
+                if (!Win32.IsWindowVisible(h)) return true;
+                Win32.GetWindowThreadProcessId(h, out uint wp);
+                if (wp != (uint)pid || Win32.GetWindowTextLengthW(h) < 1) return true;
+                found = h; return false;
+            }, IntPtr.Zero);
+            if (found == IntPtr.Zero) return;
+            Win32.ShowWindow(found, Win32.SW_RESTORE);
+            uint fore = Win32.GetWindowThreadProcessId(Win32.GetForegroundWindow(), out _);
+            uint self = Win32.GetCurrentThreadId();
+            bool attached = fore != 0 && fore != self && Win32.AttachThreadInput(fore, self, true);
+            Win32.SetForegroundWindow(found);
+            if (attached) Win32.AttachThreadInput(fore, self, false);
         }
         catch { }
     }
