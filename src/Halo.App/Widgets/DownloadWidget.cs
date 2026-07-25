@@ -6,8 +6,10 @@ using System.Drawing.Imaging;
 
 namespace Halo.Widgets;
 
-// Read-only download progress in the pill. Data comes from the Downloads scanner (window-title %).
-// No transport buttons: there's no cross-app API to pause/cancel another program's download.
+// Download progress in the pill. Data comes from the Downloads scanner. What the panel can actually do
+// depends on the source: Store items pause/cancel through AppInstallManager, a partial file is cancelled
+// by deleting it (the downloader gives up when its file disappears — verified live against Chrome), and a
+// window-scanned manager can only be brought forward or quit, since no cross-app per-download API exists.
 internal sealed class DownloadWidget : IWidget
 {
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
@@ -58,22 +60,20 @@ internal sealed class DownloadWidget : IWidget
         return a == Fx.White ? Blue : a;
     }
 
-    // Layout mirrors the media panel: art top-left, title + status, a horizontal bar, control chips
-    // centred in the right column at y=158. Same geometry so downloads sit alongside the other widgets.
+    // Art tile and the y=158 control baseline are shared with the media panel, so the two widgets read as
+    // the same surface. The row itself is left-aligned rather than centred the way media's transport is:
+    // media has a symmetric prev/play/next cluster, this is a toolbar hanging off a left-aligned column,
+    // and centring it left the chips floating with nothing above them to line up against.
     private const float ArtX = 26, ArtY = 26, ArtSize = 132;
-    private static RectangleF[] CtlRects(int w, int n)
+    private static RectangleF[] CtlRects(int n)
     {
-        const float size = 40, gap = 18;
-        float colL = ArtX + ArtSize + 22, colR = w - 26, cx = (colL + colR) / 2f;
-        float total = n * size + (n - 1) * gap, x0 = cx - total / 2f, y = 158;
+        const float size = 40, gap = 14, y = 158;
+        float x0 = ArtX + ArtSize + 24;   // same left edge as the title
         var r = new RectangleF[n];
         for (int i = 0; i < n; i++) r[i] = new RectangleF(x0 + i * (size + gap), y, size, size);
         return r;
     }
 
-    // the collapsed pill's own Stop, so a runaway download can be killed at a glance without opening the
-    // panel first. Same two actions as the panel: Store items cancel through AppInstallManager, everything
-    // else quits the downloader, since no cross-app per-download cancel exists.
     // Deliberately none. A Stop lived here briefly and was removed: the collapsed pill is a glance
     // surface the user reaches toward, so a control on it fires by accident. Stop, cancel and the file
     // path all live in the expanded panel, where there is room to label them.
@@ -82,34 +82,57 @@ internal sealed class DownloadWidget : IWidget
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
-        if (Downloads.Name == null) return Array.Empty<(RectangleF, Action<PointF>)>();
-        if (Downloads.IsStore && Downloads.CanControl)
+        var row = Chips();
+        var hits = new (RectangleF, Action<PointF>)[row.Length];
+        for (int i = 0; i < row.Length; i++)
         {
-            var r = CtlRects(w, 2);
-            return new (RectangleF, Action<PointF>)[]
-            {
-                (r[0], _ => { if (Downloads.Paused) Downloads.StoreResume(); else Downloads.StorePause(); }),
-                (r[1], _ => Downloads.StoreCancel()),
-            };
+            var act = row[i].Click;
+            hits[i] = (row[i].Rect, _ => act());
         }
-        if (Downloads.Hwnd == IntPtr.Zero)
-        {
-            // browser/partial download: reveal the file, or bring the fetching app forward to cancel there
-            if (Downloads.FilePath is not { Length: > 0 }) return Array.Empty<(RectangleF, Action<PointF>)>();
-            var pr = CtlRects(w, 2);
-            return new (RectangleF, Action<PointF>)[]
-            {
-                (pr[0], _ => Downloads.ShowInFolder()),
-                (pr[1], _ => Downloads.RevealOwner()),
-            };
-        }
-        var wr = CtlRects(w, 2); // window-scanned downloader: open it, or stop (quit) it
-        return new (RectangleF, Action<PointF>)[]
-        {
-            (wr[0], _ => Downloads.Reveal()),
-            (wr[1], _ => Downloads.StopProcess()),
-        };
+        return hits;
     }
+
+    // One row description, read by both the painter and the hit-tester. They used to lay the row out
+    // separately and drifted: DrawControls grew a third chip for browser downloads while Buttons still
+    // built two, so Cancel had no hit rect at all and the other two sat 29px off-centre from the circles
+    // the user was aiming at. Adding a chip now moves both at once.
+    private readonly record struct Chip(RectangleF Rect, int Glyph, bool Danger, bool Stop, Action Click);
+
+    private static Chip[] Chips()
+    {
+        var row = Row(Downloads.Name != null, Downloads.IsStore, Downloads.CanControl,
+                      Downloads.Hwnd != IntPtr.Zero, Downloads.FilePath is { Length: > 0 });
+        var rects = CtlRects(row.Length);
+        var chips = new Chip[row.Length];
+        for (int i = 0; i < row.Length; i++) chips[i] = Make(rects[i], row[i]);
+        return chips;
+    }
+
+    internal enum DlCtl { PauseResume, StoreCancel, Reveal, Stop, ShowInFolder, RevealOwner, CancelPartial }
+
+    // Which controls the panel offers, given where the download came from. Pure and internal so the row
+    // itself can be asserted: browser downloads are the case that broke, because the painter grew a third
+    // chip here while the hit-tester still believed there were two.
+    internal static DlCtl[] Row(bool named, bool store, bool canControl, bool hasWindow, bool hasPath)
+    {
+        if (!named) return Array.Empty<DlCtl>();
+        if (store && canControl) return new[] { DlCtl.PauseResume, DlCtl.StoreCancel };
+        if (hasWindow) return new[] { DlCtl.Reveal, DlCtl.Stop };
+        if (hasPath) return new[] { DlCtl.ShowInFolder, DlCtl.RevealOwner, DlCtl.CancelPartial };
+        return Array.Empty<DlCtl>();
+    }
+
+    private static Chip Make(RectangleF r, DlCtl c) => c switch
+    {
+        DlCtl.PauseResume => new Chip(r, Downloads.Paused ? 0xE768 : 0xE769, false, false,
+                                      () => { if (Downloads.Paused) Downloads.StoreResume(); else Downloads.StorePause(); }),
+        DlCtl.StoreCancel => new Chip(r, 0xE711, true, false, Downloads.StoreCancel),
+        DlCtl.Reveal => new Chip(r, 0xE838, false, false, Downloads.Reveal),      // bring the manager forward
+        DlCtl.Stop => new Chip(r, 0, false, true, Downloads.StopProcess),         // quitting it is the only stop
+        DlCtl.ShowInFolder => new Chip(r, 0xE838, false, false, Downloads.ShowInFolder),
+        DlCtl.RevealOwner => new Chip(r, 0xE7C4, false, false, Downloads.RevealOwner),
+        _ => new Chip(r, 0, false, true, Downloads.CancelPartial),                // deleting the partial file
+    };
 
     private static float _fracShown = -1f;
     private static string? _lastName;
@@ -190,7 +213,7 @@ internal sealed class DownloadWidget : IWidget
                     g.DrawString(dir, smallF, pb, new RectangleF(tx, y, tw, 18), psf);
         }
 
-        DrawControls(g, w, h, fade, paused);
+        DrawControls(g, fade);
         DrawMenuSlot(g, w, fade);
         g.TextRenderingHint = oldHint;
     }
@@ -215,26 +238,12 @@ internal sealed class DownloadWidget : IWidget
         for (int i = 0; i < 3; i++) g.FillRectangle(b, x, r.Y + 11 + i * 6, bw, 2f);
     }
 
-    private void DrawControls(Graphics g, int w, int h, float fade, bool paused)
+    private void DrawControls(Graphics g, float fade)
     {
-        if (Downloads.IsStore && Downloads.CanControl)
+        foreach (var c in Chips())
         {
-            var r = CtlRects(w, 2);
-            DrawCtl(g, r[0], paused ? 0xE768 : 0xE769, fade, danger: false); // resume ▶ / pause ⏸
-            DrawCtl(g, r[1], 0xE711, fade, danger: true);                    // cancel ✕
-        }
-        else if (Downloads.Hwnd != IntPtr.Zero)
-        {
-            var wr = CtlRects(w, 2);
-            DrawCtl(g, wr[0], 0xE838, fade, danger: false); // FolderOpen — bring the downloader to front
-            DrawStop(g, wr[1], fade);                        // real stop — quits the download manager
-        }
-        else if (Downloads.FilePath is { Length: > 0 })
-        {
-            var br = CtlRects(w, 3);
-            DrawCtl(g, br[0], 0xE838, fade, danger: false); // FolderOpen — reveal the file
-            DrawCtl(g, br[1], 0xE7C4, fade, danger: false); // Switch app — bring the downloader forward
-            DrawStop(g, br[2], fade);                       // real cancel — discards the partial file
+            if (c.Stop) DrawStop(g, c.Rect, fade);
+            else DrawCtl(g, c.Rect, c.Glyph, fade, c.Danger);
         }
     }
 
