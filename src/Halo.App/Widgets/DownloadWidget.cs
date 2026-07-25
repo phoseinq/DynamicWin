@@ -244,11 +244,11 @@ internal sealed class DownloadWidget : IWidget
     // longer lists scroll by windowing rather than shrinking the rows into unreadability; the window always
     // contains the selected row, because that is the one the user is looking for.
     private static bool _menuOpen;
-    private const float MenuW = 250f, RowH = 30f;
+    private const float MenuW = 252f, RowH = 32f, MenuPad = 7f, MenuR = 15f;
     private const int MaxRows = 4;
 
     internal static RectangleF MenuListRect(int w, int n)
-        => new(w - MenuW - 8, MenuRect(w).Bottom + 6, MenuW, Math.Min(n, MaxRows) * RowH + 12);
+        => new(w - MenuW - 8, MenuRect(w).Bottom + 8, MenuW, Math.Min(n, MaxRows) * RowH + MenuPad * 2);
 
     private static int MenuTop(int n) => MenuTop(n, Downloads.SelectedIndex, MaxRows);
 
@@ -258,7 +258,7 @@ internal sealed class DownloadWidget : IWidget
     private static RectangleF RowRect(int w, int n, int visible)
     {
         var l = MenuListRect(w, n);
-        return new RectangleF(l.X + 6, l.Y + 6 + visible * RowH, l.Width - 12, RowH);
+        return new RectangleF(l.X + MenuPad, l.Y + MenuPad + visible * RowH, l.Width - MenuPad * 2, RowH);
     }
 
     private void DrawMenuList(Graphics g, int w, int h, float fade)
@@ -272,15 +272,33 @@ internal sealed class DownloadWidget : IWidget
         using (var scrim = new SolidBrush(Mul(Color.FromArgb(120, 0, 0, 0), fade)))
             g.FillRectangle(scrim, 0, 0, w, h);
         var l = MenuListRect(w, n);
-        using (var bg = new SolidBrush(Mul(Color.FromArgb(226, 16, 16, 19), fade)))
-        using (var p = Fx.Rounded(l, 12f))
+
+        // a soft drop shadow, so the list sits above the panel instead of being pasted onto it: concentric
+        // strokes on an expanding path are the cheap way to fake a blur with no second surface
+        for (int i = 6; i >= 1; i--)
+        {
+            var s = RectangleF.Inflate(l, i, i);
+            s.Y += 2f;
+            using var sp = Fx.Rounded(s, MenuR + i);
+            using var pen = new Pen(Mul(Color.FromArgb(11, 0, 0, 0), fade), 2f);
+            g.DrawPath(pen, sp);
+        }
+
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(232, 22, 22, 26), fade)))
+        using (var p = Fx.Rounded(l, MenuR))
             g.FillPath(bg, p);
-        using (var pen = new Pen(Mul(Color.FromArgb(44, 255, 255, 255), fade), 1f))
-        using (var p = Fx.Rounded(l, 12f))
+        // two edges, not one: a bright hairline where the light would land and a darker one below it, which
+        // is what reads as a raised surface rather than a flat rectangle with a border
+        using (var pen = new Pen(Mul(Color.FromArgb(52, 255, 255, 255), fade), 1f))
+        using (var p = Fx.Rounded(RectangleF.Inflate(l, -0.5f, -0.5f), MenuR - 0.5f))
+            g.DrawPath(pen, p);
+        using (var pen = new Pen(Mul(Color.FromArgb(30, 0, 0, 0), fade), 1f))
+        using (var p = Fx.Rounded(RectangleF.Inflate(l, 0.5f, 0.5f), MenuR + 0.5f))
             g.DrawPath(pen, p);
 
         using var f = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
         using var bold = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Pixel);
+        var accent = Accent();
         int top = MenuTop(n), sel = Downloads.SelectedIndex, rows = Math.Min(n - top, MaxRows);
         for (int v = 0; v < rows; v++)
         {
@@ -288,18 +306,25 @@ internal sealed class DownloadWidget : IWidget
             var r = RowRect(w, n, v);
             bool cur = idx == sel, hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
             if (cur || hov)
-                using (var hb = new SolidBrush(Mul(Color.FromArgb(cur ? 38 : 20, 255, 255, 255), fade)))
-                using (var p = Fx.Rounded(r, 8f))
+                using (var hb = new SolidBrush(Mul(Color.FromArgb(cur ? 34 : 18, 255, 255, 255), fade)))
+                using (var p = Fx.Rounded(r, 10f))
                     g.FillPath(hb, p);
+            // the selected row is marked by a short accent bar, not just a lighter fill — hover uses the
+            // fill too, and without this the two states were hard to tell apart
+            if (cur)
+                using (var ab = new SolidBrush(Mul(accent, fade)))
+                using (var p = Fx.Rounded(new RectangleF(r.X + 4, r.Y + RowH * 0.26f, 3f, RowH * 0.48f), 1.5f))
+                    g.FillPath(ab, p);
 
             var it = items[idx];
             // a download with no known total has no honest percentage — show what has landed instead
             string tail = it.NoPct ? Bytes(it.Downloaded) : $"{it.Percent}%";
             var tsz = g.MeasureString(tail, f);
-            using var tb = new SolidBrush(Mul(cur ? White : Dim, fade));
-            g.DrawString(tail, f, tb, r.Right - tsz.Width - 8, r.Y + (RowH - tsz.Height) / 2f);
-            DrawEllipsized(g, it.Name, cur ? bold : f, tb, r.X + 10, r.Y + (RowH - 17) / 2f,
-                           r.Width - tsz.Width - 26, 17);
+            using (var tb = new SolidBrush(Mul(cur ? Dim : Color.FromArgb(112, 255, 255, 255), fade)))
+                g.DrawString(tail, f, tb, r.Right - tsz.Width - 10, r.Y + (RowH - tsz.Height) / 2f);
+            using (var nb = new SolidBrush(Mul(cur ? White : Dim, fade)))
+                DrawEllipsized(g, it.Name, cur ? bold : f, nb, r.X + 14, r.Y + (RowH - 17) / 2f,
+                               r.Width - tsz.Width - 32, 17);
         }
     }
 
