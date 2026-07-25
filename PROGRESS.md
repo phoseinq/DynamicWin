@@ -1,6 +1,94 @@
 # Halo — progress
 
-## 2026-07-25: v3.0.2 RELEASED + first outside contributions reviewed (2 PRs open on the fork)
+## 2026-07-26: v3.1.0 — download coverage (browsers/Steam/any app), pill-as-bar UI, ring fixes
+**Local only: installed and running as 3.1.0, but GitHub is still on v3.0.2 — no release cut for 3.0.3
+or 3.1.0.** Commits `471c244`..`b181906` on `master`; nothing pushed to the fork since `c1c3070`.
+
+### Download coverage — three tiers, best available wins (`docs/superpowers/specs/2026-07-25-download-coverage-design.md`)
+`Downloads.Scan()` only ever found a download by regex-matching a leading `NN%` in a **window title**,
+which deliberately skips browsers (`Downloads.cs` — a page can be titled "50% off") and never saw Steam.
+- **`PartialFiles.cs`** — watches the FILESYSTEM, not the app: `*.crdownload/.part/.opdownload/...` that
+  are growing. This is what finally covers every browser and any other downloader. Owner process comes
+  from **Restart Manager** (`rstrtmgr.dll`), verified to work **unelevated**.
+- **`BrowserDownloads.cs`** — supplies the one thing the filesystem can't know, the total, from Chromium's
+  own `History` via `winsqlite3.dll` (same technique as `WpnDb`). Chrome/Edge/Brave/Opera/Vivaldi share
+  the schema; every `Default`/`Profile N` is scanned. Firefox keeps downloads as `places.sqlite`
+  annotations → bytes only, no percentage (honest, per the no-invented-numbers rule).
+- **`SteamInstall.cs`** — `BytesDownloaded`/`BytesToDownload` from `appmanifest_*.acf` across every library
+  in `libraryfolders.vdf` (3 here: C:, H:, D:). `StateFlags` deliberately NOT a gate — its bit semantics
+  were never verified against a live download.
+- **`Downloaders.cs`** — learns (app, directory) pairs to `downloaders.tsv`; the *directory* is the useful
+  part, so a launcher downloading into `D:\Games\...` is picked up next time.
+- `PartialFiles.LiveCount` → `Downloads.Count`/`HasMore` is real, not a placeholder; always 1 today.
+
+### Chromium's download DB — three traps, each cost a debugging round
+1. `immutable=1` makes SQLite **ignore the `-wal`**, so in-flight rows are invisible → snapshot the db
+   **and its wal** to temp and open the copy.
+2. `WHERE state = 0` finds nothing: Chrome keeps live progress **in memory**. Measured 60MB into a 100MB
+   file: `total_bytes=104857600`, `received_bytes=0`, non-zero state. Take the newest row per file
+   whatever its state, match `target_path` too (`current_path` is empty mid-download), ignore
+   `received_bytes` entirely — bytes come from the file.
+3. Chrome writes **no row at all** for a first-ever download until it finishes; a repeat download names
+   the file `x (2).ext` while the sizeable row is `x.ext`. `StripCopySuffix` (parens, 1–3 digits only)
+   fixes the repeat case. **First-time downloads therefore have no percentage — breathing pill.**
+   Getting one would need `Content-Length`, i.e. a browser extension. Not built.
+- **Cancel IS possible** and I wrongly claimed otherwise before testing: deleting the partial file stops
+  the transfer (Chrome opens with `FILE_SHARE_DELETE`), verified live — file gone, nothing recreated over
+  6s. `Downloads.CancelPartial` only ever deletes a path that still classifies as partial.
+- Stall → `Paused`: counting consecutive no-growth **samples**, not `LastWriteTime` (Windows doesn't flush
+  it per write, so a stopped download looked alive for seconds).
+
+### UI: "the pill IS the bar" (`Fx.PillBar`)
+No separate bar — the silhouette carries a deeper shade of the app's accent as track, the accent fills
+left→right, a lip and glow ride the wavefront, and the **icon is drawn last** so the fill passes behind
+it. Shared with the agent pills at `strength 0.3` to show the 5-hour usage window (weekly as fallback),
+collapsed only, never while compacting owns the pill. Rendering lessons, each measured:
+- `g.SetClip(path)` is **region-based and never antialiased** → the curved LEFT edge stair-stepped while
+  the straight wavefront looked fine. Fill the PATH with a gradient cut instead.
+- Filling the exact window silhouette put a hard accent line along the rounded bottom (two AA edges on one
+  pixel row summing) → `PillPath` gained an `inset`.
+- ClearType paints orange/blue fringes on a layered surface → `AntiAliasGridFit` for pill text.
+- **Do NOT fold alpha into the colour channels of `Fx.Glow`'s ColorMatrix.** It looks required since the
+  texture is premultiplied, but GDI+ un-premultiplies around a ColorMatrix; doing it greys the tint out
+  (green accent measured 11,11,11, saturation 0). Tint is already faithful: hues 9/136/218 → 11/133/215.
+- `Fx.CenterLift(font)` replaces a hardcoded -1.5px text lift that only suited one font size (these pills
+  shrink text to fit): 0.58px @9px → 1.15px @18px.
+- Panel rebuilt as one left-aligned column with each block placed from the one above, plus a **reserved
+  right gutter** for the future switcher so the layout won't jump.
+
+### Agent ring — two real bugs
+- **Thinking never looked yellow: a drawing bug, not the state machine.** 150s of logged real work showed
+  `amber 137.5s / green 8.0s`, flipping correctly. The ring was drawn at `0.55` alpha; amber at 55% over
+  a near-black pill composites to ~(139,94,18) — a dark brown-gold 86 RGB units from the coral icon it
+  hugs (green is 164). Alpha → `0.9`.
+- **Ring stayed amber after a turn ended.** `stop` writes idle correctly, but Claude Code also fires
+  `Notification` once the turn is over and the hook wrote `waiting_input` unconditionally. The hook now
+  only treats it as an attention state while the turn is still running (`working`/`compacting`), keyed on
+  prior state rather than message wording so either firing order works. Measured: turn-end WHITE, mid-turn
+  permission prompt AMBER, limit WHITE (`LimitHit` also went Amber→White).
+- `BtWidget.DrawCollapsed` threw **every frame** while the pill was tucked: `rr = (h-12)/2-1` hits zero at
+  h≤14 and the tuck state is 96×**12**; GDI+ rejected the arc, `OnTick` swallowed it → frozen pill, only
+  visible in `frame-errors.txt`. Guarded below 16px.
+
+### Gotchas worth keeping
+- A stale **self-contained publish layout left in `bin/`** (194 files vs 10) makes the app fail with "You
+  must install or update .NET" forever — the host reads that folder's `runtimeconfig.json`. Same trap
+  applies to hot-copying `Halo.Hooks`: copy a `dotnet build` output over the self-contained install and
+  the hooks break. Publish self-contained instead.
+- To drive internals, a throwaway project whose **AssemblyName is `Halo.Tests`** gets `InternalsVisibleTo`
+  with no reflection. Used constantly this session.
+- Agent widgets fade content in over the first frames (`_appear`), so a single render captures a faded
+  pill — warm up ~90 frames before measuring anything.
+- Tests: 81 → **97** (16 new: partial-suffix classification, `.acf` parser, `libraryfolders.vdf` parser).
+
+### Still open
+- Multiple simultaneous downloads: `Downloads` is still single-valued statics; needs to become a
+  collection, plus the switcher wired to clicks and a remembered selection. Gutter + count already exist.
+- `PROGRESS.md`/GitHub: cut a release for 3.1.0 and push the stripped mirror to the fork.
+
+## 2026-07-25: v3.0.2 RELEASED + 3.0.3 built (not released) + first outside contributions reviewed
+Note: 3.0.3 was built, committed (`918e60b`) and installed locally later the same day, but **no GitHub
+release was cut for it** — v3.0.2 is still the newest tag. See the 2026-07-26 entry above.
 
 ### Shipped
 - **v3.0.2 = Latest** on phoseinq/DynamicWin, target branch `V3`, tag on `c1c3070`. The first cut of
