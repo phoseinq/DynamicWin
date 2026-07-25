@@ -121,11 +121,7 @@ internal sealed class DownloadWidget : IWidget
         if (fade <= 0.01f) return;
         string? name = Downloads.Name;
         if (name == null) return;
-        // Two different questions that used to share one flag: "is the bar indeterminate" and "what is the
-        // app doing". NoPct only means the total size is unknown, which is now the normal case for a browser
-        // download, so folding it into `installing` labelled ordinary downloads "Installing…".
         bool indeterminate = Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
-        bool installing = Downloads.Installing;
         bool paused = Downloads.Paused;
         int pct = Math.Clamp(Downloads.Percent, 0, 100);
         long done = Downloads.Downloaded, tot = Downloads.Total;
@@ -134,30 +130,43 @@ internal sealed class DownloadWidget : IWidget
         float pulse = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 480f);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        // logo tile (rounded square, like album art)
+        var oldHint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
         Fx.Glow(g, w, h, fade * (indeterminate ? 0.55f + 0.45f * pulse : 1f),
-            ArtX + ArtSize / 2f, ArtY + ArtSize / 2f, w * 0.85f, h * 1.2f, 38, accent);
+            ArtX + ArtSize / 2f, h / 2f, w * 0.85f, h * 1.2f, 34, accent);
         DrawArt(g, icon, fade);
 
-        float tx = ArtX + ArtSize + 22, tw = w - tx - 26;
-        using var titleF = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
-        using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
-        using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
-        using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawEllipsized(g, name, titleF, tb, tx, 34, tw, 30);
-        string state = Downloads.Waiting ? "Waiting…" : installing ? "Installing…"
-            : paused ? "Paused" : "Downloading";
-        string sub = indeterminate || Downloads.NoPct ? state : $"{state}   ·   {pct}%";
-        using (var lb = new SolidBrush(Mul(Dim, fade)))
-            DrawEllipsized(g, sub, bodyF, lb, tx, 66, tw, 22);
+        // One column to the right of the art, everything left-aligned to the same edge and stacked on a
+        // regular rhythm. The old layout hung the title at a fixed y, the bar at another, and the chips at
+        // a third, so nothing lined up; here each block is placed from the one above it.
+        float tx = ArtX + ArtSize + 24, tw = w - tx - MenuSlot - 26;
+        using var titleF = new Font("Segoe UI Semibold", 23f, GraphicsUnit.Pixel);
+        using var metaF = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        using var smallF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
 
-        // horizontal progress bar (matches the media seek bar)
-        float by = 116, bh = 5;
-        Fill(g, tx, by, tw, bh, Mul(Track, fade), bh / 2);
+        float y = ArtY + 4;
+        using (var tb = new SolidBrush(Mul(White, fade)))
+            DrawEllipsized(g, name, titleF, tb, tx, y, tw, 30);
+        y += 32;
+
+        // status and the numbers on one line, in the same "a · b · c" voice the rest of the app uses
+        string state = Downloads.Waiting ? "Waiting…" : Downloads.Installing ? "Installing…"
+            : paused ? "Paused" : "Downloading";
+        string meta = state;
+        if (done > 1_048_576 && tot > 1_048_576) meta += $"   ·   {Bytes(done)} / {Bytes(tot)}   ·   {pct}%";
+        else if (done > 1_048_576) meta += $"   ·   {Bytes(done)}";
+        using (var mb = new SolidBrush(Mul(Dim, fade)))
+            DrawEllipsized(g, meta, metaF, mb, tx, y, tw, 20);
+        y += 30;
+
+        // the bar owns the full column width now, instead of being inset to match nothing in particular
+        float bh = 6;
+        Fill(g, tx, y, tw, bh, Mul(Track, fade), bh / 2);
         if (indeterminate)
         {
             float seg = tw * 0.34f, sx = tx + (tw - seg) * (0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 700f));
-            Fill(g, sx, by, seg, bh, Mul(accent, fade * (0.5f + 0.5f * pulse)), bh / 2);
+            Fill(g, sx, y, seg, bh, Mul(accent, fade * (0.5f + 0.5f * pulse)), bh / 2);
         }
         else
         {
@@ -165,31 +174,49 @@ internal sealed class DownloadWidget : IWidget
             if (name != _lastName) { _lastName = name; _fracShown = frac; } // new download → snap
             _fracShown = _fracShown < 0 ? frac : _fracShown + (frac - _fracShown) * 0.18f;
             if (Math.Abs(frac - _fracShown) < 0.002f) _fracShown = frac;
-            if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(paused ? Dim : accent, fade), bh / 2);
-            // byte labels at the bar ends, like elapsed/total time
-            using var eb = new SolidBrush(Mul(Dim, fade));
-            if (done > 1_048_576) g.DrawString(Bytes(done), timeF, eb, tx, by + 9);
-            if (tot > 1_048_576)
-            {
-                var ts = g.MeasureString(Bytes(tot), timeF);
-                g.DrawString(Bytes(tot), timeF, eb, tx + tw - ts.Width, by + 9);
-            }
+            if (_fracShown > 0) Fill(g, tx, y, tw * _fracShown, bh, Mul(paused ? Dim : accent, fade), bh / 2);
         }
+        y += bh + 10;
 
-        // where the file is landing — the question the panel could not answer before. Folder only, since
-        // the filename is already the title, and the middle is elided so a deep path still reads.
+        // where it is landing — folder only, since the filename is already the title
         if (Downloads.FilePath is { Length: > 0 } fp)
         {
             string? dir = null;
             try { dir = System.IO.Path.GetDirectoryName(fp); } catch { }
             if (!string.IsNullOrEmpty(dir))
-                using (var pb = new SolidBrush(Mul(Color.FromArgb(120, 255, 255, 255), fade)))
+                using (var pb = new SolidBrush(Mul(Color.FromArgb(115, 255, 255, 255), fade)))
                 using (var psf = new StringFormat(StringFormat.GenericTypographic)
                 { Trimming = StringTrimming.EllipsisPath, FormatFlags = StringFormatFlags.NoWrap })
-                    g.DrawString(dir, timeF, pb, new RectangleF(tx, by + 26, tw, 18), psf);
+                    g.DrawString(dir, smallF, pb, new RectangleF(tx, y, tw, 18), psf);
         }
 
-        // control chips, centred in the right column at y=158
+        DrawControls(g, w, h, fade, paused);
+        DrawMenuSlot(g, w, fade);
+        g.TextRenderingHint = oldHint;
+    }
+
+    // Reserved gutter on the right for the download switcher. It is empty while a single download is in
+    // flight, but the column is sized around it from the start so the layout will not jump the day a
+    // second download makes the button appear.
+    private const float MenuSlot = 44;
+
+    internal static RectangleF MenuRect(int w) => new(w - MenuSlot - 8, 22, 34, 34);
+
+    private static void DrawMenuSlot(Graphics g, int w, float fade)
+    {
+        if (!Downloads.HasMore) return;   // nothing to switch between yet
+        var r = MenuRect(w);
+        bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 42 : 24, 255, 255, 255), fade)))
+        using (var p = Fx.Rounded(r, 10f))
+            g.FillPath(bg, p);
+        using var b = new SolidBrush(Mul(hov ? White : Dim, fade));
+        float bw = r.Width * 0.44f, x = r.X + (r.Width - bw) / 2f;
+        for (int i = 0; i < 3; i++) g.FillRectangle(b, x, r.Y + 11 + i * 6, bw, 2f);
+    }
+
+    private void DrawControls(Graphics g, int w, int h, float fade, bool paused)
+    {
         if (Downloads.IsStore && Downloads.CanControl)
         {
             var r = CtlRects(w, 2);
@@ -204,14 +231,10 @@ internal sealed class DownloadWidget : IWidget
         }
         else if (Downloads.FilePath is { Length: > 0 })
         {
-            // A browser download had no controls at all, because it has no window we scanned. Two honest
-            // ones: show the file, and surface the app that is fetching it so the download can be cancelled
-            // where it actually lives. No "stop" chip here — for a browser the only stop we could implement
-            // is killing the browser or deleting the half-written file, and the project's rule is to hide a
-            // control the underlying app cannot honour rather than ship a silent no-op.
-            var br = CtlRects(w, 2);
+            var br = CtlRects(w, 3);
             DrawCtl(g, br[0], 0xE838, fade, danger: false); // FolderOpen — reveal the file
             DrawCtl(g, br[1], 0xE7C4, fade, danger: false); // Switch app — bring the downloader forward
+            DrawStop(g, br[2], fade);                       // real cancel — discards the partial file
         }
     }
 

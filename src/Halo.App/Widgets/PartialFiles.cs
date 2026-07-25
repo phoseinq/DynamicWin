@@ -26,10 +26,13 @@ internal static class PartialFiles
 
     internal readonly record struct Sample(string Path, string Name, long Bytes, long GrowthPerSec, int OwnerPid, bool Stalled);
 
-    private const int StallSeconds = 4; // no growth for this long → the transfer is sitting still
+    // Two consecutive samples with no growth. Reading the file's LastWriteTime instead was slow to react:
+    // Windows does not flush that timestamp on every write, so a stopped download kept looking alive for
+    // several seconds after it had actually stopped. Comparing the length we already read is immediate.
+    private const int StallSamples = 2;
 
     // path → (bytes, when) from the previous scan, so growth is measured rather than assumed
-    private static readonly Dictionary<string, (long bytes, DateTime at)> _seen =
+    private static readonly Dictionary<string, (long bytes, DateTime at, int flat)> _seen =
         new(StringComparer.OrdinalIgnoreCase);
 
     public static bool IsPartial(string path, out string cleanName)
@@ -60,9 +63,15 @@ internal static class PartialFiles
 
     // The best in-flight download right now, or null. "Best" = fastest growing, so a big active download
     // wins over a stalled leftover.
+    // How many partial downloads the last scan saw. The pill still shows only the busiest one; this is
+    // what a switcher will need, and it lets the panel reserve its gutter today instead of the layout
+    // shifting the first time a second download appears.
+    public static int LiveCount { get; private set; }
+
     public static Sample? Current()
     {
         Sample? best = null;
+        int seen = 0;
         var now = DateTime.UtcNow;
         var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -80,12 +89,14 @@ internal static class PartialFiles
                     if ((now - touched).TotalSeconds > StaleSeconds) continue;
 
                     live.Add(path);
+                    seen++;
                     // Growth is only used to RANK candidates, never to decide whether this is a download.
                     // Requiring fresh growth every sample made the pill vanish the moment a download
                     // stalled for a second (observed live: Chrome's file was found, then dropped one second
                     // later). Freshness is already the liveness test — StaleSeconds above — so a paused but
                     // recently-touched partial file stays on the pill instead of flickering out.
                     long rate = 0;
+                    int flat = 0;
                     if (_seen.TryGetValue(path, out var prev))
                     {
                         double secs = (now - prev.at).TotalSeconds;
@@ -93,16 +104,17 @@ internal static class PartialFiles
                         {
                             long grew = len - prev.bytes;
                             if (grew > 0) rate = (long)(grew / secs);
-                            _seen[path] = (len, now);
+                            flat = grew > 0 ? 0 : prev.flat + 1;   // count samples that saw no new bytes
+                            _seen[path] = (len, now, flat);
                         }
-                        else rate = prev.bytes == len ? 0 : 1; // too soon to measure; don't lose the file
+                        else { flat = prev.flat; rate = prev.bytes == len ? 0 : 1; } // too soon to measure
                     }
-                    else _seen[path] = (len, now);
+                    else _seen[path] = (len, now, 0);
 
-                    // "not growing right now" is not "abandoned": the file is still fresh enough to be a
-                    // live download (StaleSeconds above), it is just sitting still — which is exactly the
-                    // paused state the pill should mark on the icon instead of pretending it is running.
-                    bool stalled = (now - touched).TotalSeconds >= StallSeconds;
+                    // "not growing right now" is not "abandoned": the file is still fresh enough to count as
+                    // a live download (StaleSeconds above), it is just sitting still — which is the paused
+                    // state the pill should mark on the icon instead of pretending it is moving.
+                    bool stalled = flat >= StallSamples;
                     if (best is null || rate > best.Value.GrowthPerSec)
                         best = new Sample(path, clean, len, rate, 0, stalled);
                 }
@@ -114,6 +126,7 @@ internal static class PartialFiles
         }
         catch { }
 
+        LiveCount = seen;
         if (best is null) return null;
         int pid = OwnerPid(best.Value.Path);
         if (pid != 0) Downloaders.Learn(pid, Path.GetDirectoryName(best.Value.Path));

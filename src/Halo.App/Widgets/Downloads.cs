@@ -21,6 +21,12 @@ internal static class Downloads
     public static volatile string? ExePath; // downloader exe (or Store AUMID), for its icon
     public static volatile string? FilePath; // where the file is landing, when we know it (partial-file scans)
     public static volatile int OwnerPid;     // process writing that file, so we can surface it on demand
+
+    // How many downloads are in flight in total. Today the pill only ever shows one, so this stays at 0 or
+    // 1 and the panel's switcher stays hidden — it exists so the layout already reserves the gutter and
+    // the drawing code already asks the question, ahead of the pill actually tracking several at once.
+    public static volatile int Count;
+    public static bool HasMore => Count > 1;
     public static volatile string? IconFile; // direct image file for the icon (GDK game's staged logo)
     public static volatile bool Installing; // Store: past download, package deploying (indeterminate)
     public static volatile bool Waiting;    // Store: queued (Pending/ReadyToDownload), download not started
@@ -193,6 +199,7 @@ internal static class Downloads
                     if (Name != label || Downloaded != part.Bytes || Total != (noPct ? 0 : pTotal)
                         || Percent != pPct || NoPct != noPct || IsStore || Paused != part.Stalled)
                     {
+                        Count = PartialFiles.LiveCount;
                         Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = part.Stalled;
                         Downloaded = part.Bytes; Total = noPct ? 0 : pTotal; IsStore = false; CanControl = false;
                         NoPct = noPct; IconFile = null; Hwnd = IntPtr.Zero;
@@ -206,7 +213,7 @@ internal static class Downloads
                 {
                     Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false; Paused = false;
                     IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0; Hwnd = IntPtr.Zero;
-                    FilePath = null; OwnerPid = 0;
+                    FilePath = null; OwnerPid = 0; Count = 0;
                     Interlocked.Increment(ref Version);
                 }
                 return;
