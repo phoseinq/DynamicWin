@@ -124,7 +124,14 @@ internal static class Fx
         // pixel row add up instead of blending, so the outermost row ended up at full colour. Half a pixel
         // in is invisible and keeps the bar strictly inside the glass.
         using var pp = PillPath(w, h, h / 2f, 0.5f);
-        using (var tb = new SolidBrush(Alpha(Shade(accent, 1), fade * 0.34f * strength)))
+        // The track was Shade(accent, 1), which is MORE saturated as well as darker — on a yellow accent
+        // that is olive, and the whole pill read as dirty. A track wants to recede: same hue, most of the
+        // saturation taken out, so the fill is the only saturated thing on the pill.
+        RgbToHsv(accent, out float th, out float ts, out float tv);
+        var track = HsvToRgb(th, ts * 0.42f, Math.Max(0.16f, tv * 0.34f));
+        // a desaturated track needs more alpha to be seen at all, but the agent pills want it to stay a
+        // whisper, so the extra weight is spent only where the effect is already bold
+        using (var tb = new SolidBrush(Alpha(track, fade * strength * (0.34f + 0.28f * strength))))
             g.FillPath(tb, pp);
         if (frac <= 0.001f) return;
 
@@ -135,19 +142,55 @@ internal static class Fx
         // the wavefront stays crisp without a clip.
         float fill = w * frac;
         var solid = Alpha(accent, fade * 0.52f * strength);
-        if (frac >= 0.999f) { using var fb = new SolidBrush(solid); g.FillPath(fb, pp); return; }
 
-        float cut = Math.Clamp(fill / w, 0.0015f, 0.9985f);
-        using (var lb = new LinearGradientBrush(new RectangleF(0, 0, w, h), solid, Color.FromArgb(0, accent),
-                   LinearGradientMode.Horizontal))
+        // Two glows, not one. With a single glow at the wavefront everything behind it was one flat sheet
+        // of colour — a printed block, not a lit surface. This wide, dim halo goes UNDER the fill, so the
+        // colour varies across the filled body instead of sitting at one value; the tight one at the end
+        // is the light riding the leading edge and is drawn last, on top.
+        if (fill > 6f)
+            Glow(g, w, h, fade, fill * 0.45f, h * 0.44f, Math.Max(fill, h * 1.2f), h * 1.9f,
+                 (int)(16 * strength), accent);
+
+        if (frac >= 0.999f) { using (var fb = new SolidBrush(solid)) g.FillPath(fb, pp); }
+        else
         {
-            var blend = new ColorBlend(4)
+            // ~2.5px of falloff at the wavefront rather than a quarter of a pixel. The razor cut read as a
+            // sheet of colour scissored off; over a couple of pixels, with the lip behind it, the same edge
+            // reads as light running out — and it is still far too narrow to look like a soft gradient.
+            float soft = Math.Clamp(2.5f / w, 0.0008f, 0.02f);
+            float cut = Math.Clamp(fill / w, soft + 0.0005f, 0.9985f);
+            using var lb = new LinearGradientBrush(new RectangleF(0, 0, w, h), solid, Color.FromArgb(0, accent),
+                       LinearGradientMode.Horizontal);
+            lb.InterpolationColors = new ColorBlend(4)
             {
-                Positions = new[] { 0f, cut - 0.0012f, cut, 1f },
+                Positions = new[] { 0f, cut - soft, cut, 1f },
                 Colors = new[] { solid, solid, Color.FromArgb(0, accent), Color.FromArgb(0, accent) },
             };
-            lb.InterpolationColors = blend;
             g.FillPath(lb, pp);
+        }
+
+        // A sheen down the filled part. Light falling off from the top is the whole difference between
+        // "block of paint" and "lit glass", and it costs one gradient. Clipped by a straight-edged rect
+        // only — the pill's curve still comes from the path, because a region clip has no antialiasing.
+        if (fill > 4f && strength >= 0.4f)
+        {
+            using var sheen = new LinearGradientBrush(new RectangleF(0, -0.5f, Math.Max(w, 1), h + 1f),
+                Color.White, Color.White, LinearGradientMode.Vertical);
+            sheen.InterpolationColors = new ColorBlend(4)
+            {
+                Positions = new[] { 0f, 0.34f, 0.70f, 1f },
+                Colors = new[]
+                {
+                    Alpha(Color.White, fade * 0.14f * strength),
+                    Alpha(Color.White, fade * 0.05f * strength),
+                    Color.FromArgb(0, 255, 255, 255),
+                    Alpha(Color.FromArgb(0, 0, 0), fade * 0.10f * strength),   // a touch of shadow at the foot
+                },
+            };
+            var oldC = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
+            g.FillPath(sheen, pp);
+            g.Clip = oldC;
         }
 
         // a brighter lip just behind the wavefront so the edge reads as light rather than a cut; only for
@@ -168,6 +211,10 @@ internal static class Fx
             g.FillPath(lip, pp);
             g.Clip = old;
         }
+
+        // the second glow: tight and bright, sitting on the wavefront
+        if (fill > 6f)
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f, (int)(26 * strength), accent);
     }
 
     // GDI+ centres the EM BOX, which reserves descender space, so a latin string with no descenders

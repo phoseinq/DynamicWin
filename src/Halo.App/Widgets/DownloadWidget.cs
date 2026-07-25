@@ -466,10 +466,8 @@ internal sealed class DownloadWidget : IWidget
     private static void DrawPillProgress(Graphics g, int w, int h, float fade, int pct, Color accent,
         bool paused, float iconRight)
     {
-        float fill = w * pct / 100f;
         var bar = paused ? Dim : accent;
-        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
-        if (fill > 0.5f) Fx.Glow(g, w, h, fade, fill, h / 2f, h * 1.15f, h * 1.5f, 22, bar);
+        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);   // both glows now live inside PillBar
 
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
