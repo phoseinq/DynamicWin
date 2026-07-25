@@ -1075,6 +1075,7 @@ internal sealed class NotchController
                     }
                 }
             }
+            else if (_progress < 0.1f && TryCollapsedButton(p)) { }
             else if (_progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && InMenu(p))
             {
                 var rows = Groups();
@@ -1166,6 +1167,28 @@ internal sealed class NotchController
 
     private static bool InRect(Win32.POINT p, int left, int top, int w, int h)
         => p.X >= left && p.X < left + w && p.Y >= top && p.Y < top + h;
+
+    // A control drawn on the COLLAPSED pill (the download Stop). Same scaling dance as the expanded
+    // buttons: widget rects are logical, the cursor is physical, so compare scaled and hand back logical.
+    // Returns true when a button consumed the click, so the caller skips the swap-strip handling.
+    private bool TryCollapsedButton(Win32.POINT p)
+    {
+        if (_primary < 0 || _primary >= _widgets.Length || _empty) return false;
+        try
+        {
+            foreach (var (r, onClick) in _widgets[_primary].CollapsedButtons(CollapsedW, CollapsedH))
+            {
+                float bx = _cl + r.X * S, by = _ct + r.Y * S;
+                if (p.X >= bx && p.X < bx + r.Width * S && p.Y >= by && p.Y < by + r.Height * S)
+                {
+                    onClick(new PointF((p.X - _cl) / S, (p.Y - _ct) / S));
+                    return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
 
     private void Apply(float t)
     {

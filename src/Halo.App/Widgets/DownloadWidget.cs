@@ -71,6 +71,22 @@ internal sealed class DownloadWidget : IWidget
         return r;
     }
 
+    // the collapsed pill's own Stop, so a runaway download can be killed at a glance without opening the
+    // panel first. Same two actions as the panel: Store items cancel through AppInstallManager, everything
+    // else quits the downloader, since no cross-app per-download cancel exists.
+    public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> CollapsedButtons(int w, int h)
+    {
+        if (Downloads.Name == null) return Array.Empty<(RectangleF, Action<PointF>)>();
+        return new (RectangleF, Action<PointF>)[]
+        {
+            (CollapsedStopRect(w, h), _ =>
+            {
+                if (Downloads.IsStore && Downloads.CanControl) Downloads.StoreCancel();
+                else Downloads.StopProcess();
+            }),
+        };
+    }
+
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
         if (Downloads.Name == null) return Array.Empty<(RectangleF, Action<PointF>)>();
@@ -172,8 +188,13 @@ internal sealed class DownloadWidget : IWidget
         }
     }
 
+    // The hairline border comes from the media panel, where the art is a full-bleed photo that needs an
+    // edge. An app icon is not full-bleed: Chrome's is a circle on transparency, so the border traced a
+    // rounded SQUARE around a round mark and read as a second stray outline next to the icon's own white
+    // ring. Only the fallback glyph tile, which really is a flat filled square, still gets one.
     private static void DrawArt(Graphics g, Bitmap? icon, float fade)
-        => IconTile(g, new RectangleF(ArtX, ArtY, ArtSize, ArtSize), ArtSize * 0.24f, icon, fade, 46f, border: true);
+        => IconTile(g, new RectangleF(ArtX, ArtY, ArtSize, ArtSize), ArtSize * 0.24f, icon, fade, 46f,
+            border: icon == null);
 
     // rounded logo tile (matches album art). Fill the rounded path with the icon as a TEXTURE (AA
     // corners) — SetClip gives jagged, "dirty" edges. Download glyph as fallback.
@@ -308,48 +329,57 @@ internal sealed class DownloadWidget : IWidget
         float fill = w * pct / 100f;
         var bar = paused ? Dim : accent;
         Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
-        // halo riding the wavefront. Kept dim on purpose: at 46 it washed the whole right half of the pill
-        // and the fill's own edge stopped reading as the edge.
         if (fill > 0.5f) Fx.Glow(g, w, h, fade, fill, h / 2f, h * 1.15f, h * 1.5f, 22, bar);
 
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
         if (paused) DrawPausedBadge(g, 9, (h - sz) / 2f, sz, fade);
 
-        // The number reads over a filled bar whose brightness changes as the fill sweeps past, so it needs
-        // weight to stay legible: Segoe UI Semibold, with the digits a size larger than the "%" so the
-        // figure leads and the unit trails quietly. A soft dark shadow underneath keeps it readable at both
-        // ends — over the pale fill on the left and the dim track on the right.
-        // ClearType's subpixel antialiasing paints orange/blue fringes along every glyph edge, which on a
-        // layered per-pixel-alpha surface reads as dirty colour rather than as smoothing. Grayscale AA is
-        // what the rest of the app uses for exactly this reason.
+        // One line, one voice: what has landed, then the percentage after a separator, the way the rest of
+        // the app writes compound status ("net 15 · api 210 ms"). The bytes are the honest number — they
+        // come off the file itself — so they lead, and the percentage follows as the derived figure.
+        long done = Downloads.Downloaded, tot = Downloads.Total;
+        string text = done > 1_048_576 && tot > 1_048_576
+            ? $"{Bytes(done)} / {Bytes(tot)}  ·  {pct}%"
+            : done > 1_048_576 ? $"{Bytes(done)}  ·  {pct}%" : $"{pct}%";
+
         var oldHint = g.TextRenderingHint;
+        // ClearType paints orange/blue subpixel fringes, which on a layered per-pixel-alpha surface read as
+        // dirty colour rather than as smoothing
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
 
-        using var digitF = new Font("Segoe UI Semibold", 17f, GraphicsUnit.Pixel);
-        using var unitF = new Font("Segoe UI Semibold", 12f, GraphicsUnit.Pixel);
-        using var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap };
-        string num = pct.ToString();
-        var nsz = g.MeasureString(num, digitF, int.MaxValue, sf);
-        var usz = g.MeasureString("%", unitF, int.MaxValue, sf);
-        float total = nsz.Width + 1.5f + usz.Width;
-
-        float left = iconRight + 10f, right = w - 12f;
-        float cx = left + (right - left) * 0.42f;   // left of centre, per the design
-        float tx0 = cx - total / 2f;
-        float numY = (h - nsz.Height) / 2f - Fx.CenterLift(digitF);
-        float unitY = numY + (nsz.Height - usz.Height) * 0.62f;   // sit the % on the digits' baseline
-
-        using (var shadow = new SolidBrush(Mul(Color.FromArgb(120, 0, 0, 0), fade)))
-        {
-            g.DrawString(num, digitF, shadow, tx0 + 0.7f, numY + 0.7f, sf);
-            g.DrawString("%", unitF, shadow, tx0 + nsz.Width + 1.5f + 0.7f, unitY + 0.7f, sf);
-        }
+        float left = iconRight + 8f, right = w - (StopSize + 16f);   // leave the stop button its corner
+        var zone = new RectangleF(left, -Fx.CenterLift(f), right - left, h);
+        using (var shadow = new SolidBrush(Mul(Color.FromArgb(110, 0, 0, 0), fade)))
+            g.DrawString(text, f, shadow, new RectangleF(zone.X + 0.6f, zone.Y + 0.6f, zone.Width, zone.Height), sf);
         using (var nb = new SolidBrush(Mul(White, fade)))
-            g.DrawString(num, digitF, nb, tx0, numY, sf);
-        using (var ub = new SolidBrush(Mul(Color.FromArgb(210, 255, 255, 255), fade)))
-            g.DrawString("%", unitF, ub, tx0 + nsz.Width + 1.5f, unitY, sf);
+            g.DrawString(text, f, nb, zone, sf);
         g.TextRenderingHint = oldHint;
+
+        DrawCollapsedStop(g, w, h, fade);
+    }
+
+    // Stop, right there on the collapsed pill — reaching it used to mean opening the panel first. Same
+    // action as the panel's: there is no cross-app cancel API, so it quits the downloader (the download
+    // stays resumable) or, for a Store item, cancels through AppInstallManager.
+    internal const float StopSize = 22f;
+    internal static RectangleF CollapsedStopRect(int w, int h)
+        => new(w - StopSize - 9f, (h - StopSize) / 2f, StopSize, StopSize);
+
+    private static void DrawCollapsedStop(Graphics g, int w, int h, float fade)
+    {
+        var r = CollapsedStopRect(w, h);
+        bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 150 : 90, 12, 12, 14), fade)))
+            g.FillEllipse(bg, r);
+        using (var pen = new Pen(Mul(Color.FromArgb(hov ? 235 : 150, 255, 160, 150), fade), 1.2f))
+            g.DrawEllipse(pen, r.X + 0.6f, r.Y + 0.6f, r.Width - 1.2f, r.Height - 1.2f);
+        float s = r.Width * 0.30f;
+        using var b = new SolidBrush(Mul(hov ? Color.FromArgb(255, 120, 110) : Color.FromArgb(210, 255, 130, 120), fade));
+        g.FillRectangle(b, r.X + (r.Width - s) / 2f, r.Y + (r.Height - s) / 2f, s, s);
     }
 
     // A stopped/paused download keeps its app icon so you still know what it is; the state goes on top as a

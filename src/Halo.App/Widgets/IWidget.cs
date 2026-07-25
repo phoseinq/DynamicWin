@@ -46,4 +46,11 @@ internal interface IWidget
     // Clickable regions in the expanded pill (rect in pill-local coords). onClick gets the pill-local
     // click point (for sliders like seek/volume). Empty = none.
     IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h);
+
+    // Same, but for the COLLAPSED pill. It stays empty for almost every widget: the collapsed pill is a
+    // glance surface and a stray control there would fire while the user is only reaching for the pill.
+    // Put something here only when acting without opening the panel first is the point — stopping a
+    // download is the case that earned it.
+    IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> CollapsedButtons(int w, int h)
+        => Array.Empty<(RectangleF, Action<PointF>)>();
 }

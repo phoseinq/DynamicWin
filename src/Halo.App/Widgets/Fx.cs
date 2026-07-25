@@ -119,7 +119,11 @@ internal static class Fx
     {
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
-        using var pp = PillPath(w, h, h / 2f);
+        // Inset by a hair. Filling exactly the same path the shell uses for the window silhouette left a
+        // saturated line of accent along the rounded bottom: two antialiased edges landing on the same
+        // pixel row add up instead of blending, so the outermost row ended up at full colour. Half a pixel
+        // in is invisible and keeps the bar strictly inside the glass.
+        using var pp = PillPath(w, h, h / 2f, 0.5f);
         using (var tb = new SolidBrush(Alpha(Shade(accent, 1), fade * 0.34f * strength)))
             g.FillPath(tb, pp);
         if (frac <= 0.001f) return;
@@ -197,13 +201,19 @@ internal static class Fx
     // flat-top / rounded-bottom pill silhouette. Public so effects that wash the whole pill (the
     // compacting pulse) fill the TRUE outline — a fully-rounded rect over this flat top left two
     // dark crescents at the top corners ("از بالا حلاله").
-    public static GraphicsPath PillPath(int w, int h, float r)
+    public static GraphicsPath PillPath(int w, int h, float r) => PillPath(w, h, r, 0f);
+
+    // `inset` pulls the path in from every edge. Callers that FILL the same silhouette the window itself
+    // is shaped by want a fraction of a pixel of inset, or the two antialiased edges stack on the same
+    // pixel row and produce a hard line of colour along the rounded bottom.
+    public static GraphicsPath PillPath(int w, int h, float r, float inset)
     {
-        float d = Math.Min(r, Math.Min(w, h) / 2f) * 2f;
+        float x0 = inset, y0 = inset, x1 = w - inset, y1 = h - inset;
+        float d = Math.Min(r, Math.Min(x1 - x0, y1 - y0) / 2f) * 2f;
         var p = new GraphicsPath();
-        p.AddLine(0, 0, w, 0);
-        p.AddArc(w - d, h - d, d, d, 0, 90);
-        p.AddArc(0, h - d, d, d, 90, 90);
+        p.AddLine(x0, y0, x1, y0);
+        p.AddArc(x1 - d, y1 - d, d, d, 0, 90);
+        p.AddArc(x0, y1 - d, d, d, 90, 90);
         p.CloseFigure();
         return p;
     }
