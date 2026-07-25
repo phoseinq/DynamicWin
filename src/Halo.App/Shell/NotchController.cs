@@ -120,7 +120,7 @@ internal sealed class NotchController
     private const int TintAppCollapsed = 120, TintAppExpanded = 60;
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f; // open snappier than close. slowed after
     // the _dt fix made these hit their real wall-clock duration (old timer cadence ran them ~2x slower).
-    private const float HoldSeconds = 1.5f; // press-and-hold on the pill this long → drag-to-move engages
+    private const float HoldSeconds = 0.75f; // press-and-hold on the pill this long → drag-to-move engages
     private const int CaptureFast = 2, CaptureSlow = 12; // glass capture cadence: ~60fps expanded, ~10fps collapsed
     private const int EmptyCatchAlpha = 1; // empty pill fades to this alpha: invisible, but ≥1 so it still catches OLE file drags
 

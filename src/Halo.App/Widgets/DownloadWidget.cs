@@ -102,7 +102,11 @@ internal sealed class DownloadWidget : IWidget
         if (fade <= 0.01f) return;
         string? name = Downloads.Name;
         if (name == null) return;
-        bool installing = Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
+        // Two different questions that used to share one flag: "is the bar indeterminate" and "what is the
+        // app doing". NoPct only means the total size is unknown, which is now the normal case for a browser
+        // download, so folding it into `installing` labelled ordinary downloads "Installing…".
+        bool indeterminate = Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
+        bool installing = Downloads.Installing;
         bool paused = Downloads.Paused;
         int pct = Math.Clamp(Downloads.Percent, 0, 100);
         long done = Downloads.Downloaded, tot = Downloads.Total;
@@ -112,7 +116,7 @@ internal sealed class DownloadWidget : IWidget
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         // logo tile (rounded square, like album art)
-        Fx.Glow(g, w, h, fade * (installing ? 0.55f + 0.45f * pulse : 1f),
+        Fx.Glow(g, w, h, fade * (indeterminate ? 0.55f + 0.45f * pulse : 1f),
             ArtX + ArtSize / 2f, ArtY + ArtSize / 2f, w * 0.85f, h * 1.2f, 38, accent);
         DrawArt(g, icon, fade);
 
@@ -124,14 +128,14 @@ internal sealed class DownloadWidget : IWidget
             DrawEllipsized(g, name, titleF, tb, tx, 34, tw, 30);
         string state = Downloads.Waiting ? "Waiting…" : installing ? "Installing…"
             : paused ? "Paused" : "Downloading";
-        string sub = installing || Downloads.NoPct ? state : $"{state}   ·   {pct}%";
+        string sub = indeterminate || Downloads.NoPct ? state : $"{state}   ·   {pct}%";
         using (var lb = new SolidBrush(Mul(Dim, fade)))
             DrawEllipsized(g, sub, bodyF, lb, tx, 66, tw, 22);
 
         // horizontal progress bar (matches the media seek bar)
         float by = 116, bh = 5;
         Fill(g, tx, by, tw, bh, Mul(Track, fade), bh / 2);
-        if (installing)
+        if (indeterminate)
         {
             float seg = tw * 0.34f, sx = tx + (tw - seg) * (0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 700f));
             Fill(g, sx, by, seg, bh, Mul(accent, fade * (0.5f + 0.5f * pulse)), bh / 2);

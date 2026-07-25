@@ -23,7 +23,6 @@ internal static class PartialFiles
 
     private const long MinSize = 128 * 1024;          // below this it's a scratch file, not a download
     private const int StaleSeconds = 20;              // untouched for longer → finished or abandoned
-    private const long MinGrowthBytes = 16 * 1024;    // growth needed between samples to count as live
 
     internal readonly record struct Sample(string Path, string Name, long Bytes, long GrowthPerSec, int OwnerPid);
 
@@ -79,6 +78,11 @@ internal static class PartialFiles
                     if ((now - touched).TotalSeconds > StaleSeconds) continue;
 
                     live.Add(path);
+                    // Growth is only used to RANK candidates, never to decide whether this is a download.
+                    // Requiring fresh growth every sample made the pill vanish the moment a download
+                    // stalled for a second (observed live: Chrome's file was found, then dropped one second
+                    // later). Freshness is already the liveness test — StaleSeconds above — so a paused but
+                    // recently-touched partial file stays on the pill instead of flickering out.
                     long rate = 0;
                     if (_seen.TryGetValue(path, out var prev))
                     {
@@ -86,13 +90,13 @@ internal static class PartialFiles
                         if (secs >= 0.5)
                         {
                             long grew = len - prev.bytes;
-                            if (grew >= MinGrowthBytes) rate = (long)(grew / secs);
+                            if (grew > 0) rate = (long)(grew / secs);
                             _seen[path] = (len, now);
                         }
+                        else rate = prev.bytes == len ? 0 : 1; // too soon to measure; don't lose the file
                     }
-                    else { _seen[path] = (len, now); rate = 1; } // first sighting: assume live, confirm next pass
+                    else _seen[path] = (len, now);
 
-                    if (rate <= 0) continue;
                     if (best is null || rate > best.Value.GrowthPerSec)
                         best = new Sample(path, clean, len, rate, 0);
                 }

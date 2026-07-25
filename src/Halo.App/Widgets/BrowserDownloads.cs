@@ -17,12 +17,13 @@ namespace Halo.Widgets;
 // the project forbids inventing numbers).
 internal static class BrowserDownloads
 {
-    internal readonly record struct Row(string File, long Received, long Total);
+    // File = the path Chromium is writing to (the .crdownload), Target = the final name it will become
+    internal readonly record struct Row(string File, long Received, long Total, string Target);
 
     private const int OpenReadonly = 0x1, OpenUri = 0x40, RowResult = 100;
-    private const int StateInProgress = 0;
+    private const double CacheSeconds = 2.5;   // snapshotting a multi-MB History is not a per-frame job
+    private const double IdleMinutes = 30;     // profile untouched this long → nothing is downloading there
 
-    // cached briefly: this runs on the 1s download scan and each call opens several SQLite files
     private static readonly object _lock = new();
     private static List<Row> _cache = new();
     private static DateTime _cacheAt = DateTime.MinValue;
@@ -65,7 +66,7 @@ internal static class BrowserDownloads
     public static List<Row> InProgress()
     {
         lock (_lock)
-            if ((DateTime.UtcNow - _cacheAt).TotalSeconds < 2) return _cache;
+            if ((DateTime.UtcNow - _cacheAt).TotalSeconds < CacheSeconds) return _cache;
 
         var rows = new List<Row>();
         foreach (var db in HistoryFiles())
@@ -79,20 +80,30 @@ internal static class BrowserDownloads
 
     // Total for a partial file, matched by the name Chromium is writing to. Returns 0 when unknown, which
     // the caller must treat as "no percentage" rather than substituting a guess.
+    // Total for a partial file on disk. Chromium may key the row by either path, and while a download is
+    // running current_path is often empty, so match the partial's real name against target_path too.
+    // Returns 0 when unknown, which the caller must treat as "no percentage" rather than a guess.
     public static long TotalFor(string partialPath)
     {
         if (string.IsNullOrEmpty(partialPath)) return 0;
-        string target = Path.GetFileName(partialPath);
+        string partial = Path.GetFileName(partialPath);
+        PartialFiles.IsPartial(partial, out string clean);   // "x.iso.crdownload" -> "x.iso"
         foreach (var r in InProgress())
         {
-            string f = Path.GetFileName(r.File);
-            if (f.Length == 0) continue;
-            if (f.Equals(target, StringComparison.OrdinalIgnoreCase)) return r.Total; // current_path IS the .crdownload
+            if (Same(Path.GetFileName(r.File), partial, clean)) return r.Total;
+            if (Same(Path.GetFileName(r.Target), partial, clean)) return r.Total;
         }
         return 0;
     }
 
+    private static bool Same(string candidate, string partial, string clean)
+        => candidate.Length > 0 &&
+           (candidate.Equals(partial, StringComparison.OrdinalIgnoreCase) ||
+            (clean.Length > 0 && candidate.Equals(clean, StringComparison.OrdinalIgnoreCase)));
+
     // The clean final filename for a partial file whose own name is useless ("Unconfirmed 12345.crdownload").
+    // The clean final filename for a partial file whose own name is useless ("Unconfirmed 12345.crdownload").
+    // Chromium keeps the real destination in target_path, which is why the row carries it separately.
     public static string? NameFor(string partialPath)
     {
         if (string.IsNullOrEmpty(partialPath)) return null;
@@ -100,38 +111,74 @@ internal static class BrowserDownloads
         foreach (var r in InProgress())
             if (Path.GetFileName(r.File).Equals(target, StringComparison.OrdinalIgnoreCase))
             {
-                // target_path holds the final name; current_path is the partial. We only stored File
-                // (=target_path), so strip a partial suffix if it somehow carries one.
-                string n = Path.GetFileName(r.File);
+                string n = Path.GetFileName(r.Target);
+                if (n.Length == 0) return null;
                 return PartialFiles.IsPartial(n, out string clean) && clean.Length > 0 ? clean : n;
             }
         return null;
     }
 
+    // Reading the live file with immutable=1 was the first attempt and it silently returns only COMPLETED
+    // downloads: immutable tells SQLite the file can't change, so it skips the -wal entirely — and an
+    // in-progress download is exactly what is still sitting in the WAL, uncheckpointed. Observed live:
+    // Chrome downloading, zero rows with state=0.
+    // So snapshot the database AND its WAL to temp and open the copy normally, which replays the WAL and
+    // reveals the in-progress rows. Copying is allowed while Chrome holds the file (verified).
     private static void ReadInto(string dbPath, List<Row> rows)
     {
-        // immutable=1 promises the file won't change under us, which is what lets SQLite skip the locking
-        // protocol and read a database another process has open. Slightly stale data is fine here.
-        string uri = "file:///" + dbPath.Replace('\\', '/').Replace(" ", "%20") + "?immutable=1";
-        if (sqlite3_open_v2(Utf8(uri), out IntPtr db, OpenReadonly | OpenUri, IntPtr.Zero) != 0) { sqlite3_close(db); return; }
+        string wal = dbPath + "-wal";
+        // Skip profiles that are plainly dormant, but the window has to be generous: Chrome writes the
+        // download row once at the start and then leaves History untouched for the whole transfer (seen
+        // live: 63s stale while actively downloading). A tight freshness gate skipped the very profile
+        // that had the answer. The 2.5s result cache is what actually keeps this cheap.
         try
         {
-            const string sql = "SELECT target_path, current_path, received_bytes, total_bytes FROM downloads WHERE state = 0";
-            if (sqlite3_prepare_v2(db, Utf8(sql), -1, out IntPtr st, IntPtr.Zero) != 0) return;
+            var recent = File.Exists(wal) ? File.GetLastWriteTimeUtc(wal) : File.GetLastWriteTimeUtc(dbPath);
+            if ((DateTime.UtcNow - recent).TotalMinutes > IdleMinutes) return;
+        }
+        catch { return; }
+
+        string tmpDir = Path.Combine(Path.GetTempPath(), "halo-dlsnap");
+        string snap = Path.Combine(tmpDir, "h" + Math.Abs(dbPath.GetHashCode()) + ".db");
+        try
+        {
+            Directory.CreateDirectory(tmpDir);
+            File.Copy(dbPath, snap, overwrite: true);
+            if (File.Exists(wal)) File.Copy(wal, snap + "-wal", overwrite: true);
+
+            string uri = "file:///" + snap.Replace('\\', '/').Replace(" ", "%20");
+            if (sqlite3_open_v2(Utf8(uri), out IntPtr db, OpenReadonly | OpenUri, IntPtr.Zero) != 0)
+            { sqlite3_close(db); return; }
             try
             {
-                while (sqlite3_step(st) == RowResult)
+                // No state filter, and received_bytes is ignored. Observed live while Chrome was 60MB into
+                // a 100MB file: the row carried total_bytes=104857600 but received_bytes=0 and a state that
+                // was not "in progress" — Chrome keeps live progress in memory and only writes the row up
+                // front. Filtering on state=0 therefore found nothing, which is why the pill could never
+                // show a percentage. The bytes come from the file on disk anyway; the only thing wanted
+                // here is the total, so take the newest row per file whatever its state.
+                const string sql = @"SELECT target_path, current_path, received_bytes, total_bytes
+                                     FROM downloads WHERE total_bytes > 0 ORDER BY id DESC LIMIT 40";
+                if (sqlite3_prepare_v2(db, Utf8(sql), -1, out IntPtr st, IntPtr.Zero) != 0) return;
+                try
                 {
-                    string target = Str(sqlite3_column_text(st, 0));
-                    string current = Str(sqlite3_column_text(st, 1));
-                    long got = sqlite3_column_int64(st, 2), total = sqlite3_column_int64(st, 3);
-                    // key on the partial file we can actually see on disk, falling back to the final name
-                    rows.Add(new Row(current.Length > 0 ? current : target, got, total));
+                    while (sqlite3_step(st) == RowResult)
+                    {
+                        string target = Str(sqlite3_column_text(st, 0));
+                        string current = Str(sqlite3_column_text(st, 1));
+                        long got = sqlite3_column_int64(st, 2), total = sqlite3_column_int64(st, 3);
+                        // current_path is the .crdownload we can see on disk; target_path is the final name
+                        rows.Add(new Row(current.Length > 0 ? current : target, got, total, target));
+                    }
                 }
+                finally { sqlite3_finalize(st); }
             }
-            finally { sqlite3_finalize(st); }
+            finally { sqlite3_close(db); }
         }
-        finally { sqlite3_close(db); }
+        finally
+        {
+            try { File.Delete(snap); File.Delete(snap + "-wal"); } catch { }
+        }
     }
 
     private static byte[] Utf8(string s)
