@@ -97,9 +97,30 @@ internal static class BrowserDownloads
     }
 
     private static bool Same(string candidate, string partial, string clean)
-        => candidate.Length > 0 &&
-           (candidate.Equals(partial, StringComparison.OrdinalIgnoreCase) ||
-            (clean.Length > 0 && candidate.Equals(clean, StringComparison.OrdinalIgnoreCase)));
+    {
+        if (candidate.Length == 0) return false;
+        if (candidate.Equals(partial, StringComparison.OrdinalIgnoreCase)) return true;
+        if (clean.Length > 0 && candidate.Equals(clean, StringComparison.OrdinalIgnoreCase)) return true;
+        // Downloading the same file twice makes the browser write "name (2).ext", while the row it can be
+        // sized from is the original "name.ext" — so a re-download never found its total. Compare with the
+        // dedupe suffix removed. This assumes "name (2).ext" is another copy of "name.ext", which is what
+        // the suffix means when a browser adds it; the total is only used for the percentage, and the bytes
+        // shown always come from the file itself.
+        return clean.Length > 0 && StripCopySuffix(clean) is { Length: > 0 } bare
+            && candidate.Equals(bare, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // "1Gb (2).dat" -> "1Gb.dat";  anything else is returned unchanged
+    internal static string StripCopySuffix(string fileName)
+    {
+        string stem = Path.GetFileNameWithoutExtension(fileName), ext = Path.GetExtension(fileName);
+        int open = stem.LastIndexOf(" (", StringComparison.Ordinal);
+        if (open <= 0 || !stem.EndsWith(")", StringComparison.Ordinal)) return fileName;
+        string inner = stem.Substring(open + 2, stem.Length - open - 3);
+        if (inner.Length == 0 || inner.Length > 3) return fileName;
+        foreach (char c in inner) if (c is < '0' or > '9') return fileName;
+        return stem.Substring(0, open) + ext;
+    }
 
     // The clean final filename for a partial file whose own name is useless ("Unconfirmed 12345.crdownload").
     // The clean final filename for a partial file whose own name is useless ("Unconfirmed 12345.crdownload").
