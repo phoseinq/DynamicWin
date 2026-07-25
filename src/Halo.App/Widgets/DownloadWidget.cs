@@ -249,7 +249,13 @@ internal sealed class DownloadWidget : IWidget
         float sz = h - 14f, ix = 9, iy = (h - sz) / 2f;
         float tx = ix + sz + 12; // content starts right of the icon
 
-        if (Downloads.Waiting) // queued: breathing glow + name, no bar/no % (like Claude compacting)
+        // Two states carry no trustworthy percentage: queued (nothing has started) and a download whose
+        // total size nobody reports — a Firefox .part file, a learned app, Xbox staging before the catalog
+        // answers. Both get the same honest treatment as Claude's compacting pill: the whole pill breathes
+        // instead of a bar that would have to fake a position, with the live byte count as the only number,
+        // since bytes-so-far is the one thing actually known.
+        bool breathe = Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused && !Downloads.Installing);
+        if (breathe)
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
             using (var pb = new SolidBrush(Mul(accent, fade * (0.05f + 0.12f * pulse))))
@@ -258,13 +264,23 @@ internal sealed class DownloadWidget : IWidget
             DrawCollapsedIcon(g, icon, ix, iy, sz, fade);
             using var nf = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
             using var nb = new SolidBrush(Mul(White, fade));
-            DrawEllipsized(g, name, nf, nb, tx, (h - 18f) / 2f, w - tx - 14, 18);
+            float right = w - tx - 14;
+            if (!Downloads.Waiting && Downloads.Downloaded > 0) // show what has actually landed
+            {
+                string got = Bytes(Downloads.Downloaded);
+                using var sf2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+                using var sb2 = new SolidBrush(Mul(Dim, fade));
+                var gsz = g.MeasureString(got, sf2);
+                g.DrawString(got, sf2, sb2, w - gsz.Width - 14, (h - gsz.Height) / 2f);
+                right -= gsz.Width + 8;
+            }
+            DrawEllipsized(g, name, nf, nb, tx, (h - 18f) / 2f, right, 18);
             return;
         }
 
         DrawCollapsedIcon(g, icon, ix, iy, sz, fade);
         float by = h / 2f - 3, bh = 6;
-        if (Downloads.Installing || (Downloads.NoPct && !Downloads.Paused)) // indeterminate → sliding segment
+        if (Downloads.Installing) // deploying a package: real work, unknowable position → sliding segment
         {
             float p = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 480f);
             float bw = w - tx - 16;
@@ -273,15 +289,34 @@ internal sealed class DownloadWidget : IWidget
             Fill(g, sx, by, seg, bh, Mul(accent, 0.5f + 0.5f * p), bh / 2);
             return;
         }
-        int pct = Math.Clamp(Downloads.Percent, 0, 100);
-        using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
-        using var tb = new SolidBrush(White);
-        var tsz = g.MeasureString(pct + "%", f);
-        float px = w - tsz.Width - 14, py = (h - tsz.Height) / 2f;
-        g.DrawString(pct + "%", f, tb, px, py);
-        float bw2 = px - tx - 12;
-        Fill(g, tx, by, bw2, bh, Track, bh / 2);
-        Fill(g, tx, by, bw2 * pct / 100f, bh, Downloads.Paused ? Dim : accent, bh / 2);
+        DrawPillProgress(g, w, h, fade, Math.Clamp(Downloads.Percent, 0, 100), accent,
+            Downloads.Paused, ix + sz);
+    }
+
+    // Progress WITHOUT a separate bar: the pill itself is the bar. The whole silhouette carries a deep,
+    // dim wash of the app's own accent as the track, the vivid accent fills it left-to-right, and a glow
+    // rides the leading edge so the motion reads even at a glance. The icon is drawn last, so the fill
+    // passes BEHIND it and never sits on top of it. `iconRight` is where the icon ends, so the number can
+    // centre in the space that is actually free.
+    private static void DrawPillProgress(Graphics g, int w, int h, float fade, int pct, Color accent,
+        bool paused, float iconRight)
+    {
+        float fill = w * pct / 100f;
+        var bar = paused ? Dim : accent;
+        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
+        // the halo behind the wavefront (Glow clips itself to the pill and needs premultiplied art)
+        if (fill > 0.5f) Fx.Glow(g, w, h, fade, fill, h / 2f, h * 1.5f, h * 2.0f, 46, bar);
+
+        DrawCollapsedIcon(g, Ico(), 9, (h - (h - 14f)) / 2f, h - 14f, fade); // last = fill stays behind it
+
+        // the number sits in the free space between the icon and the right wall, nudged right of centre
+        using var f = new Font("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
+        using var nb = new SolidBrush(Mul(White, fade));
+        string s = pct + "%";
+        var tsz = g.MeasureString(s, f);
+        float left = iconRight + 10f, right = w - 12f;
+        float cx = left + (right - left) * 0.56f;   // 0.5 would be dead centre; lean right per the design
+        g.DrawString(s, f, nb, cx - tsz.Width / 2f, (h - tsz.Height) / 2f);
     }
 
     // round "stop" button — quits the download manager (Downloads.StopProcess), the only reliable way to

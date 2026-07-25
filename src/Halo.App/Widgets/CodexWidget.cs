@@ -127,6 +127,9 @@ internal sealed class CodexWidget : IWidget
         var st = Current;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        // mirrors ClaudeCodeWidget: the spent share of the usage window as a whisper-faint pill background,
+        // collapsed only, and never while the compacting wash owns the pill
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {
@@ -531,6 +534,11 @@ internal sealed class CodexWidget : IWidget
 
     // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
     // it would vanish): green = working, yellow = deep thinking / needs input, red = error, white = idle
+    // primary (5-hour) window first, secondary (weekly) as the stand-in; 0 draws nothing rather than
+    // implying an empty budget
+    private static float UsageFrac()
+        => CodexLimits.FiveHour >= 0 ? CodexLimits.FiveHour : CodexLimits.Week >= 0 ? CodexLimits.Week : 0f;
+
     private static Color RingColor(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
          : LimitHit ? Amber                 // out of juice — flag it in any session state, not just "working"

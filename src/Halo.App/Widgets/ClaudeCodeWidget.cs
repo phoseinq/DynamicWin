@@ -98,6 +98,12 @@ internal sealed class ClaudeCodeWidget : IWidget
         var st = Live;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        // Backmost layer: how much of the usage window is spent, as the pill's own background — the same
+        // "pill IS the bar" language as a download, but a whisper, since here it is ambient context and
+        // not the point of the pill. Collapsed only; the expanded panel keeps its labelled bars, which are
+        // what you actually compare three numbers on. Skipped while compacting, whose breathing wash owns
+        // the whole pill already.
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {
@@ -509,6 +515,12 @@ internal sealed class ClaudeCodeWidget : IWidget
     // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
     // it would vanish): green = running a tool, yellow = thinking / needs input, blue = compacting,
     // red = error, white = idle
+    // The 5-hour window is the number that matters minute to minute; the weekly one stands in when the
+    // 5-hour figure hasn't been fetched. 0 when neither is known, which draws nothing rather than
+    // implying an empty budget.
+    private static float UsageFrac()
+        => Limits.FiveHour >= 0 ? Limits.FiveHour : Limits.Week >= 0 ? Limits.Week : 0f;
+
     private static Color RingColor(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? Amber                 // out of juice — flag it in any session state, not just "working"

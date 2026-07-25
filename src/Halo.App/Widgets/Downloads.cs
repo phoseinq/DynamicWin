@@ -160,6 +160,45 @@ internal static class Downloads
                     }
                     return;
                 }
+                // Steam keeps no percentage in its window title, so the title scan above is blind to it.
+                // Its manifests carry real byte counts — see SteamInstall.
+                if (SteamInstall.Current() is { } steam)
+                {
+                    int sPct = (int)Math.Clamp(steam.Done * 100 / Math.Max(steam.Total, 1), 0, 99);
+                    if (Name != steam.Name || Downloaded != steam.Done || Total != steam.Total || Percent != sPct || IsStore)
+                    {
+                        Name = steam.Name; Percent = sPct; Installing = false; Waiting = false; Paused = false;
+                        Downloaded = steam.Done; Total = steam.Total; IsStore = false; CanControl = false; NoPct = false;
+                        ExePath = SteamExe(); IconFile = null; Hwnd = IntPtr.Zero;
+                        Interlocked.Increment(ref Version); LogState();
+                    }
+                    return;
+                }
+                // Last and most general: a partial file growing on disk. This is what finally covers
+                // browsers (skipped above on purpose, since a page title can read "50% off") and any other
+                // app that downloads. The filesystem knows the bytes but not the total, so ask the
+                // browser's own database for it; when nothing supplies a total, NoPct keeps the widget
+                // honest — live bytes and a breathing bar instead of a made-up percentage.
+                if (PartialFiles.Current() is { } part)
+                {
+                    long pTotal = BrowserDownloads.TotalFor(part.Path);
+                    string label = part.Name.Length > 0 ? part.Name
+                        : BrowserDownloads.NameFor(part.Path)
+                          ?? Downloaders.AppFor(System.IO.Path.GetDirectoryName(part.Path))
+                          ?? "Downloading";
+                    bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
+                    int pPct = noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99);
+                    if (Name != label || Downloaded != part.Bytes || Total != (noPct ? 0 : pTotal)
+                        || Percent != pPct || NoPct != noPct || IsStore)
+                    {
+                        Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = false;
+                        Downloaded = part.Bytes; Total = noPct ? 0 : pTotal; IsStore = false; CanControl = false;
+                        NoPct = noPct; IconFile = null; Hwnd = IntPtr.Zero;
+                        ExePath = part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null;
+                        Interlocked.Increment(ref Version); LogState();
+                    }
+                    return;
+                }
                 if (Name != null)
                 {
                     Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false; Paused = false;
@@ -181,6 +220,26 @@ internal static class Downloads
     }
 
     private const string StoreAumid = "Microsoft.WindowsStore_8wekyb3d8bbwe!App";
+
+    // icon source for a partial-file download: the exe of whichever process is writing the file
+    private static string? ExeOfPid(int pid)
+    {
+        try { using var p = Process.GetProcessById(pid); return p.MainModule?.FileName; }
+        catch { return null; }
+    }
+
+    private static string? SteamExe()
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"SOFTWARE\Valve\Steam");
+            string? dir = k?.GetValue("SteamPath") as string;
+            if (string.IsNullOrEmpty(dir)) return null;
+            string exe = System.IO.Path.Combine(System.IO.Path.GetFullPath(dir!.Replace('/', '\\')), "steam.exe");
+            return System.IO.File.Exists(exe) ? exe : null;
+        }
+        catch { return null; }
+    }
 
     private static bool IsBrowser(IntPtr h)
     {

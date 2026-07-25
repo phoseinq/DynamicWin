@@ -105,6 +105,38 @@ internal static class Fx
         g.Clip = old;
     }
 
+    // "the pill IS the bar": instead of a separate progress bar, wash the whole silhouette with the app's
+    // own accent — a deeper, duller shade as the track, the accent itself as the fill, and a brighter lip
+    // at the wavefront so the leading edge reads as light rather than a cut. Lives here because both the
+    // download pill (bold) and the agent pills (a whisper behind the content) need exactly this, and the
+    // last thing this codebase needs is a third copy of the same drawing.
+    // `strength` scales the whole effect; the caller draws its icon AFTERWARDS so the fill passes behind it.
+    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength)
+    {
+        if (accent == White || fade <= 0.01f || strength <= 0f) return;
+        frac = Math.Clamp(frac, 0f, 1f);
+        float fill = w * frac;
+        using var pp = PillPath(w, h, h / 2f);
+        using (var tb = new SolidBrush(Alpha(Shade(accent, 1), fade * 0.34f * strength)))
+            g.FillPath(tb, pp);
+        if (fill <= 0.5f) return;
+        var old = g.Clip;
+        g.SetClip(pp); // keep the fill inside the real silhouette, so it keeps the rounded bottom
+        using (var fb = new SolidBrush(Alpha(accent, fade * 0.52f * strength)))
+            g.FillRectangle(fb, 0, 0, fill, h);
+        // The bright lip only belongs to a foreground bar. On a faint background bar it sweeps behind the
+        // pill's own text and eats its contrast (verified in a render: "running…" went muddy where the lip
+        // crossed it), so it is reserved for bold uses.
+        if (fill > 6f && strength >= 0.5f)
+            using (var lb = new LinearGradientBrush(new RectangleF(fill - 26f, 0, 26f, h),
+                Color.FromArgb(0, accent), Alpha(accent, fade * 0.55f * strength), LinearGradientMode.Horizontal))
+                g.FillRectangle(lb, fill - 26f, 0, 26f, h);
+        g.Clip = old;
+    }
+
+    public static Color Alpha(Color c, float a)
+        => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);
+
     // flat top flush to the screen edge + rounded bottom (matches LayeredNotch.PillPath)
     private static GraphicsPath PillClip(int w, int h) => PillPath(w, h, Math.Min(h / 2f, 30f));
 
