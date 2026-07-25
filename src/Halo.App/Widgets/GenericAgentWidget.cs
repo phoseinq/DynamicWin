@@ -81,7 +81,7 @@ internal sealed class GenericAgentWidget : IWidget
         if (st is null) return;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         DrawIconCircle(g, x, y, sz, fade);
 
@@ -107,7 +107,7 @@ internal sealed class GenericAgentWidget : IWidget
         Fx.Glow(g, w, h, fade, w * 0.16f, h * 0.35f, w * 0.85f, h * 1.2f, 30, Fx.AccentOf(IconImage));
 
         float x = 26;
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 2.2f))
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 2.2f))
             g.DrawEllipse(pen, x - 3, 23, 46, 46);
         DrawIconCircle(g, x, 26, 40, fade);
 

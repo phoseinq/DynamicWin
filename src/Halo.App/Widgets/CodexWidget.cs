@@ -136,7 +136,7 @@ internal sealed class CodexWidget : IWidget
             g.FillPath(pb, pp);
         }
         // subtle status ring around the (circular) icon: green working, red on error, white otherwise
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (OpenAiIcon != null) DrawIcon(g, OpenAiIcon, x, y, sz, fade, sz / 2f); // circular
         else

@@ -106,8 +106,11 @@ internal sealed class ClaudeCodeWidget : IWidget
             using var pp = Fx.PillPath(w, h, h / 2f); // flat top: matches the pill, no corner crescents
             g.FillPath(pb, pp);
         }
-        // subtle status ring around the (circular) icon: green working, red on error, white otherwise
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+        // status ring around the (circular) icon: green on a tool, yellow thinking, red on error, white idle.
+        // Alpha was 0.55, which broke the thinking state: amber at 55% over the near-black pill composites to
+        // ~(139,94,18), a dark brown-gold only 86 RGB units from the coral icon it hugs (green sits at 164),
+        // so "thinking" read as a shadow around the icon and the user reported the ring never turning yellow.
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (ClaudeIcon != null) DrawIcon(g, ClaudeIcon, x, y, sz, fade, sz / 2f); // circular
         else

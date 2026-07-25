@@ -42,7 +42,59 @@ internal static class BannerGate
         lock (_lock)
             foreach (var aumid in new List<string>(_orig.Keys))
                 changed |= WriteZero(aumid); // re-assert (usually already 0 → no-op → no restart)
-        if (changed) ScheduleApply();        // only if something had reset them
+        changed |= SeedKnownApps();          // and pre-empt everything Windows already knows about
+        if (changed) ScheduleApply();        // only if something actually needed writing
+    }
+
+    // Learning one app per first toast means every app banners exactly once before we can silence it, and
+    // apps that mint a fresh AUMID per account/channel (Telegram writes one per instance) leak again for
+    // each new id. Windows already keeps a key under Notifications\Settings for every app that has ever
+    // toasted, so claim that whole list up front: one pass, one service restart, and the long tail of rare
+    // toasters (a VPN connecting, Defender, the Store) never gets its free banner. SuppressApp still
+    // handles genuinely new apps afterwards, and each original value is recorded before being changed, so
+    // Restore()/Uninstall() still puts every one of them back exactly as it was.
+    private static bool SeedKnownApps()
+    {
+        bool changed = false;
+        int seeded = 0;
+        try
+        {
+            using var root = Registry.CurrentUser.OpenSubKey(SettingsPath);
+            if (root == null) return false;
+            foreach (var aumid in Walk(root, "", 0))
+            {
+                lock (_lock)
+                {
+                    if (_orig.ContainsKey(aumid)) continue; // already learned in an earlier session
+                    try { using var k = root.OpenSubKey(aumid); _orig[aumid] = k?.GetValue("ShowBanner") as int?; }
+                    catch { _orig[aumid] = null; }
+                    AppendState(aumid, _orig[aumid]);       // persist the ORIGINAL before we touch it
+                    if (WriteZero(aumid)) { changed = true; seeded++; }
+                }
+            }
+        }
+        catch (Exception ex) { Log("seed failed: " + ex.Message); }
+        if (seeded > 0) Log($"seeded {seeded} already-known app(s) from the registry");
+        return changed;
+    }
+
+    // Most AUMIDs are a single key, but a classic desktop app registers as a path
+    // ({GUID}\WindowsPowerShell\v1.0\powershell.exe), so the id is the whole relative path and a
+    // flat GetSubKeyNames() would miss the leaf that actually carries the setting. Yield every node:
+    // an intermediate one is harmless to set and Restore() removes what we added either way.
+    private static IEnumerable<string> Walk(RegistryKey root, string prefix, int depth)
+    {
+        if (depth > 4) yield break;   // real ids are 1-4 deep; a cap keeps a corrupt hive from spinning
+        string[] names;
+        try { using var k = prefix.Length == 0 ? null : root.OpenSubKey(prefix); names = (k ?? root).GetSubKeyNames(); }
+        catch { yield break; }
+        foreach (var name in names)
+        {
+            if (string.IsNullOrEmpty(name)) continue;
+            string full = prefix.Length == 0 ? name : prefix + "\\" + name;
+            yield return full;
+            foreach (var child in Walk(root, full, depth + 1)) yield return child;
+        }
     }
 
     // called by NotifSource for every toast it mirrors: silence that app's native banner going forward
