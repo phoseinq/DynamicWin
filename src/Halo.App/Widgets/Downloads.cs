@@ -244,47 +244,126 @@ internal static class Downloads
         catch { }
     }
 
-    // A real cancel for a browser download, without touching the browser. Deleting the partial file IS
-    // what cancelling means — discard the bytes — and it is what the browser's own cancel does. Verified
-    // live against Chrome mid-transfer: the delete is permitted (Chrome opens the file with
-    // FILE_SHARE_DELETE), the transfer stops, and the file does not come back. Six seconds of polling
-    // afterwards showed nothing recreated.
-    // Only ever touches a file we identified as a partial download, never a finished one.
-    public static void CancelPartial()
+    // Cancelling someone else's download only works where the downloader itself will honour it.
+    //
+    // Deleting the partial file looked like the answer and shipped as one. It is not. Chrome opens its
+    // .crdownload with FILE_SHARE_DELETE, so the delete is permitted and the directory entry disappears —
+    // but the handle stays valid and the transfer keeps running. Measured across the delete: 1694 KB/s
+    // before, a sustained ~350 KB/s for the next 15 seconds with no partial file on disk at all. That is
+    // worse than doing nothing: the download becomes invisible to the user while it still spends their
+    // bandwidth, and the bytes are thrown away at the end when the rename fails.
+    //
+    // So a browser instead gets its own downloads list pushed in front of the user — Ctrl+J, the one
+    // shortcut every Chromium browser and Firefox share — where Cancel is a click away and actually stops
+    // the bytes. Anything else is a plain downloader that we can stop for real by ending it, and only then
+    // is the leftover partial safe to remove, because nothing is holding it open any more.
+    public static void CancelDownload()
     {
-        var path = FilePath;
-        if (string.IsNullOrEmpty(path)) return;
-        if (!PartialFiles.IsPartial(path!, out _)) return; // never delete anything but a .crdownload/.part
-        try { System.IO.File.Delete(path!); } catch { }
-        // drop it from the pill immediately rather than waiting for the next scan to notice
-        Name = null; FilePath = null; OwnerPid = 0; Percent = 0; Downloaded = Total = 0; NoPct = false;
-        Interlocked.Increment(ref Version);
+        if (OwnerIsBrowser()) { OpenDownloadsList(); return; }
+        StopOwner();
+    }
+
+    // Named browsers, plus anything running a browser-sized fleet of processes: a Chromium fork we have
+    // never heard of still spawns a process per tab, and mistaking one for a plain downloader would kill
+    // the user's browser. Counted on this machine while testing: chrome 19, msedge 9, a downloader 1.
+    private static bool OwnerIsBrowser()
+    {
+        var exe = ExePath;
+        if (string.IsNullOrEmpty(exe)) return true; // unknown owner → never the destructive branch
+        try
+        {
+            string stem = System.IO.Path.GetFileNameWithoutExtension(exe!).ToLowerInvariant();
+            if (Array.IndexOf(Browsers, stem) >= 0) return true;
+            return Process.GetProcessesByName(stem).Length >= 4;
+        }
+        catch { return true; }
     }
 
     // Bring the app doing the downloading to the front, for when the user would rather deal with it there.
     public static void RevealOwner()
     {
-        int pid = OwnerPid;
-        if (pid == 0) { Reveal(); return; }
+        var h = OwnerWindow();
+        if (h == IntPtr.Zero) { Reveal(); return; }
+        Focus(h);
+    }
+
+    // Focus the browser and press Ctrl+J. Never types unless the window really came forward — a stray
+    // Ctrl+J into whatever else held the foreground would be someone else's keystroke.
+    public static void OpenDownloadsList()
+    {
+        var h = OwnerWindow();
+        if (h == IntPtr.Zero || !Focus(h)) return;
         try
         {
-            IntPtr found = IntPtr.Zero;
+            const byte VkJ = 0x4A; const uint KeyUp = 2;
+            Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, UIntPtr.Zero);
+            Win32.keybd_event(VkJ, 0, 0, UIntPtr.Zero);
+            Win32.keybd_event(VkJ, 0, KeyUp, UIntPtr.Zero);
+            Win32.keybd_event((byte)Win32.VK_CONTROL, 0, KeyUp, UIntPtr.Zero);
+        }
+        catch { }
+    }
+
+    // End the process writing the file, then discard what it left behind. This is the same bargain as
+    // StopProcess for a window-scanned manager: there is no per-download API, so stopping means ending the
+    // downloader. Guarded so a mis-resolved owner can never take out the shell or ourselves.
+    private static readonly string[] NeverKill =
+        { "explorer", "svchost", "system", "dllhost", "searchhost", "runtimebroker", "halo.app", "halo" };
+
+    private static void StopOwner()
+    {
+        int pid = OwnerPid; var path = FilePath;
+        if (pid != 0 && pid != Environment.ProcessId)
+        {
+            string stem = "";
+            try { stem = System.IO.Path.GetFileNameWithoutExtension(ExeOfPid(pid) ?? "").ToLowerInvariant(); } catch { }
+            if (Array.IndexOf(NeverKill, stem) < 0)
+                try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: true); p.WaitForExit(4000); }
+                catch { }
+        }
+        if (!string.IsNullOrEmpty(path) && PartialFiles.IsPartial(path!, out _))
+            try { System.IO.File.Delete(path!); } catch { }
+        Name = null; FilePath = null; OwnerPid = 0; Percent = 0; Downloaded = Total = 0; NoPct = false;
+        Interlocked.Increment(ref Version);
+    }
+
+    // The process holding the file often has no window of its own — Chrome writes downloads from a utility
+    // process — so fall back to any visible window belonging to the same executable.
+    private static IntPtr OwnerWindow()
+    {
+        int pid = OwnerPid;
+        string? exe = ExePath;
+        IntPtr byPid = IntPtr.Zero, byExe = IntPtr.Zero;
+        try
+        {
             Win32.EnumWindows((h, _) =>
             {
-                if (!Win32.IsWindowVisible(h)) return true;
+                if (!Win32.IsWindowVisible(h) || Win32.GetWindowTextLengthW(h) < 1) return true;
                 Win32.GetWindowThreadProcessId(h, out uint wp);
-                if (wp != (uint)pid || Win32.GetWindowTextLengthW(h) < 1) return true;
-                found = h; return false;
+                if (pid != 0 && wp == (uint)pid) { byPid = h; return false; }
+                if (byExe == IntPtr.Zero && exe != null
+                    && string.Equals(ExeOfPid((int)wp), exe, StringComparison.OrdinalIgnoreCase)) byExe = h;
+                return true;
             }, IntPtr.Zero);
-            if (found == IntPtr.Zero) return;
-            Win32.ShowWindow(found, Win32.SW_RESTORE);
+        }
+        catch { }
+        return byPid != IntPtr.Zero ? byPid : byExe;
+    }
+
+    // same foreground-lock dance as Reveal; returns whether the window actually ended up in front
+    private static bool Focus(IntPtr h)
+    {
+        try
+        {
+            Win32.ShowWindow(h, Win32.SW_RESTORE);
             uint fore = Win32.GetWindowThreadProcessId(Win32.GetForegroundWindow(), out _);
             uint self = Win32.GetCurrentThreadId();
             bool attached = fore != 0 && fore != self && Win32.AttachThreadInput(fore, self, true);
-            Win32.SetForegroundWindow(found);
+            Win32.SetForegroundWindow(h);
             if (attached) Win32.AttachThreadInput(fore, self, false);
+            return Win32.GetForegroundWindow() == h;
         }
-        catch { }
+        catch { return false; }
     }
 
     private const string StoreAumid = "Microsoft.WindowsStore_8wekyb3d8bbwe!App";

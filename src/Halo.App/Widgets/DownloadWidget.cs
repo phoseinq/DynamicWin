@@ -108,7 +108,7 @@ internal sealed class DownloadWidget : IWidget
         return chips;
     }
 
-    internal enum DlCtl { PauseResume, StoreCancel, Reveal, Stop, ShowInFolder, RevealOwner, CancelPartial }
+    internal enum DlCtl { PauseResume, StoreCancel, Reveal, Stop, ShowInFolder, RevealOwner, Cancel }
 
     // Which controls the panel offers, given where the download came from. Pure and internal so the row
     // itself can be asserted: browser downloads are the case that broke, because the painter grew a third
@@ -118,7 +118,7 @@ internal sealed class DownloadWidget : IWidget
         if (!named) return Array.Empty<DlCtl>();
         if (store && canControl) return new[] { DlCtl.PauseResume, DlCtl.StoreCancel };
         if (hasWindow) return new[] { DlCtl.Reveal, DlCtl.Stop };
-        if (hasPath) return new[] { DlCtl.ShowInFolder, DlCtl.RevealOwner, DlCtl.CancelPartial };
+        if (hasPath) return new[] { DlCtl.ShowInFolder, DlCtl.RevealOwner, DlCtl.Cancel };
         return Array.Empty<DlCtl>();
     }
 
@@ -131,7 +131,10 @@ internal sealed class DownloadWidget : IWidget
         DlCtl.Stop => new Chip(r, 0, false, true, Downloads.StopProcess),         // quitting it is the only stop
         DlCtl.ShowInFolder => new Chip(r, 0xE838, false, false, Downloads.ShowInFolder),
         DlCtl.RevealOwner => new Chip(r, 0xE7C4, false, false, Downloads.RevealOwner),
-        _ => new Chip(r, 0, false, true, Downloads.CancelPartial),                // deleting the partial file
+        // ✕, not the filled Stop square: for a browser this opens its downloads list, where the cancel the
+        // browser will honour is one click away. Drawing it as a Stop would promise the bytes had already
+        // stopped, which is exactly the lie the delete-the-partial version told.
+        _ => new Chip(r, 0xE711, true, false, Downloads.CancelDownload),
     };
 
     private static float _fracShown = -1f;

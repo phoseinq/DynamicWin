@@ -14,7 +14,7 @@ public class DownloadControlsTests
     public void BrowserDownload_offers_cancel()
     {
         var row = DownloadWidget.Row(named: true, store: false, canControl: false, hasWindow: false, hasPath: true);
-        Assert.Equal(new[] { Ctl.ShowInFolder, Ctl.RevealOwner, Ctl.CancelPartial }, row);
+        Assert.Equal(new[] { Ctl.ShowInFolder, Ctl.RevealOwner, Ctl.Cancel }, row);
     }
 
     [Fact]
