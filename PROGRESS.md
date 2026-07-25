@@ -14,6 +14,36 @@
 - Version lives in **two** places: `Halo.App.csproj` (Version/AssemblyVersion/FileVersion) and
   `installer/Halo.iss` (`#define AppVersion`). Both bumped.
 
+### v3.0.3 (same day): thinking ring + banner leak — both root-caused with measurements
+- **Ring never looked yellow — a DRAWING bug, not the state machine.** Logged the live store for 150s of
+  real work: `amber 137.5s / green 8.0s`, flipping correctly on every tool boundary. The ring was drawn
+  at `fade * 0.55f`; amber at 55% over the near-black pill composites to ~`(139,94,18)`, a dark
+  brown-gold only 86 RGB units from the coral icon it hugs (green sits at 164), so "thinking" read as a
+  shadow. Alpha → `0.9f` in all three agent widgets (A 150→231). Verified by rendering both states 4×
+  side by side. **The RGB-distance metric barely moved (86→88) — the fix is composited luminance, not
+  hue; don't use that metric to judge this again.**
+- **Banner leak measured: 56 of 243 mirrored toasts (23%) came from never-silenced AUMIDs** — WireGuard
+  tray balloons (`NotifyIconGeneratedAumid_*`) and 4 of 6 Telegram ids. Root cause: `SuppressApp` only
+  learns an app *after* Halo mirrors one of its toasts, so every app banners once, and an app that mints
+  a fresh AUMID per account/channel leaks once per id. Fix = keep the lazy learner AND pre-seed: `Enable()`
+  now walks every AUMID already under `Notifications\Settings` (recursively — classic apps register as
+  `{GUID}\...\app.exe`, which a flat `GetSubKeyNames()` misses). Verified 14/137 → **137/137**, and every
+  recorded original was absent beforehand so `Restore()` still reverses all of it. Backup of the
+  pre-seed state at `banner-orig.tsv.bak-preseed`.
+- Gotcha: `notif-debug.txt` has **times but no dates**, so entries from different days interleave and
+  look contemporaneous. Toast **ids** are the reliable ordering (WireGuard's stop at 66648 while
+  `notif-seen.txt` is 67441 — those 50 leaks predate the learner).
+
+### Open: downloader coverage (reported, root-caused, NOT built)
+`Downloads.Scan()` finds downloads by regex-matching a leading `NN%` in visible **window titles**.
+`Downloads.cs:118` deliberately skips browsers (`// "50% off" page, not a download`), so browser
+downloads are unsupported by design; Steam never puts a percentage in its title, so it is invisible too.
+Only Store (`StoreInstall` → `AppInstallManager`) and Xbox (`GameInstall` → staging folder) have real
+integrations. Feasible directions, both matching existing patterns: Chromium/Firefox keep downloads in
+SQLite (`History` → `downloads`, `places.sqlite`) and the project already P/Invokes the system
+`winsqlite3.dll` for `wpndatabase.db`; Steam exposes `BytesDownloaded`/`BytesToDownload` in
+`steamapps/appmanifest_*.acf` plus a `downloading/` staging dir, the same shape `GameInstall` reads.
+
 ### Root cause worth keeping: our duplication is what breaks contributors
 Reviewing the pt-BR PR showed **every missed string sat where the same text was written twice**, far
 apart, with nothing marking the pair. Fixed on our side (all four are now single-source):
