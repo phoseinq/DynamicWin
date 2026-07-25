@@ -316,16 +316,40 @@ internal sealed class DownloadWidget : IWidget
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
         if (paused) DrawPausedBadge(g, 9, (h - sz) / 2f, sz, fade);
 
-        // Tabular figures so the number doesn't jitter as digits change, and a lighter weight than the old
-        // Semibold — it sits on a filled bar and does not need to shout.
-        using var f = new Font("Segoe UI", 16f, FontStyle.Regular, GraphicsUnit.Pixel);
-        using var nb = new SolidBrush(Mul(White, fade));
+        // The number reads over a filled bar whose brightness changes as the fill sweeps past, so it needs
+        // weight to stay legible: Segoe UI Semibold, with the digits a size larger than the "%" so the
+        // figure leads and the unit trails quietly. A soft dark shadow underneath keeps it readable at both
+        // ends — over the pale fill on the left and the dim track on the right.
+        // ClearType's subpixel antialiasing paints orange/blue fringes along every glyph edge, which on a
+        // layered per-pixel-alpha surface reads as dirty colour rather than as smoothing. Grayscale AA is
+        // what the rest of the app uses for exactly this reason.
+        var oldHint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+        using var digitF = new Font("Segoe UI Semibold", 17f, GraphicsUnit.Pixel);
+        using var unitF = new Font("Segoe UI Semibold", 12f, GraphicsUnit.Pixel);
         using var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap };
-        string s = pct + "%";
-        var tsz = g.MeasureString(s, f, int.MaxValue, sf);
+        string num = pct.ToString();
+        var nsz = g.MeasureString(num, digitF, int.MaxValue, sf);
+        var usz = g.MeasureString("%", unitF, int.MaxValue, sf);
+        float total = nsz.Width + 1.5f + usz.Width;
+
         float left = iconRight + 10f, right = w - 12f;
         float cx = left + (right - left) * 0.42f;   // left of centre, per the design
-        g.DrawString(s, f, nb, cx - tsz.Width / 2f, (h - tsz.Height) / 2f, sf);
+        float tx0 = cx - total / 2f;
+        float numY = (h - nsz.Height) / 2f - Fx.CenterLift(digitF);
+        float unitY = numY + (nsz.Height - usz.Height) * 0.62f;   // sit the % on the digits' baseline
+
+        using (var shadow = new SolidBrush(Mul(Color.FromArgb(120, 0, 0, 0), fade)))
+        {
+            g.DrawString(num, digitF, shadow, tx0 + 0.7f, numY + 0.7f, sf);
+            g.DrawString("%", unitF, shadow, tx0 + nsz.Width + 1.5f + 0.7f, unitY + 0.7f, sf);
+        }
+        using (var nb = new SolidBrush(Mul(White, fade)))
+            g.DrawString(num, digitF, nb, tx0, numY, sf);
+        using (var ub = new SolidBrush(Mul(Color.FromArgb(210, 255, 255, 255), fade)))
+            g.DrawString("%", unitF, ub, tx0 + nsz.Width + 1.5f, unitY, sf);
+        g.TextRenderingHint = oldHint;
     }
 
     // A stopped/paused download keeps its app icon so you still know what it is; the state goes on top as a

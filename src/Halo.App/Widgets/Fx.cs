@@ -90,6 +90,10 @@ internal static class Fx
         g.SetClip(clip);
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+        // Do NOT fold the alpha into the colour channels here. It looks like it should be needed, because
+        // the texture is premultiplied — but GDI+ un-premultiplies before applying a ColorMatrix and
+        // re-premultiplies after, so scaling RGB by the alpha too applies it twice and crushes the tint to
+        // grey (measured: a green accent came out 11,11,11 with zero saturation).
         using var ia = new ImageAttributes();
         ia.SetColorMatrix(new ColorMatrix
         {

@@ -119,7 +119,15 @@ internal static class Program
                     }
                     break;
                 case "notify":
-                    status["state"] = "waiting_input";
+                    // Notification fires for two different things: a mid-turn permission prompt, which
+                    // genuinely wants the user (amber ring, "your move ;)"), and a plain "waiting for your
+                    // input" once the turn is already over. Unconditionally writing waiting_input meant the
+                    // ring sat amber after every finished turn instead of going white. The previous state
+                    // separates them without depending on the notification's wording: mid-turn we are still
+                    // working/compacting, whereas after stop we are already idle and must stay that way.
+                    // This also survives either firing order, since stop still writes idle afterwards.
+                    var prevState = status["state"]?.GetValue<string>();
+                    if (prevState is "working" or "compacting") status["state"] = "waiting_input";
                     status["message"] = Truncate(Field("message"), 160); // what Claude is asking
                     break;
                 case "stop":
