@@ -308,19 +308,41 @@ internal sealed class DownloadWidget : IWidget
         float fill = w * pct / 100f;
         var bar = paused ? Dim : accent;
         Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
-        // the halo behind the wavefront (Glow clips itself to the pill and needs premultiplied art)
-        if (fill > 0.5f) Fx.Glow(g, w, h, fade, fill, h / 2f, h * 1.5f, h * 2.0f, 46, bar);
+        // halo riding the wavefront. Kept dim on purpose: at 46 it washed the whole right half of the pill
+        // and the fill's own edge stopped reading as the edge.
+        if (fill > 0.5f) Fx.Glow(g, w, h, fade, fill, h / 2f, h * 1.15f, h * 1.5f, 22, bar);
 
-        DrawCollapsedIcon(g, Ico(), 9, (h - (h - 14f)) / 2f, h - 14f, fade); // last = fill stays behind it
+        float sz = h - 14f;
+        DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
+        if (paused) DrawPausedBadge(g, 9, (h - sz) / 2f, sz, fade);
 
-        // the number sits in the free space between the icon and the right wall, nudged right of centre
-        using var f = new Font("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
+        // Tabular figures so the number doesn't jitter as digits change, and a lighter weight than the old
+        // Semibold — it sits on a filled bar and does not need to shout.
+        using var f = new Font("Segoe UI", 16f, FontStyle.Regular, GraphicsUnit.Pixel);
         using var nb = new SolidBrush(Mul(White, fade));
+        using var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap };
         string s = pct + "%";
-        var tsz = g.MeasureString(s, f);
+        var tsz = g.MeasureString(s, f, int.MaxValue, sf);
         float left = iconRight + 10f, right = w - 12f;
-        float cx = left + (right - left) * 0.56f;   // 0.5 would be dead centre; lean right per the design
-        g.DrawString(s, f, nb, cx - tsz.Width / 2f, (h - tsz.Height) / 2f);
+        float cx = left + (right - left) * 0.42f;   // left of centre, per the design
+        g.DrawString(s, f, nb, cx - tsz.Width / 2f, (h - tsz.Height) / 2f, sf);
+    }
+
+    // A stopped/paused download keeps its app icon so you still know what it is; the state goes on top as a
+    // small badge, the way the strip badges sessions.
+    private static void DrawPausedBadge(Graphics g, float x, float y, float sz, float fade)
+    {
+        float d = sz * 0.62f, bx = x + sz - d + 2f, by = y + sz - d + 2f;
+        using (var shade = new SolidBrush(Mul(Color.FromArgb(190, 12, 12, 14), fade)))
+            g.FillEllipse(shade, bx, by, d, d);
+        using (var ring = new Pen(Mul(Color.FromArgb(210, 255, 255, 255), fade), 1.2f))
+            g.DrawEllipse(ring, bx, by, d, d);
+        // two bars = the universal pause mark; a square would read as "stop", which we cannot actually do
+        float bw = d * 0.16f, bh = d * 0.42f, gap = d * 0.14f;
+        float cx = bx + d / 2f, cy = by + d / 2f;
+        using var b = new SolidBrush(Mul(White, fade));
+        g.FillRectangle(b, cx - gap / 2f - bw, cy - bh / 2f, bw, bh);
+        g.FillRectangle(b, cx + gap / 2f, cy - bh / 2f, bw, bh);
     }
 
     // round "stop" button — quits the download manager (Downloads.StopProcess), the only reliable way to

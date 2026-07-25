@@ -163,15 +163,15 @@ internal sealed class ClaudeCodeWidget : IWidget
         var clip = g.Clip;
         g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h)); // text is born from behind the icon
         float zoneW = centred ? avail - 34f : avail + 16f; // centred moods lean toward the icon
-        // rect lifted 1.5px: em-box descender space makes centred latin text sit visually low
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -1.5f, zoneW, h), sf);
+        // lift comes from the font metrics (Fx.CenterLift), not a fixed pixel: px shrinks to fit
+        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0) // timer zone, right-aligned and dimmer so the verb stays the focus
             using (var eb = new SolidBrush(Mul(Dim, fade * e)))
             using (var esf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -1.5f, elW + 4, h), esf);
+                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -Fx.CenterLift(tf2), elW + 4, h), esf);
 
     }
 
@@ -523,7 +523,8 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     private static Color RingColor(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
-         : LimitHit ? Amber                 // out of juice — flag it in any session state, not just "working"
+         : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
+                                            // activity and left the pill looking busy while it was waiting on a reset.
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)

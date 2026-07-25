@@ -115,23 +115,73 @@ internal static class Fx
     {
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
-        float fill = w * frac;
         using var pp = PillPath(w, h, h / 2f);
         using (var tb = new SolidBrush(Alpha(Shade(accent, 1), fade * 0.34f * strength)))
             g.FillPath(tb, pp);
-        if (fill <= 0.5f) return;
-        var old = g.Clip;
-        g.SetClip(pp); // keep the fill inside the real silhouette, so it keeps the rounded bottom
-        using (var fb = new SolidBrush(Alpha(accent, fade * 0.52f * strength)))
-            g.FillRectangle(fb, 0, 0, fill, h);
-        // The bright lip only belongs to a foreground bar. On a faint background bar it sweeps behind the
-        // pill's own text and eats its contrast (verified in a render: "running…" went muddy where the lip
-        // crossed it), so it is reserved for bold uses.
-        if (fill > 6f && strength >= 0.5f)
-            using (var lb = new LinearGradientBrush(new RectangleF(fill - 26f, 0, 26f, h),
-                Color.FromArgb(0, accent), Alpha(accent, fade * 0.55f * strength), LinearGradientMode.Horizontal))
-                g.FillRectangle(lb, fill - 26f, 0, 26f, h);
-        g.Clip = old;
+        if (frac <= 0.001f) return;
+
+        // The fill used to be a rectangle drawn inside g.SetClip(pill). GDI+ clipping is region-based and
+        // regions have no antialiasing, so the pill's curved LEFT edge came out visibly stair-stepped while
+        // the straight right-hand wavefront looked fine. Filling the PATH itself keeps the silhouette
+        // antialiased; the horizontal cut is done by a gradient that goes opaque→transparent over ~1px, so
+        // the wavefront stays crisp without a clip.
+        float fill = w * frac;
+        var solid = Alpha(accent, fade * 0.52f * strength);
+        if (frac >= 0.999f) { using var fb = new SolidBrush(solid); g.FillPath(fb, pp); return; }
+
+        float cut = Math.Clamp(fill / w, 0.0015f, 0.9985f);
+        using (var lb = new LinearGradientBrush(new RectangleF(0, 0, w, h), solid, Color.FromArgb(0, accent),
+                   LinearGradientMode.Horizontal))
+        {
+            var blend = new ColorBlend(4)
+            {
+                Positions = new[] { 0f, cut - 0.0012f, cut, 1f },
+                Colors = new[] { solid, solid, Color.FromArgb(0, accent), Color.FromArgb(0, accent) },
+            };
+            lb.InterpolationColors = blend;
+            g.FillPath(lb, pp);
+        }
+
+        // a brighter lip just behind the wavefront so the edge reads as light rather than a cut; only for
+        // bold uses — on a faint background bar it is noise
+        if (fill > 8f && strength >= 0.5f)
+        {
+            float lipW = 26f, x0 = Math.Max(0f, fill - lipW);
+            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, (fill - x0) + 1f, h),
+                Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), LinearGradientMode.Horizontal);
+            var lipBlend = new ColorBlend(3)
+            {
+                Positions = new[] { 0f, 0.94f, 1f },
+                Colors = new[] { Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), Color.FromArgb(0, accent) },
+            };
+            lip.InterpolationColors = lipBlend;
+            var old = g.Clip;
+            g.SetClip(new RectangleF(x0, 0, fill - x0, h), CombineMode.Intersect); // straight edges only → no jaggies
+            g.FillPath(lip, pp);
+            g.Clip = old;
+        }
+    }
+
+    // GDI+ centres the EM BOX, which reserves descender space, so a latin string with no descenders
+    // ("outta juice", "back in 2h 5m") reads slightly low and the widgets compensated with a hardcoded
+    // -1.5px lift. That is only right at one font size: these pills scale their text down to fit, so at
+    // small sizes the fixed lift over-corrected and the text drifted upward. Derive the correction from
+    // the font's own metrics instead, so it scales — returns how far to LIFT the rect.
+    public static float CenterLift(Font f)
+    {
+        try
+        {
+            var ff = f.FontFamily;
+            var st = f.Style;
+            float em = ff.GetEmHeight(st);
+            if (em <= 0) return 0f;
+            float line = (ff.GetCellAscent(st) + ff.GetCellDescent(st)) / em; // line height, in ems
+            float baseline = ff.GetCellAscent(st) / em;                        // baseline from line top
+            const float capRatio = 0.70f;              // cap height of the Segoe UI faces used here
+            float visual = baseline - capRatio / 2f;   // where the glyphs actually look centred
+            return (visual - line / 2f) * f.Size;      // >0 means the text sits low by that much
+        }
+        catch { return 0f; }
     }
 
     public static Color Alpha(Color c, float a)
