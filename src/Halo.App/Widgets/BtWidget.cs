@@ -61,6 +61,9 @@ internal sealed class BtWidget : IWidget
     {
         int pct; int glyph;
         lock (_lock) { pct = _pct; glyph = _glyph; }
+
+        if (h < 16) return;
+
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         float target = pct / 100f;
