@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using Halo.Codex;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -139,11 +140,11 @@ internal sealed class CodexWidget : IWidget
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))
                 g.FillEllipse(db, x, y, sz, sz);
 
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        string verb = OutageText() ?? (LimitHit ? Loc.T("outta juice :(") : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
+            "compacting" when Compacting(st) => Loc.T("compacting…"),
+            "waiting_input" => Loc.T("your move ;)"),
             _ => IdleMood(st),
         });
         string el = LimitHit ? LimitReset() : Elapsed(st);
@@ -244,7 +245,7 @@ internal sealed class CodexWidget : IWidget
         if (st is null)
         {
             using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Codex session", body, nb, pad, y + 4);
+            g.DrawString(Loc.T("No active Codex session"), body, nb, pad, y + 4);
             y += 40;
         }
         else if (st.PresentFields.HasFlag(CodexSnapshotFields.ContextUsed | CodexSnapshotFields.ContextMax) && st.ContextMax > 0)
@@ -252,7 +253,7 @@ internal sealed class CodexWidget : IWidget
             double ctx = ContextFrac(st);
             long maxK = st.ContextMax / 1000, usedK = Math.Min(st.ContextUsed / 1000, maxK);
             string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+            DrawBar(g, pad, y, barW, Loc.T("Context"), $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
             y += 40;
         }
 
@@ -261,7 +262,7 @@ internal sealed class CodexWidget : IWidget
             bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
                 && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
             if (reset is null) return Pct(f);
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.Value.ToLocalTime():ddd HH:mm}"
+            return hov ? $"{f * 100:0.#}%  ·  " + Loc.T("resets {0}", reset.Value.ToLocalTime().ToString("ddd HH:mm"))
                        : $"{Pct(f)}  ·  {ResetIn(reset.Value)}";
         }
         if (CodexLimits.Current?.Primary is { } primary)
@@ -280,9 +281,9 @@ internal sealed class CodexWidget : IWidget
 
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
-        string age = CodexLimits.LastSuccess == DateTimeOffset.MinValue ? "usage never fetched"
-            : $"updated {AgeText(DateTime.UtcNow - CodexLimits.LastSuccess)}";
-        string rtxt = $"{age}  ·  ⟳ refresh";
+        string age = CodexLimits.LastSuccess == DateTimeOffset.MinValue ? Loc.T("usage never fetched")
+            : Loc.T("updated {0}", AgeText(DateTime.UtcNow - CodexLimits.LastSuccess));
+        string rtxt = $"{age}  ·  ⟳ " + Loc.T("refresh");
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
@@ -291,12 +292,12 @@ internal sealed class CodexWidget : IWidget
         DrawCancel(g, w, h, a, body);
     }
 
-    private static string LimitLabel(CodexLimit limit) => limit.WindowMinutes switch
+    private static string LimitLabel(CodexLimit limit) => Loc.T(limit.WindowMinutes switch
     {
         300 => "5-hour limit",
         10_080 => "Weekly limit",
         _ => "Plan limit",
-    };
+    });
 
     private void DrawCancel(Graphics g, int w, int h, float a, Font font)
     {
@@ -422,8 +423,8 @@ internal sealed class CodexWidget : IWidget
             ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
             ("google.com  ·  chatgpt.com", Dim),
         };
-        if (vA == CodexNetMon.Lost && vN >= 0) lines.Add(("OpenAI's side :(", Amber));
-        else if (vN == CodexNetMon.Lost) lines.Add(("your internet :(", Red));
+        if (vA == CodexNetMon.Lost && vN >= 0) lines.Add((Loc.T("OpenAI's side :("), Amber));
+        else if (vN == CodexNetMon.Lost) lines.Add((Loc.T("your internet :("), Red));
 
         using var f2 = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
         float bw2 = 0;
@@ -450,10 +451,10 @@ internal sealed class CodexWidget : IWidget
     private static RectangleF RefreshRect(int w, int h) => new(w - 26 - 220, h - 26, 220, 20);
 
     private static string AgeText(TimeSpan d) =>
-        d.TotalMinutes < 1 ? "just now"
-        : d.TotalHours < 1 ? $"{(int)d.TotalMinutes}m ago"
-        : d.TotalDays < 1 ? $"{(int)d.TotalHours}h ago"
-        : $"{(int)d.TotalDays}d ago";
+        d.TotalMinutes < 1 ? Loc.T("just now")
+        : d.TotalHours < 1 ? Loc.T("{0}m ago", (int)d.TotalMinutes)
+        : d.TotalDays < 1 ? Loc.T("{0}h ago", (int)d.TotalHours)
+        : Loc.T("{0}d ago", (int)d.TotalDays);
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
         => new[]
@@ -536,28 +537,28 @@ internal sealed class CodexWidget : IWidget
     {
         if (r == default) return "";
         var d = r - DateTimeOffset.UtcNow;
-        if (d.TotalSeconds <= 0) return "now";
+        if (d.TotalSeconds <= 0) return Loc.T("now");
         if (d.TotalDays >= 1) return $"{(int)d.TotalDays}d {d.Hours}h";
         if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes}m";
         return $"{d.Minutes}m";
     }
 
     internal static string DisplayText(string state, string? tool, bool apiDown, bool netDown) =>
-        netDown ? "net error :(" : apiDown ? "api error :(" : state switch
+        netDown ? Loc.T("net error :(") : apiDown ? Loc.T("api error :(") : state switch
         {
             "working" => ToolVerb(tool),
-            "compacting" => "compacting…",
-            "waiting_input" => "your move ;)",
-            _ => "let's work :)",
+            "compacting" => Loc.T("compacting…"),
+            "waiting_input" => Loc.T("your move ;)"),
+            _ => Loc.T("let's work :)"),
         };
 
     private static string Activity(CodexSnapshot? st)
     {
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        string verb = OutageText() ?? (LimitHit ? Loc.T("outta juice :(") : st?.State switch
         {
             "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
+            "compacting" when Compacting(st) => Loc.T("compacting…"),
+            "waiting_input" => Loc.T("your move ;)"),
             _ => IdleMood(st),
         });
         if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
@@ -570,23 +571,26 @@ internal sealed class CodexWidget : IWidget
     private static string LimitReset()
     {
         var r = ResetIn(CodexLimits.FiveHour >= 0.99f ? CodexLimits.FiveHourReset : CodexLimits.WeekReset);
-        return r.Length > 0 ? "back in " + r : "";
+        return r.Length > 0 ? Loc.T("back in {0}", r) : "";
     }
 
     private static string IdleMood(CodexSnapshot? st) =>
-        CodexNetMon.NetDown ? "offline :("
+        Loc.T(CodexNetMon.NetDown ? "offline :("
         : CodexNetMon.ApiDown ? "api down :("
         : JustCompacted(st) ? "compacted :)"
         : CodexLimits.FiveHour >= 0.95f ? "outta juice XD"
-        : "let's work :)";
+        : "let's work :)");
 
     private static bool JustCompacted(CodexSnapshot? st) =>
         st?.CompactedAt is { } t && DateTimeOffset.UtcNow - t < TimeSpan.FromSeconds(20);
 
     private static string? OutageText() =>
-        CodexNetMon.NetDown ? "net error :(" : CodexNetMon.ApiDown ? "api error :(" : null;
+        CodexNetMon.NetDown ? Loc.T("net error :(") : CodexNetMon.ApiDown ? Loc.T("api error :(") : null;
 
-    private static string ToolVerb(string? tool) => tool switch
+    // The final branch builds the verb from the tool name at runtime, so it can never match
+    // a table key and Loc.T returns it unchanged — an unknown tool keeps its own name in
+    // every language, which is what we want. Only the literal branches are translated.
+    private static string ToolVerb(string? tool) => Loc.T(tool switch
     {
         "exec" or "shell" or "local_shell" or "exec_command" or "container" => "running…",
         "apply_patch" or "edit" or "write_file" => "patching…",
@@ -600,7 +604,7 @@ internal sealed class CodexWidget : IWidget
         "request_user_input" or "ask" => "asking you :)",
         null or "" => "hmm…",
         _ => tool!.ToLowerInvariant() + "…",
-    };
+    });
 
     private static string Elapsed(CodexSnapshot? st)
     {

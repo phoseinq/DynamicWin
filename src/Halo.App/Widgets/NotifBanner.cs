@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using Halo.Notifications;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -40,7 +41,7 @@ internal static class NotifBanner
         using var b = new SolidBrush(Mul(White, a * (hov ? 1f : 0.9f)));
         using var sf = new StringFormat(StringFormat.GenericTypographic) { LineAlignment = StringAlignment.Center };
         string glyph = n.Copied ? "" : "";
-        string label = n.Copied ? "Copied" : n.Code;
+        string label = n.Copied ? Loc.T("Copied") : n.Code;
         g.DrawString(glyph, gf, b, new RectangleF(r.X + 9, r.Y, 16, r.Height), sf);
         g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y, r.Width - 26, r.Height), sf);
     }
@@ -199,7 +200,7 @@ internal static class NotifBanner
     }
 
     private static string RelTime(DateTime t)
-        => (DateTime.Now - t) < TimeSpan.FromMinutes(1) ? "now" : t.ToString("HH:mm");
+        => (DateTime.Now - t) < TimeSpan.FromMinutes(1) ? Loc.T("now") : t.ToString("HH:mm");
 
     private static bool IsRtl(string s)
     {

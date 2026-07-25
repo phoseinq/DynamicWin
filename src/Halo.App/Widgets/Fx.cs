@@ -10,9 +10,11 @@ internal static class Fx
 {
     public static readonly Color White = Color.FromArgb(238, 255, 255, 255);
 
-    public const string NetLabel = "net";
+    // "net" and "loss" are ordinary words and get translated; "api" is a product term and
+    // deliberately stays as it is in every language, so it remains a const.
+    public static string NetLabel => Halo.Text.Loc.T("net");
     public const string ApiLabel = "api";
-    public const string LossLabel = "loss";
+    public static string LossLabel => Halo.Text.Loc.T("loss");
 
     public static string CleanText(string? s)
     {

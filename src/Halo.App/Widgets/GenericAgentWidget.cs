@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using Halo.ClaudeCode;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -81,7 +82,7 @@ internal sealed class GenericAgentWidget : IWidget
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         DrawIconCircle(g, x, y, sz, fade);
 
-        string text = st.State == "working" ? Verb(st) + Elapsed(st) : st.Name ?? "agent";
+        string text = st.State == "working" ? Verb(st) + Elapsed(st) : st.Name ?? Loc.T("agent");
         using var f = new Font("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
         using var sf = new StringFormat(StringFormat.GenericTypographic)
@@ -107,7 +108,8 @@ internal sealed class GenericAgentWidget : IWidget
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var dimB = new SolidBrush(Mul(Dim, fade));
         using var whiteB = new SolidBrush(Mul(White, fade));
-        g.DrawString(st.Name ?? "Agent", titleF, whiteB, x + 56, 28);
+        // Capitalised on purpose: this is the panel heading, unlike the lowercase pill text.
+        g.DrawString(st.Name ?? Loc.T("Agent"), titleF, whiteB, x + 56, 28);
         g.DrawString(Verb(st) + Elapsed(st), bodyF, dimB, x + 56, 60);
         if (!string.IsNullOrEmpty(st.Cwd))
             g.DrawString(st.Cwd, bodyF, dimB, x, 108);
@@ -137,10 +139,10 @@ internal sealed class GenericAgentWidget : IWidget
 
     private static string Verb(CcStatus st) => st.State switch
     {
-        "working" => string.IsNullOrEmpty(st.CurrentTool) ? "working…" : st.CurrentTool!,
-        "waiting_input" or "waiting" => "your move ;)",
-        "error" => "error",
-        _ => "idle",
+        "working" => string.IsNullOrEmpty(st.CurrentTool) ? Loc.T("working…") : st.CurrentTool!,
+        "waiting_input" or "waiting" => Loc.T("your move ;)"),
+        "error" => Loc.T("error"),
+        _ => Loc.T("idle"),
     };
 
     private static string Elapsed(CcStatus st)

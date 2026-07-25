@@ -7,6 +7,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -205,14 +206,14 @@ internal sealed class FileTray : IWidget
             using (var pp = Fx.PillPath(w, h, h / 2f))
                 g.FillPath(pb, pp);
             DrawTile(g, ix, iy, sz, fade, null);
-            DrawLabel(g, "Drop to add", ix + sz + 12, w, h, fade);
+            DrawLabel(g, Loc.T("Drop to add"), ix + sz + 12, w, h, fade);
             return;
         }
 
         if (items.Length <= 1)
         {
             DrawTile(g, ix, iy, sz, fade, items.Length == 1 ? Halo.Notifications.ShellIcon.ForPath(items[0]) : null);
-            DrawLabel(g, items.Length == 1 ? Path.GetFileName(items[0]) : "Empty", ix + sz + 12, w, h, fade);
+            DrawLabel(g, items.Length == 1 ? Path.GetFileName(items[0]) : Loc.T("Empty"), ix + sz + 12, w, h, fade);
             return;
         }
 
@@ -260,7 +261,7 @@ internal sealed class FileTray : IWidget
         using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            g.DrawString("File Tray", title, tb, Pad + 20, 14);
+            g.DrawString(Loc.T("File Tray"), title, tb, Pad + 20, 14);
 
         int sel = SelectedCount;
         if (sel > 0) DrawRemoveChip(g, w, fade, sel);
@@ -340,7 +341,7 @@ internal sealed class FileTray : IWidget
         using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(hov ? White : Color.FromArgb(255, 200, 195), fade));
         using var sf = new StringFormat { LineAlignment = StringAlignment.Center };
-        g.DrawString($"Remove {n}", f, b, new RectangleF(r.X + 34, r.Y, r.Width - 40, r.Height), sf);
+        g.DrawString(Loc.T("Remove {0}", n), f, b, new RectangleF(r.X + 34, r.Y, r.Width - 40, r.Height), sf);
     }
 
     private void DrawDropZone(Graphics g, int w, int h, float fade)
@@ -369,10 +370,10 @@ internal sealed class FileTray : IWidget
         using var f2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
         using var sf = new StringFormat { Alignment = StringAlignment.Center };
         using (var b1 = new SolidBrush(Mul(White, fade)))
-            g.DrawString(active ? "Release to add" : "Drop files here", f1, b1, new RectangleF(box.X, cy + rad + 6, box.Width, 24), sf);
+            g.DrawString(active ? Loc.T("Release to add") : Loc.T("Drop files here"), f1, b1, new RectangleF(box.X, cy + rad + 6, box.Width, 24), sf);
         if (!active)
             using (var b2 = new SolidBrush(Mul(Dim, fade)))
-                g.DrawString("they'll stay in the tray", f2, b2, new RectangleF(box.X, cy + rad + 30, box.Width, 20), sf);
+                g.DrawString(Loc.T("they'll stay in the tray"), f2, b2, new RectangleF(box.X, cy + rad + 30, box.Width, 20), sf);
     }
 
     private void DrawCell(Graphics g, RectangleF cell, string path, float fade, bool selected, bool lifted)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using Halo.Text;
 
 namespace Halo.Widgets;
 
@@ -112,8 +113,8 @@ internal sealed class DownloadWidget : IWidget
         using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
             DrawEllipsized(g, name, titleF, tb, tx, 34, tw, 30);
-        string state = Downloads.Waiting ? "Waiting…" : installing ? "Installing…"
-            : paused ? "Paused" : "Downloading";
+        string state = Downloads.Waiting ? Loc.T("Waiting…") : installing ? Loc.T("Installing…")
+            : paused ? Loc.T("Paused") : Loc.T("Downloading");
         string sub = installing || Downloads.NoPct ? state : $"{state}   ·   {pct}%";
         using (var lb = new SolidBrush(Mul(Dim, fade)))
             DrawEllipsized(g, sub, bodyF, lb, tx, 66, tw, 22);

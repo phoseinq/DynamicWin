@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Halo.Text;
 using Windows.ApplicationModel.Store.Preview.InstallControl;
 
 namespace Halo.Widgets;
@@ -19,7 +20,7 @@ internal static class StoreInstall
 
     public static Phase Poll(out string name, out int pct, out long done, out long total)
     {
-        name = "Store app"; pct = 0; done = 0; total = 0;
+        name = Loc.T("Store app"); pct = 0; done = 0; total = 0;
         try
         {
             _mgr ??= new AppInstallManager();
@@ -85,7 +86,7 @@ internal static class StoreInstall
 
     private static string FriendlyName(string pfn)
     {
-        if (string.IsNullOrEmpty(pfn)) return "Store app";
+        if (string.IsNullOrEmpty(pfn)) return Loc.T("Store app");
         int us = pfn.IndexOf('_');
         string s = us > 0 ? pfn[..us] : pfn;
         int dot = s.LastIndexOf('.');
