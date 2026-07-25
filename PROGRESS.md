@@ -3,7 +3,9 @@
 ## 2026-07-25: v3.0.2 RELEASED + first outside contributions reviewed (2 PRs open on the fork)
 
 ### Shipped
-- **v3.0.2 = Latest** on phoseinq/DynamicWin, target branch `V3`, tag on `a3c2f2f`. **Carries its own
+- **v3.0.2 = Latest** on phoseinq/DynamicWin, target branch `V3`, tag on `c1c3070`. The first cut of
+  this release (tag on `a3c2f2f`) was deleted with `gh release delete --cleanup-tag` and re-made after
+  the BtWidget crash below was found, so the published assets contain that fix. **Carries its own
   assets** (`DynamicWinSetup.exe` 29.8MB + `DynamicWinPortable.zip` 41.5MB, both signed `CN=phoseinq`,
   `3.0.2.0` stamped inside) — v3.0.1 had none and pointed at v3.0. Installed live + relaunched;
   the machine had silently been running a **1.0.0.0** build until now.
@@ -30,7 +32,8 @@ Found in `%LOCALAPPDATA%\Halo\frame-errors.txt` (16:03:22, the same second `bt-d
 throws `ArgumentException: Parameter is not valid`. The tuck state is 96×**12**, so any BT connect
 while tucked threw every frame; `OnTick` swallowed it → frozen pill, no visible error. Reproduced
 across h = 40…2 (ok until 16, throws from 14 down), fixed with an `if (h < 16) return;` guard, re-ran
-the same sweep — all ok. **This bug is in the released 3.0.2**; fix is committed locally only.
+the same sweep — all ok. Shipped: `9d88b1b` on master, `c1c3070` on V3, and the re-cut v3.0.2 assets.
+Installed live and relaunched with `frame-errors.txt` deleted first — it stayed absent.
 
 ### Two stale tests were failing on master (79/81) — FIXED
 `AgentNoticeTests` still asserted that `waiting_input` makes a widget primary; that was deliberately
