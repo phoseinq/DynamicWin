@@ -200,7 +200,7 @@ internal static class NotifBanner
     }
 
     private static string RelTime(DateTime t)
-        => (DateTime.Now - t) < TimeSpan.FromMinutes(1) ? "now" : t.ToString("HH:mm");
+        => (DateTime.Now - t) < TimeSpan.FromMinutes(1) ? Loc.T("now") : t.ToString("HH:mm");
 
     private static bool IsRtl(string s)
     {
