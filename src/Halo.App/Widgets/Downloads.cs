@@ -296,7 +296,9 @@ internal static class Downloads
     // is the leftover partial safe to remove, because nothing is holding it open any more.
     public static void CancelDownload()
     {
-        if (OwnerIsBrowser()) { OpenDownloadsList(); return; }
+        bool browser = OwnerIsBrowser();
+        CancelLog($"cancel clicked: name='{Name}' file='{FilePath}' browser={browser}");
+        if (browser) { OpenDownloadsList(); return; }
         StopOwner();
     }
 
@@ -326,17 +328,45 @@ internal static class Downloads
 
     // Focus the browser and press Ctrl+J. Never types unless the window really came forward — a stray
     // Ctrl+J into whatever else held the foreground would be someone else's keystroke.
+    //
+    // Off the click thread on purpose. SetForegroundWindow returns before the foreground has actually
+    // changed, so checking GetForegroundWindow on the next line said "not us" and the keystroke was never
+    // sent at all — the button looked dead. Confirming it means waiting a beat, and waiting a beat on the
+    // frame timer would stall the pill.
     public static void OpenDownloadsList()
     {
         var h = OwnerWindow();
-        if (h == IntPtr.Zero || !Focus(h)) return;
+        CancelLog($"openList owner={OwnerPid} exe='{ExePath}' hwnd={h}");
+        if (h == IntPtr.Zero) { Reveal(); return; }
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                Focus(h);
+                for (int i = 0; i < 24 && Win32.GetForegroundWindow() != h; i++) Thread.Sleep(25);
+                bool got = Win32.GetForegroundWindow() == h;
+                CancelLog($"  focused={got} fore={Win32.GetForegroundWindow()}");
+                if (!got) return;
+                const byte VkJ = 0x4A; const uint KeyUp = 2;
+                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, UIntPtr.Zero);
+                Win32.keybd_event(VkJ, 0, 0, UIntPtr.Zero);
+                Win32.keybd_event(VkJ, 0, KeyUp, UIntPtr.Zero);
+                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, KeyUp, UIntPtr.Zero);
+                CancelLog("  sent ctrl+J");
+            }
+            catch (Exception ex) { CancelLog("  threw " + ex.Message); }
+        });
+    }
+
+    // temp diag while the cancel path is being pinned down — one line per click, so a dead button can be
+    // told apart from a button that fired and was ignored
+    internal static void CancelLog(string s)
+    {
         try
         {
-            const byte VkJ = 0x4A; const uint KeyUp = 2;
-            Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, UIntPtr.Zero);
-            Win32.keybd_event(VkJ, 0, 0, UIntPtr.Zero);
-            Win32.keybd_event(VkJ, 0, KeyUp, UIntPtr.Zero);
-            Win32.keybd_event((byte)Win32.VK_CONTROL, 0, KeyUp, UIntPtr.Zero);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "cancel-debug.txt"),
+                $"{DateTime.Now:HH:mm:ss.fff} {s}\r\n");
         }
         catch { }
     }
