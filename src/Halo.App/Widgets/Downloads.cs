@@ -191,9 +191,9 @@ internal static class Downloads
                     bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
                     int pPct = noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99);
                     if (Name != label || Downloaded != part.Bytes || Total != (noPct ? 0 : pTotal)
-                        || Percent != pPct || NoPct != noPct || IsStore)
+                        || Percent != pPct || NoPct != noPct || IsStore || Paused != part.Stalled)
                     {
-                        Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = false;
+                        Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = part.Stalled;
                         Downloaded = part.Bytes; Total = noPct ? 0 : pTotal; IsStore = false; CanControl = false;
                         NoPct = noPct; IconFile = null; Hwnd = IntPtr.Zero;
                         FilePath = part.Path; OwnerPid = part.OwnerPid;
@@ -237,9 +237,24 @@ internal static class Downloads
         catch { }
     }
 
-    // Bring the app doing the downloading to the front so the user can cancel it there. No cross-app API
-    // stops another program's download, and for a browser the only "stop" we could implement ourselves
-    // would be killing the browser or deleting the half-written file — both worse than the problem.
+    // A real cancel for a browser download, without touching the browser. Deleting the partial file IS
+    // what cancelling means — discard the bytes — and it is what the browser's own cancel does. Verified
+    // live against Chrome mid-transfer: the delete is permitted (Chrome opens the file with
+    // FILE_SHARE_DELETE), the transfer stops, and the file does not come back. Six seconds of polling
+    // afterwards showed nothing recreated.
+    // Only ever touches a file we identified as a partial download, never a finished one.
+    public static void CancelPartial()
+    {
+        var path = FilePath;
+        if (string.IsNullOrEmpty(path)) return;
+        if (!PartialFiles.IsPartial(path!, out _)) return; // never delete anything but a .crdownload/.part
+        try { System.IO.File.Delete(path!); } catch { }
+        // drop it from the pill immediately rather than waiting for the next scan to notice
+        Name = null; FilePath = null; OwnerPid = 0; Percent = 0; Downloaded = Total = 0; NoPct = false;
+        Interlocked.Increment(ref Version);
+    }
+
+    // Bring the app doing the downloading to the front, for when the user would rather deal with it there.
     public static void RevealOwner()
     {
         int pid = OwnerPid;

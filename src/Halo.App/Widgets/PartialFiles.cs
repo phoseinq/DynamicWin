@@ -24,7 +24,9 @@ internal static class PartialFiles
     private const long MinSize = 128 * 1024;          // below this it's a scratch file, not a download
     private const int StaleSeconds = 20;              // untouched for longer → finished or abandoned
 
-    internal readonly record struct Sample(string Path, string Name, long Bytes, long GrowthPerSec, int OwnerPid);
+    internal readonly record struct Sample(string Path, string Name, long Bytes, long GrowthPerSec, int OwnerPid, bool Stalled);
+
+    private const int StallSeconds = 4; // no growth for this long → the transfer is sitting still
 
     // path → (bytes, when) from the previous scan, so growth is measured rather than assumed
     private static readonly Dictionary<string, (long bytes, DateTime at)> _seen =
@@ -97,8 +99,12 @@ internal static class PartialFiles
                     }
                     else _seen[path] = (len, now);
 
+                    // "not growing right now" is not "abandoned": the file is still fresh enough to be a
+                    // live download (StaleSeconds above), it is just sitting still — which is exactly the
+                    // paused state the pill should mark on the icon instead of pretending it is running.
+                    bool stalled = (now - touched).TotalSeconds >= StallSeconds;
                     if (best is null || rate > best.Value.GrowthPerSec)
-                        best = new Sample(path, clean, len, rate, 0);
+                        best = new Sample(path, clean, len, rate, 0, stalled);
                 }
             }
             // forget files that vanished (renamed on completion) so the dictionary can't grow forever
