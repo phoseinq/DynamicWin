@@ -553,6 +553,9 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string? OutageText() =>
         NetMon.NetDown ? Loc.T("net error :(") : NetMon.ApiDown ? Loc.T("api error :(") : null;
 
+    // The final branch builds the verb from the tool name at runtime, so it can never match
+    // a table key and Loc.T returns it unchanged — an unknown tool keeps its own name in
+    // every language, which is what we want. Only the literal branches are translated.
     private static string ToolVerb(string? tool) => Loc.T(tool switch
     {
         "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",

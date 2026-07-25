@@ -108,7 +108,8 @@ internal sealed class GenericAgentWidget : IWidget
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var dimB = new SolidBrush(Mul(Dim, fade));
         using var whiteB = new SolidBrush(Mul(White, fade));
-        g.DrawString(st.Name ?? Loc.T("agent"), titleF, whiteB, x + 56, 28);
+        // Capitalised on purpose: this is the panel heading, unlike the lowercase pill text.
+        g.DrawString(st.Name ?? Loc.T("Agent"), titleF, whiteB, x + 56, 28);
         g.DrawString(Verb(st) + Elapsed(st), bodyF, dimB, x + 56, 60);
         if (!string.IsNullOrEmpty(st.Cwd))
             g.DrawString(st.Cwd, bodyF, dimB, x, 108);

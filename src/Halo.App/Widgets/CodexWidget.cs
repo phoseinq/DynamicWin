@@ -262,7 +262,7 @@ internal sealed class CodexWidget : IWidget
             bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
                 && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
             if (reset is null) return Pct(f);
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.Value.ToLocalTime():ddd HH:mm}"
+            return hov ? $"{f * 100:0.#}%  ·  " + Loc.T("resets {0}", reset.Value.ToLocalTime().ToString("ddd HH:mm"))
                        : $"{Pct(f)}  ·  {ResetIn(reset.Value)}";
         }
         if (CodexLimits.Current?.Primary is { } primary)
@@ -587,6 +587,9 @@ internal sealed class CodexWidget : IWidget
     private static string? OutageText() =>
         CodexNetMon.NetDown ? Loc.T("net error :(") : CodexNetMon.ApiDown ? Loc.T("api error :(") : null;
 
+    // The final branch builds the verb from the tool name at runtime, so it can never match
+    // a table key and Loc.T returns it unchanged — an unknown tool keeps its own name in
+    // every language, which is what we want. Only the literal branches are translated.
     private static string ToolVerb(string? tool) => Loc.T(tool switch
     {
         "exec" or "shell" or "local_shell" or "exec_command" or "container" => "running…",

@@ -16,6 +16,9 @@ internal static class Loc
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["pt-BR"] = PtBr.Table,
+            // Deliberate: neutral "pt" maps to the Brazilian table, so pt-PT falls back to it
+            // through the neutral lookup below. Brazilian wording in Portugal beats English in
+            // Portugal; a separate pt-PT table can be added later without touching this.
             ["pt"] = PtBr.Table,
         };
 

@@ -36,7 +36,9 @@ internal static class PtBr
         ["compacted :)"] = "compactado :)",
         ["outta juice :("] = "sem gás :(",
         ["outta juice XD"] = "sem gás XD",
+        // Two spellings on purpose: lowercase is the pill text, capitalised is the panel heading.
         ["agent"] = "agente",
+        ["Agent"] = "Agente",
 
         // ── connectivity ──────────────────────────────────────────────────
         ["offline :("] = "offline :(",
@@ -60,6 +62,20 @@ internal static class PtBr
         ["usage never fetched"] = "uso nunca consultado",
         ["updated {0}"] = "atualizado {0}",
         ["refresh"] = "atualizar",
+
+        // ── limit notices ─────────────────────────────────────────────────
+        // The window name is interpolated into the sentence, so it is translated separately.
+        ["{0} usage {1}%"] = "Uso do {0}: {1}%",
+        ["You've used {0}% of your {1} limit."] = "Você usou {0}% do seu limite {1}.",
+        ["5-hour"] = "de 5 horas",
+        ["weekly"] = "semanal",
+        ["primary"] = "primário",
+
+        // ── downloads ─────────────────────────────────────────────────────
+        ["Waiting…"] = "Aguardando…",
+        ["Installing…"] = "Instalando…",
+        ["Paused"] = "Pausado",
+        ["Downloading"] = "Baixando",
 
         // ── time ──────────────────────────────────────────────────────────
         ["just now"] = "agora mesmo",
@@ -89,7 +105,10 @@ internal static class PtBr
 
         // ── system notices ────────────────────────────────────────────────
         ["Battery low — {0}%"] = "Bateria fraca — {0}%",
-        ["High memory usage — {0}%"] = "Uso alto de memória — {0}%",
+        // The resource name is interpolated, so it is translated separately below.
+        // "CPU" is deliberately absent: it is the same word in Portuguese and falls through.
+        ["High {0} usage — {1}%"] = "Uso alto de {0} — {1}%",
+        ["memory"] = "memória",
         ["Memory is running low."] = "A memória está acabando.",
         ["{0} is using the most."] = "{0} é quem mais está consumindo.",
         ["Tap to turn on Power Saver."] = "Toque para ligar a Economia de Energia.",
@@ -101,6 +120,12 @@ internal static class PtBr
         ["Battery"] = "Bateria",
         ["Network"] = "Rede",
         ["Screenshot"] = "Captura de tela",
+        ["Clipboard"] = "Área de transferência",
+        ["Clock"] = "Relógio",
+        ["Keyboard"] = "Teclado",
+
+        // ── notification banner ───────────────────────────────────────────
+        ["Copied"] = "Copiado",
 
         // ── bluetooth ─────────────────────────────────────────────────────
         ["Bluetooth device"] = "Dispositivo Bluetooth",
