@@ -361,8 +361,8 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         // colour-coded legend/label: "net 15 · api 210 ms" (a lost side shows ":(")
         int lastN = LastSample(net), lastA = LastSample(api);
-        string tn = "net " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
-        string ta = "api " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
+        string tn = Fx.NetLabel + " " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
+        string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
         using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
         {
             float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
@@ -412,8 +412,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         string F(int v) => v == NetMon.Lost ? ":(" : v == NetMon.Empty ? "–" : $"{v} ms";
         var lines = new List<(string t, Color c)>
         {
-            ($"net {F(vN)}   api {F(vA)}", White),
-            ($"loss  net {lostN}/{cntN}  ·  api {lostA}/{cntA}", Dim),
+            ($"{Fx.NetLabel} {F(vN)}   {Fx.ApiLabel} {F(vA)}", White),
+            ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
             ("google.com  ·  api.anthropic.com", Dim),
         };
         if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));

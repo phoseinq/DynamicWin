@@ -85,6 +85,10 @@ internal sealed class GenericAgentWidget : IWidget
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         DrawIconCircle(g, x, y, sz, fade);
 
+        // lowercase here on purpose: the collapsed pill speaks in lowercase activity phrases
+        // ("working…", "your move ;)"), so a nameless agent reads as "agent". The expanded panel
+        // below capitalises it because there it is a heading, not a status line. Not a typo —
+        // a pull request once "fixed" the mismatch and changed the panel heading by accident.
         string text = st.State == "working" ? Verb(st) + Elapsed(st) : st.Name ?? "agent";
         using var f = new Font("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));

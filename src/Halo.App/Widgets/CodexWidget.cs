@@ -383,8 +383,8 @@ internal sealed class CodexWidget : IWidget
 
         // colour-coded legend/label: "net 15 · api 210 ms" (a lost side shows ":(")
         int lastN = LastSample(net), lastA = LastSample(api);
-        string tn = "net " + (lastN == CodexNetMon.Empty ? "…" : lastN == CodexNetMon.Lost ? ":(" : lastN.ToString());
-        string ta = "api " + (lastA == CodexNetMon.Empty ? "…" : lastA == CodexNetMon.Lost ? ":(" : lastA + " ms");
+        string tn = Fx.NetLabel + " " + (lastN == CodexNetMon.Empty ? "…" : lastN == CodexNetMon.Lost ? ":(" : lastN.ToString());
+        string ta = Fx.ApiLabel + " " + (lastA == CodexNetMon.Empty ? "…" : lastA == CodexNetMon.Lost ? ":(" : lastA + " ms");
         using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
         {
             float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
@@ -434,8 +434,8 @@ internal sealed class CodexWidget : IWidget
         string F(int v) => v == CodexNetMon.Lost ? ":(" : v == CodexNetMon.Empty ? "–" : $"{v} ms";
         var lines = new List<(string t, Color c)>
         {
-            ($"net {F(vN)}   api {F(vA)}", White),
-            ($"loss  net {lostN}/{cntN}  ·  api {lostA}/{cntA}", Dim),
+            ($"{Fx.NetLabel} {F(vN)}   {Fx.ApiLabel} {F(vA)}", White),
+            ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
             ("google.com  ·  chatgpt.com", Dim),
         };
         if (vA == CodexNetMon.Lost && vN >= 0) lines.Add(("OpenAI's side :(", Amber));

@@ -11,6 +11,13 @@ internal static class Fx
 {
     public static readonly Color White = Color.FromArgb(238, 255, 255, 255);
 
+    // The net-health graph labels. They live here because ClaudeCodeWidget and CodexWidget each drew
+    // them four different ways ("net " + x, $"net {x}", …) — eight literals for two words. The pt-BR
+    // pull request translated some of those spellings and not the neighbouring ones; one source now.
+    public const string NetLabel = "net";
+    public const string ApiLabel = "api";
+    public const string LossLabel = "loss";
+
     // Media/app titles often arrive dressed in decorative Unicode — 𝗺𝗮𝘁𝗵-𝗯𝗼𝗹𝗱, 𝓈𝒸𝓇𝒾𝓅𝓉, ｆｕｌｌｗｉｄｔｈ,
     // ﷼ ligatures — that Segoe UI has no glyph for, so they render as tofu boxes. NFKC folds each to its
     // plain equivalent (𝗙𝗨𝗧𝗕𝗔𝗟𝗟𝗜 𝟭𝟴+ → FUTBALLI 18+, Arabic presentation forms → normal Persian);
