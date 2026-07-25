@@ -57,21 +57,30 @@ internal static class PartialFiles
     // own business, not a user-visible download.
     private static IEnumerable<string> Roots()
     {
-        yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        // Deduplicated: the learned list normally contains the Downloads folder too (that is where the
+        // browser was first seen writing), and scanning a root twice listed every download twice.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in Prepend(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)))
+        {
+            string full;
+            try { full = Path.GetFullPath(d).TrimEnd('\\'); } catch { continue; }
+            if (seen.Add(full)) yield return full;
+        }
+    }
+
+    private static IEnumerable<string> Prepend(string profile)
+    {
+        yield return Path.Combine(profile, "Downloads");
         foreach (var d in Downloaders.Directories()) yield return d;
     }
 
-    // The best in-flight download right now, or null. "Best" = fastest growing, so a big active download
-    // wins over a stalled leftover.
-    // How many partial downloads the last scan saw. The pill still shows only the busiest one; this is
-    // what a switcher will need, and it lets the panel reserve its gutter today instead of the layout
-    // shifting the first time a second download appears.
+    // Every partial download in flight right now, unordered — Downloads owns the ordering, because it has
+    // to interleave these with the Store, Steam and window-scanned items on one timeline.
     public static int LiveCount { get; private set; }
 
-    public static Sample? Current()
+    public static Sample[] All()
     {
-        Sample? best = null;
-        int seen = 0;
+        var found = new List<Sample>();
         var now = DateTime.UtcNow;
         var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -88,13 +97,12 @@ internal static class PartialFiles
                     if (len < MinSize) continue;
                     if ((now - touched).TotalSeconds > StaleSeconds) continue;
 
-                    live.Add(path);
-                    seen++;
-                    // Growth is only used to RANK candidates, never to decide whether this is a download.
+                    if (!live.Add(path)) continue;   // same file reached through two roots (a junction)
+                    // Growth only describes the file, it never decides whether this is a download.
                     // Requiring fresh growth every sample made the pill vanish the moment a download
                     // stalled for a second (observed live: Chrome's file was found, then dropped one second
                     // later). Freshness is already the liveness test — StaleSeconds above — so a paused but
-                    // recently-touched partial file stays on the pill instead of flickering out.
+                    // recently-touched partial file stays listed instead of flickering out.
                     long rate = 0;
                     int flat = 0;
                     if (_seen.TryGetValue(path, out var prev))
@@ -114,9 +122,9 @@ internal static class PartialFiles
                     // "not growing right now" is not "abandoned": the file is still fresh enough to count as
                     // a live download (StaleSeconds above), it is just sitting still — which is the paused
                     // state the pill should mark on the icon instead of pretending it is moving.
-                    bool stalled = flat >= StallSamples;
-                    if (best is null || rate > best.Value.GrowthPerSec)
-                        best = new Sample(path, clean, len, rate, 0, stalled);
+                    int pid = OwnerPid(path);
+                    if (pid != 0) Downloaders.Learn(pid, Path.GetDirectoryName(path));
+                    found.Add(new Sample(path, clean, len, rate, pid, flat >= StallSamples));
                 }
             }
             // forget files that vanished (renamed on completion) so the dictionary can't grow forever
@@ -126,11 +134,8 @@ internal static class PartialFiles
         }
         catch { }
 
-        LiveCount = seen;
-        if (best is null) return null;
-        int pid = OwnerPid(best.Value.Path);
-        if (pid != 0) Downloaders.Learn(pid, Path.GetDirectoryName(best.Value.Path));
-        return best.Value with { OwnerPid = pid };
+        LiveCount = found.Count;
+        return found.ToArray();
     }
 
     private static IEnumerable<string> Enumerate(string root)

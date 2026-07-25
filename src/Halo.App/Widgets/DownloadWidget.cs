@@ -82,13 +82,24 @@ internal sealed class DownloadWidget : IWidget
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
-        var row = Chips();
-        var hits = new (RectangleF, Action<PointF>)[row.Length];
-        for (int i = 0; i < row.Length; i++)
+        var hits = new List<(RectangleF, Action<PointF>)>();
+        int n = Downloads.Count;
+        if (Downloads.HasMore) hits.Add((MenuRect(w), _ => _menuOpen = !_menuOpen));
+        if (_menuOpen && Downloads.HasMore)
         {
-            var act = row[i].Click;
-            hits[i] = (row[i].Rect, _ => act());
+            int top = MenuTop(n), rows = Math.Min(n - top, MaxRows);
+            for (int v = 0; v < rows; v++)
+            {
+                int idx = top + v;
+                hits.Add((RowRect(w, n, v), _ => { Downloads.Select(idx); _menuOpen = false; }));
+            }
+            // an open menu owns the panel: the chips underneath must not be reachable through it, and a
+            // click anywhere else is how you dismiss it (NotchController stops at the first rect that hits,
+            // so this catch-all has to come last)
+            hits.Add((new RectangleF(0, 0, w, h), _ => _menuOpen = false));
+            return hits;
         }
+        foreach (var c in Chips()) { var act = c.Click; hits.Add((c.Rect, _ => act())); }
         return hits;
     }
 
@@ -218,6 +229,7 @@ internal sealed class DownloadWidget : IWidget
 
         DrawControls(g, fade);
         DrawMenuSlot(g, w, fade);
+        DrawMenuList(g, w, h, fade);   // last: it floats over the column
         g.TextRenderingHint = oldHint;
     }
 
@@ -228,15 +240,79 @@ internal sealed class DownloadWidget : IWidget
 
     internal static RectangleF MenuRect(int w) => new(w - MenuSlot - 8, 22, 34, 34);
 
+    // The switcher list. Four rows is what fits between the hamburger and the bottom of a 220px panel, so
+    // longer lists scroll by windowing rather than shrinking the rows into unreadability; the window always
+    // contains the selected row, because that is the one the user is looking for.
+    private static bool _menuOpen;
+    private const float MenuW = 250f, RowH = 30f;
+    private const int MaxRows = 4;
+
+    internal static RectangleF MenuListRect(int w, int n)
+        => new(w - MenuW - 8, MenuRect(w).Bottom + 6, MenuW, Math.Min(n, MaxRows) * RowH + 12);
+
+    private static int MenuTop(int n) => MenuTop(n, Downloads.SelectedIndex, MaxRows);
+
+    internal static int MenuTop(int n, int selected, int maxRows)
+        => n <= maxRows ? 0 : Math.Clamp(selected - maxRows + 1, 0, n - maxRows);
+
+    private static RectangleF RowRect(int w, int n, int visible)
+    {
+        var l = MenuListRect(w, n);
+        return new RectangleF(l.X + 6, l.Y + 6 + visible * RowH, l.Width - 12, RowH);
+    }
+
+    private void DrawMenuList(Graphics g, int w, int h, float fade)
+    {
+        if (!_menuOpen || !Downloads.HasMore) return;
+        var items = Downloads.Items;
+        int n = items.Count;
+        if (n == 0) return;
+        // dim what is behind it: the chips stay half-visible around the list otherwise, and the scrim is
+        // also the affordance for "click anywhere to close"
+        using (var scrim = new SolidBrush(Mul(Color.FromArgb(120, 0, 0, 0), fade)))
+            g.FillRectangle(scrim, 0, 0, w, h);
+        var l = MenuListRect(w, n);
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(226, 16, 16, 19), fade)))
+        using (var p = Fx.Rounded(l, 12f))
+            g.FillPath(bg, p);
+        using (var pen = new Pen(Mul(Color.FromArgb(44, 255, 255, 255), fade), 1f))
+        using (var p = Fx.Rounded(l, 12f))
+            g.DrawPath(pen, p);
+
+        using var f = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        using var bold = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Pixel);
+        int top = MenuTop(n), sel = Downloads.SelectedIndex, rows = Math.Min(n - top, MaxRows);
+        for (int v = 0; v < rows; v++)
+        {
+            int idx = top + v;
+            var r = RowRect(w, n, v);
+            bool cur = idx == sel, hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+            if (cur || hov)
+                using (var hb = new SolidBrush(Mul(Color.FromArgb(cur ? 38 : 20, 255, 255, 255), fade)))
+                using (var p = Fx.Rounded(r, 8f))
+                    g.FillPath(hb, p);
+
+            var it = items[idx];
+            // a download with no known total has no honest percentage — show what has landed instead
+            string tail = it.NoPct ? Bytes(it.Downloaded) : $"{it.Percent}%";
+            var tsz = g.MeasureString(tail, f);
+            using var tb = new SolidBrush(Mul(cur ? White : Dim, fade));
+            g.DrawString(tail, f, tb, r.Right - tsz.Width - 8, r.Y + (RowH - tsz.Height) / 2f);
+            DrawEllipsized(g, it.Name, cur ? bold : f, tb, r.X + 10, r.Y + (RowH - 17) / 2f,
+                           r.Width - tsz.Width - 26, 17);
+        }
+    }
+
     private static void DrawMenuSlot(Graphics g, int w, float fade)
     {
-        if (!Downloads.HasMore) return;   // nothing to switch between yet
+        if (!Downloads.HasMore) { _menuOpen = false; return; }   // nothing to switch between
         var r = MenuRect(w);
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
-        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 42 : 24, 255, 255, 255), fade)))
+        bool lit = hov || _menuOpen;
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(lit ? 42 : 24, 255, 255, 255), fade)))
         using (var p = Fx.Rounded(r, 10f))
             g.FillPath(bg, p);
-        using var b = new SolidBrush(Mul(hov ? White : Dim, fade));
+        using var b = new SolidBrush(Mul(lit ? White : Dim, fade));
         float bw = r.Width * 0.44f, x = r.X + (r.Width - bw) / 2f;
         for (int i = 0; i < 3; i++) g.FillRectangle(b, x, r.Y + 11 + i * 6, bw, 2f);
     }
@@ -328,6 +404,7 @@ internal sealed class DownloadWidget : IWidget
     // indeterminate segment.
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
+        _menuOpen = false;   // the switcher belongs to the panel; collapsing is a dismissal
         string? name = Downloads.Name;
         if (name == null) return;
         var icon = Ico();
@@ -349,6 +426,7 @@ internal sealed class DownloadWidget : IWidget
             using (var pp = Fx.PillPath(w, h, h / 2f))
                 g.FillPath(pb, pp);
             DrawCollapsedIcon(g, icon, ix, iy, sz, fade);
+            DrawCountBadge(g, ix, iy, sz, fade, Downloads.Count);
             using var nf = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
             using var nb = new SolidBrush(Mul(White, fade));
             float right = w - tx - 14;
@@ -396,6 +474,7 @@ internal sealed class DownloadWidget : IWidget
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
         if (paused) DrawPausedBadge(g, 9, (h - sz) / 2f, sz, fade);
+        DrawCountBadge(g, 9, (h - sz) / 2f, sz, fade, Downloads.Count);
 
         // One line, one voice: what has landed, then the percentage after a separator, the way the rest of
         // the app writes compound status ("net 15 · api 210 ms"). The bytes are the honest number — they
@@ -437,6 +516,24 @@ internal sealed class DownloadWidget : IWidget
     // stays resumable) or, for a Store item, cancels through AppInstallManager.
     // A stopped/paused download keeps its app icon so you still know what it is; the state goes on top as a
     // small badge, the way the strip badges sessions.
+    // How many other downloads are waiting behind this one. Top-right, so it never collides with the pause
+    // badge in the opposite corner; absent at one download, because a "1" would be noise.
+    private static void DrawCountBadge(Graphics g, float x, float y, float sz, float fade, int n)
+    {
+        if (n < 2) return;
+        float d = sz * 0.60f, bx = x + sz - d + 1f, by = y - 1f;
+        using (var shade = new SolidBrush(Mul(Color.FromArgb(215, 12, 12, 14), fade)))
+            g.FillEllipse(shade, bx, by, d, d);
+        using (var ring = new Pen(Mul(Color.FromArgb(190, 255, 255, 255), fade), 1.1f))
+            g.DrawEllipse(ring, bx, by, d, d);
+        using var f = new Font("Segoe UI Semibold", d * 0.62f, GraphicsUnit.Pixel);
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        using var b = new SolidBrush(Mul(White, fade));
+        g.DrawString(n > 9 ? "9+" : n.ToString(), f, b,
+                     new RectangleF(bx, by - Fx.CenterLift(f), d, d), sf);
+    }
+
     private static void DrawPausedBadge(Graphics g, float x, float y, float sz, float fade)
     {
         float d = sz * 0.62f, bx = x + sz - d + 2f, by = y + sz - d + 2f;

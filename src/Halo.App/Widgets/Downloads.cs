@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -22,9 +23,7 @@ internal static class Downloads
     public static volatile string? FilePath; // where the file is landing, when we know it (partial-file scans)
     public static volatile int OwnerPid;     // process writing that file, so we can surface it on demand
 
-    // How many downloads are in flight in total. Today the pill only ever shows one, so this stays at 0 or
-    // 1 and the panel's switcher stays hidden — it exists so the layout already reserves the gutter and
-    // the drawing code already asks the question, ahead of the pill actually tracking several at once.
+    // How many downloads are in flight in total; the pill shows one of them at a time.
     public static volatile int Count;
     public static bool HasMore => Count > 1;
     public static volatile string? IconFile; // direct image file for the icon (GDK game's staged logo)
@@ -106,11 +105,94 @@ internal static class Downloads
 
     public static void Poke() => _timer ??= new Timer(_ => Scan(), null, 500, 1000);
 
+    // ── the list ──────────────────────────────────────────────────────────────────────────────────────
+    // Every source can be live at once — Steam installing while Chrome fetches two files — so Scan collects
+    // instead of returning on the first hit, and one of the results is projected onto the volatile fields
+    // above. Keeping that projection is what let this become a list without touching a line of drawing
+    // code: the widget still reads Downloads.Name, Downloads.Percent and the rest exactly as before.
+    internal sealed record DlItem(string Key, string Name, int Percent, long Downloaded, long Total,
+        bool NoPct, bool Paused, bool Installing, bool Waiting, bool IsStore, bool CanControl,
+        string? ExePath, string? IconFile, string? FilePath, int OwnerPid, IntPtr Hwnd);
+
+    private static DlItem[] _items = Array.Empty<DlItem>();
+    public static IReadOnlyList<DlItem> Items => _items;
+
+    // Order is by when we first saw each download and never by progress: "show the first one, then the
+    // next when it finishes". Sorting by speed or percentage would reshuffle the pill every second.
+    private static readonly Dictionary<string, long> _born = new(StringComparer.Ordinal);
+    private static string? _selKey;
+    private static DlItem? _applied;
+
+    public static int SelectedIndex
+    {
+        get { var a = _items; for (int i = 0; i < a.Length; i++) if (a[i].Key == _selKey) return i; return 0; }
+    }
+
+    public static void Select(int index)
+    {
+        var a = _items;
+        if (index < 0 || index >= a.Length) return;
+        _selKey = a[index].Key;
+        Apply(a[index]);
+    }
+
+    // Pure, with the birth register passed in, so the ordering can be asserted without a live scan.
+    internal static void Order(List<DlItem> found, Dictionary<string, long> born, long now)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var i in found) { keys.Add(i.Key); if (!born.ContainsKey(i.Key)) born[i.Key] = now; }
+        foreach (var k in new List<string>(born.Keys)) if (!keys.Contains(k)) born.Remove(k);
+        // ties (two files noticed in the same scan) fall back to the key so the order can't wobble
+        found.Sort((a, b) => born[a.Key] != born[b.Key]
+            ? born[a.Key].CompareTo(born[b.Key]) : string.CompareOrdinal(a.Key, b.Key));
+    }
+
+    private static void Publish(List<DlItem> found)
+    {
+        Order(found, _born, Environment.TickCount64);
+        _items = found.ToArray();
+        Count = _items.Length;
+        Apply(Pick());
+    }
+
+    private static DlItem? Pick()
+    {
+        var a = _items;
+        if (a.Length == 0) { _selKey = null; return null; }
+        if (_selKey != null) foreach (var i in a) if (i.Key == _selKey) return i;
+        _selKey = null;   // the one the user picked finished → fall back to the oldest still running
+        return a[0];
+    }
+
+    private static void Apply(DlItem? it)
+    {
+        if (it == _applied) return;   // record equality: nothing the widget can see has changed
+        _applied = it;
+        if (it is null)
+        {
+            Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false;
+            Paused = false; IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0;
+            Hwnd = IntPtr.Zero; FilePath = null; OwnerPid = 0;
+            Interlocked.Increment(ref Version);
+            return;
+        }
+        Name = it.Name; Percent = it.Percent; Downloaded = it.Downloaded; Total = it.Total;
+        NoPct = it.NoPct; Paused = it.Paused; Installing = it.Installing; Waiting = it.Waiting;
+        IsStore = it.IsStore; CanControl = it.CanControl; ExePath = it.ExePath; IconFile = it.IconFile;
+        FilePath = it.FilePath; OwnerPid = it.OwnerPid; Hwnd = it.Hwnd;
+        Interlocked.Increment(ref Version);
+        LogState();
+    }
+
     private static void Scan()
     {
+        var found = new List<DlItem>();
         try
         {
-            string? name = null; int pct = 0; IntPtr hwnd = IntPtr.Zero;
+            // Window-title downloaders first: they name themselves and they are the only ones we can
+            // really stop. Every match counts now, not just the topmost — two managers can be busy at once.
+            var winPids = new HashSet<uint>();
+            var winNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             Win32.EnumWindows((h, _) =>
             {
                 if (!Win32.IsWindowVisible(h)) return true;
@@ -124,110 +206,65 @@ internal static class Downloads
                 int p = int.Parse(m.Groups[1].Value);
                 if (p >= 100) return true;        // finished / bogus → not an active download
                 if (IsBrowser(h)) return true;    // "50% off" page, not a download
-                name = Clean(t, m); pct = p; hwnd = h;
-                return false;                     // first match (topmost in Z-order) wins
+                string nm = Clean(t, m);
+                if (!winNames.Add(nm)) return true;   // same job, second window
+                Win32.GetWindowThreadProcessId(h, out uint wp);
+                winPids.Add(wp);
+                found.Add(new DlItem("win:" + nm, nm, p, 0, 0, false, false, false, false, false, false,
+                                     ExeOf(h), null, null, (int)wp, h));
+                return true;
             }, IntPtr.Zero);
 
-            if (name == null)
+            // A Microsoft Store download/install (real state, %, bytes, and control via the Store's own
+            // AppInstallManager — see StoreInstall).
+            var ph = StoreInstall.Poll(out string app, out int spct, out long done, out long total);
+            if (ph != StoreInstall.Phase.None)
+                found.Add(new DlItem("store:" + app, app, spct, done, total, false,
+                                     ph == StoreInstall.Phase.Paused, ph == StoreInstall.Phase.Installing,
+                                     ph == StoreInstall.Phase.Waiting, true, true, StoreAumid, null, null, 0, IntPtr.Zero));
+
+            // GDK games (Roblox & co.) install through Gaming Services — invisible to BOTH the install
+            // queue and Delivery Optimization. Their staging folder on disk is the signal: live bytes from
+            // folder growth, total from the Store catalog → a real filling %. If the catalog total isn't in
+            // yet, NoPct → spinner + live MB until it arrives.
+            if (GameInstall.Poll(out string gApp, out long gDone, out long gTotal, out bool gStalled))
+                found.Add(new DlItem("gdk:" + gApp, gApp, gTotal > 0 ? (int)Math.Clamp(gDone * 100 / gTotal, 0, 99) : 0,
+                                     gDone, gTotal, gTotal <= 0, gStalled, false, false, true, false,
+                                     StoreAumid, GameInstall.LogoPath, null, 0, IntPtr.Zero));
+
+            // Steam keeps no percentage in its window title, so the title scan above is blind to it.
+            // Its manifests carry real byte counts — see SteamInstall.
+            if (SteamInstall.Current() is { } steam)
+                found.Add(new DlItem("steam:" + steam.Name, steam.Name,
+                                     (int)Math.Clamp(steam.Done * 100 / Math.Max(steam.Total, 1), 0, 99),
+                                     steam.Done, steam.Total, false, false, false, false, false, false,
+                                     SteamExe(), null, null, 0, IntPtr.Zero));
+
+            // Last and most general: partial files growing on disk. This is what covers browsers (skipped
+            // above on purpose, since a page title can read "50% off") and any other app that downloads.
+            // The filesystem knows the bytes but not the total, so ask the browser's own database for it;
+            // when nothing supplies a total, NoPct keeps the widget honest — live bytes and a breathing bar
+            // instead of a made-up percentage.
+            foreach (var part in PartialFiles.All())
             {
-                // no window-title download → a Microsoft Store download/install (real state, %, bytes,
-                // and control via the Store's own AppInstallManager — see StoreInstall).
-                var ph = StoreInstall.Poll(out string app, out int spct, out long done, out long total);
-                if (ph != StoreInstall.Phase.None)
-                {
-                    bool installing = ph == StoreInstall.Phase.Installing;
-                    bool waiting = ph == StoreInstall.Phase.Waiting;
-                    bool paused = ph == StoreInstall.Phase.Paused;
-                    IconFile = null;
-                    if (!IsStore) ExePath = StoreAumid; // Store tile icon (resolved via ShellIcon in the widget)
-                    if (!IsStore || Name != app || Percent != spct || Installing != installing
-                        || Waiting != waiting || Paused != paused || Downloaded != done || Total != total)
-                    {
-                        Name = app; Percent = spct; Installing = installing; Waiting = waiting; Paused = paused; FilePath = null; OwnerPid = 0;
-                        Downloaded = done; Total = total; IsStore = true; CanControl = true; NoPct = false;
-                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
-                    }
-                    return;
-                }
-                // GDK games (Roblox & co.) install through Gaming Services — invisible to BOTH the
-                // install queue and Delivery Optimization. Their staging folder on disk is the signal:
-                // live bytes from folder growth, total from the Store catalog → a real filling %. If the
-                // catalog total isn't in yet, NoPct → spinner + live MB until it arrives.
-                if (GameInstall.Poll(out string gApp, out long gDone, out long gTotal, out bool gStalled))
-                {
-                    int gPct = gTotal > 0 ? (int)Math.Clamp(gDone * 100 / gTotal, 0, 99) : 0;
-                    bool gNoPct = gTotal <= 0;
-                    IconFile = GameInstall.LogoPath;      // show the game's own logo, not the Store bag
-                    if (!IsStore) ExePath = StoreAumid;
-                    if (!IsStore || Name != gApp || Downloaded != gDone || Total != gTotal
-                        || Percent != gPct || Paused != gStalled || NoPct != gNoPct)
-                    {
-                        Name = gApp; Percent = gPct; Installing = false; Waiting = false; Paused = gStalled; FilePath = null; OwnerPid = 0;
-                        Downloaded = gDone; Total = gTotal; IsStore = true; CanControl = false; NoPct = gNoPct;
-                        Hwnd = IntPtr.Zero; Interlocked.Increment(ref Version); LogState();
-                    }
-                    return;
-                }
-                // Steam keeps no percentage in its window title, so the title scan above is blind to it.
-                // Its manifests carry real byte counts — see SteamInstall.
-                if (SteamInstall.Current() is { } steam)
-                {
-                    int sPct = (int)Math.Clamp(steam.Done * 100 / Math.Max(steam.Total, 1), 0, 99);
-                    if (Name != steam.Name || Downloaded != steam.Done || Total != steam.Total || Percent != sPct || IsStore)
-                    {
-                        Name = steam.Name; Percent = sPct; Installing = false; Waiting = false; Paused = false; FilePath = null; OwnerPid = 0;
-                        Downloaded = steam.Done; Total = steam.Total; IsStore = false; CanControl = false; NoPct = false;
-                        ExePath = SteamExe(); IconFile = null; Hwnd = IntPtr.Zero;
-                        Interlocked.Increment(ref Version); LogState();
-                    }
-                    return;
-                }
-                // Last and most general: a partial file growing on disk. This is what finally covers
-                // browsers (skipped above on purpose, since a page title can read "50% off") and any other
-                // app that downloads. The filesystem knows the bytes but not the total, so ask the
-                // browser's own database for it; when nothing supplies a total, NoPct keeps the widget
-                // honest — live bytes and a breathing bar instead of a made-up percentage.
-                if (PartialFiles.Current() is { } part)
-                {
-                    long pTotal = BrowserDownloads.TotalFor(part.Path);
-                    string label = part.Name.Length > 0 ? part.Name
-                        : BrowserDownloads.NameFor(part.Path)
-                          ?? Downloaders.AppFor(System.IO.Path.GetDirectoryName(part.Path))
-                          ?? "Downloading";
-                    bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
-                    int pPct = noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99);
-                    if (Name != label || Downloaded != part.Bytes || Total != (noPct ? 0 : pTotal)
-                        || Percent != pPct || NoPct != noPct || IsStore || Paused != part.Stalled)
-                    {
-                        Count = PartialFiles.LiveCount;
-                        Name = label; Percent = pPct; Installing = false; Waiting = false; Paused = part.Stalled;
-                        Downloaded = part.Bytes; Total = noPct ? 0 : pTotal; IsStore = false; CanControl = false;
-                        NoPct = noPct; IconFile = null; Hwnd = IntPtr.Zero;
-                        FilePath = part.Path; OwnerPid = part.OwnerPid;
-                        ExePath = part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null;
-                        Interlocked.Increment(ref Version); LogState();
-                    }
-                    return;
-                }
-                if (Name != null)
-                {
-                    Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false; Paused = false;
-                    IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0; Hwnd = IntPtr.Zero;
-                    FilePath = null; OwnerPid = 0; Count = 0;
-                    Interlocked.Increment(ref Version);
-                }
-                return;
-            }
-            Hwnd = hwnd; // keep fresh even when only the % moves (the window can be recreated)
-            if (name != Name || pct != Percent || IsStore)
-            {
-                if (name != Name || IsStore) ExePath = ExeOf(hwnd); // resolve the icon only when the task changes
-                Name = name; Percent = pct; Installing = false; Waiting = false; Paused = false; IconFile = null; FilePath = null; OwnerPid = 0;
-                IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0;
-                Interlocked.Increment(ref Version); LogState();
+                // a window-scanned manager writing its own .part would otherwise be listed twice, once
+                // named by its title and once by its file
+                if (part.OwnerPid != 0 && winPids.Contains((uint)part.OwnerPid)) continue;
+                long pTotal = BrowserDownloads.TotalFor(part.Path);
+                string label = part.Name.Length > 0 ? part.Name
+                    : BrowserDownloads.NameFor(part.Path)
+                      ?? Downloaders.AppFor(System.IO.Path.GetDirectoryName(part.Path))
+                      ?? "Downloading";
+                bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
+                found.Add(new DlItem("file:" + part.Path, label,
+                                     noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99),
+                                     part.Bytes, noPct ? 0 : pTotal, noPct, part.Stalled, false, false,
+                                     false, false, part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null,
+                                     null, part.Path, part.OwnerPid, IntPtr.Zero));
             }
         }
         catch { }
+        try { Publish(found); } catch { }
     }
 
     // Select the file in Explorer. For a partial download that means the .crdownload, which is still the
