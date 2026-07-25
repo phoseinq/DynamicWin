@@ -68,6 +68,14 @@ internal sealed class BtWidget : IWidget
     {
         int pct; int glyph;
         lock (_lock) { pct = _pct; glyph = _glyph; }
+
+        // The pill tucks into a 96x12 tab, and the collapse animation passes through every height on
+        // the way down. Below 16px the ring radius (h-12)/2-1 reaches zero, and GDI+ rejects a
+        // non-positive arc with "Parameter is not valid" — every frame, for as long as a device is
+        // shown. OnTick swallows it, so the only symptom was a frozen pill plus a stack trace in
+        // %LOCALAPPDATA%\Halo\frame-errors.txt. Nothing legible fits at that size anyway.
+        if (h < 16) return;
+
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         // ease the ring fill toward the real charge; colour derives from the eased value so it glides too

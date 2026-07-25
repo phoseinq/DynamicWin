@@ -1,5 +1,72 @@
 # Halo — progress
 
+## 2026-07-25: v3.0.2 RELEASED + first outside contributions reviewed (2 PRs open on the fork)
+
+### Shipped
+- **v3.0.2 = Latest** on phoseinq/DynamicWin, target branch `V3`, tag on `a3c2f2f`. **Carries its own
+  assets** (`DynamicWinSetup.exe` 29.8MB + `DynamicWinPortable.zip` 41.5MB, both signed `CN=phoseinq`,
+  `3.0.2.0` stamped inside) — v3.0.1 had none and pointed at v3.0. Installed live + relaunched;
+  the machine had silently been running a **1.0.0.0** build until now.
+- Local `master`: `414841c` (cleanup + version + tests) and `7806fb2` (CLAUDE.md). Not pushed —
+  `master` is private, `origin` is the public fork only.
+- Version lives in **two** places: `Halo.App.csproj` (Version/AssemblyVersion/FileVersion) and
+  `installer/Halo.iss` (`#define AppVersion`). Both bumped.
+
+### Root cause worth keeping: our duplication is what breaks contributors
+Reviewing the pt-BR PR showed **every missed string sat where the same text was written twice**, far
+apart, with nothing marking the pair. Fixed on our side (all four are now single-source):
+- `QueueRamNotice`/`QueueCpuNotice` were two copies of one banner + two more in `PollTestNotif` →
+  one `QueueLoadNotice(resource, pct, topProcess, fallbackBody)`.
+- `net`/`api` had **four spellings per agent widget** (`"net " + x`, `$"net {x}"`, …) — eight literals
+  for two words → `Fx.NetLabel` / `Fx.ApiLabel` / `Fx.LossLabel`.
+- Screenshot wording existed in both `OnClipboardImage` and the `--render-notif` dev hook → consts on
+  `NotifItem`.
+- `"agent"` vs `"Agent"` (pill text vs panel heading) read as a typo → now carries a comment saying it
+  is deliberate, because a PR "fixed" it and changed the English heading.
+
+### `BtWidget.DrawCollapsed` threw on every frame while the pill was tucked — FIXED
+Found in `%LOCALAPPDATA%\Halo\frame-errors.txt` (16:03:22, the same second `bt-debug.txt` logged
+`connected: Boy`). `sz = h - 12`, `rr = sz/2 - 1`, so at **h ≤ 14** the arc radius hits zero and GDI+
+throws `ArgumentException: Parameter is not valid`. The tuck state is 96×**12**, so any BT connect
+while tucked threw every frame; `OnTick` swallowed it → frozen pill, no visible error. Reproduced
+across h = 40…2 (ok until 16, throws from 14 down), fixed with an `if (h < 16) return;` guard, re-ran
+the same sweep — all ok. **This bug is in the released 3.0.2**; fix is committed locally only.
+
+### Two stale tests were failing on master (79/81) — FIXED
+`AgentNoticeTests` still asserted that `waiting_input` makes a widget primary; that was deliberately
+removed ("no need for it to pop"). Rewrote as `WaitingInput_DoesNotStealThePill`, and rebuilt the
+desktop-Codex-preference test on compact-done notices (the only kind that still opens a window). 81/81.
+
+### PR review — evidence, not opinion (both build 0/0 in Release)
+Verification trick that paid off: a throwaway project **named `Halo.Tests`** satisfies
+`InternalsVisibleTo`, so contributor code can be driven directly with no reflection for internals.
+- **PR #1 (i18n + pt-BR)** — sound design (English string as key). Real defect: `Loc.T(en, args)` runs
+  `string.Format` on the *translated* text unguarded → a broken placeholder throws on the render path.
+  Proved end-to-end by breaking one key and rendering: `Loc.T → DrawExpanded → DrawContent`, no PNG.
+  Coverage ~40% and asymmetric; `HALO_LANG=pt-BR` renders show `rede` next to `api` in one label.
+- **PR #2 (persistent BT widget)** — idea accepted, code not. **The 6s timeout was the error recovery**,
+  not just a display duration; removing it made latent states permanent. Measured the race window:
+  **75ms** warm vs **2629ms** on the cold path (`Battery()` → -1 → `Task.Delay(2500)` → retry), against
+  a phone that connects for **1–2s** (seven occurrences in `bt-debug.txt`) → the disconnect is
+  *guaranteed* missed → phantom device forever. Seed claim proved by A/B on `_live` alone
+  (false → 0 connects; true → 1 connect "Boy" 47%). Ring/number desync measured: text 40%, ring 73.6%.
+- **Three of the six PR #2 defects were caused by our comment stripping** — `// startup state, don't
+  banner`, `// reveal: ring grows from empty`, `// keep frames coming so the ring eases` all exist in
+  `master` and are absent from V3. Said so in the review. **V3 publishes no `docs/`, no `tests/`, no
+  `PROGRESS.md`** either, so contributors cannot see any invariant. A published CONTRIBUTING is the
+  cheapest fix; not written yet.
+
+### Gotchas learned
+- A stale **self-contained publish layout left in `bin/`** (194 files vs 10) makes the app fail with
+  "You must install or update .NET" forever — the host reads that folder's `runtimeconfig.json` and
+  never looks at the system runtime. Installing .NET does nothing. Delete `bin/`+`obj/`.
+- `dotnet run --project X -- <arg>` swallowed the argument for the strip tool; build it and call the
+  exe directly.
+- `Radio.RequestAccessAsync`/`SetStateAsync` (WinRT) toggles the Bluetooth radio non-admin, but a
+  **phone initiates the connection itself**, so cycling the PC radio does not bring it back.
+- Before launching the pill from a tool shell, compare `SessionId` with `explorer.exe` — a different
+  session means an invisible pill that still holds the single-instance mutex.
+
 ## 2026-07-22: v1.0.3 RELEASED — everything below is now committed + shipped
 - **v1.0.3 = Latest** on phoseinq/DynamicWin (Setup + Portable, signed). All pending changes below are
   in local commits `029f650` + `11276a4` and in the release build — nothing un-bundled remains.
