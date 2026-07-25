@@ -8,6 +8,12 @@ namespace Halo.Notifications;
 
 internal sealed class NotifItem
 {
+
+    public const string ScreenshotApp = "Screenshot";
+    public const string ClipboardApp = "Clipboard";
+    public const string ScreenshotTitle = "Screenshot captured";
+    public const string ImageCopiedTitle = "Image copied";
+
     public uint Id;
     public DateTime Time = DateTime.Now;
     public string App = "";

@@ -1,4 +1,4 @@
-// Clipboard.cs — Minimal Win32 clipboard writer (WinForms isn't referenced): copies UTF-16 text via a moveable global buffer.
+
 
 using System;
 using System.Runtime.InteropServices;

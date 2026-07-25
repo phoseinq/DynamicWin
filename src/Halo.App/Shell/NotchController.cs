@@ -377,15 +377,19 @@ internal sealed class NotchController
     }
 
     private void QueueRamNotice(int pct)
+        => QueueLoadNotice("memory", pct, TopRamProcess, "Memory is running low.");
+
+    private void QueueLoadNotice(string resource, int pct, Func<string?> topProcess, string? fallbackBody)
     {
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
         {
-            string? top = TopRamProcess();
+            string? top = topProcess();
+            string? body = top != null ? $"{top} is using the most." : fallbackBody;
+            if (body == null) return;
             _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
             {
-                App = "System", Title = $"High memory usage — {pct}%",
-                Body = top != null ? $"{top} is using the most." : "Memory is running low.",
-                Kind = "cpu", Duration = 7, Icon = CpuBadge(),
+                App = "System", Title = $"High {resource} usage — {pct}%",
+                Body = body, Kind = "cpu", Duration = 7, Icon = CpuBadge(),
             });
         });
     }
@@ -408,18 +412,7 @@ internal sealed class NotchController
     }
 
     private void QueueCpuNotice(int sysPct)
-    {
-        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-        {
-            string? top = TopCpuProcess();
-            if (top == null) return;
-            _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
-            {
-                App = "System", Title = $"High CPU usage — {sysPct}%",
-                Body = $"{top} is using the most.", Kind = "cpu", Duration = 7, Icon = CpuBadge(),
-            });
-        });
-    }
+        => QueueLoadNotice("CPU", sysPct, TopCpuProcess, null);
 
     private static string? TopCpuProcess()
     {
@@ -491,21 +484,14 @@ internal sealed class NotchController
             string proc = parts.Length > 2 && parts[2].Trim().Length > 0 ? parts[2].Trim() : "";
             switch (type)
             {
+
                 case "cpu": case "sys": case "system":
-                    _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
-                    {
-                        App = "System", Title = $"High CPU usage — {(int.TryParse(arg, out var cp) ? cp : 92)}%",
-                        Body = $"{(proc.Length > 0 ? proc : TopCpuProcess() ?? "Chrome")} is using the most.",
-                        Kind = "cpu", Duration = 7, Icon = CpuBadge(),
-                    });
+                    QueueLoadNotice("CPU", int.TryParse(arg, out var cp) ? cp : 92,
+                        () => proc.Length > 0 ? proc : TopCpuProcess() ?? "Chrome", null);
                     break;
                 case "ram": case "mem": case "memory":
-                    _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
-                    {
-                        App = "System", Title = $"High memory usage — {(int.TryParse(arg, out var rp) ? rp : 88)}%",
-                        Body = $"{(proc.Length > 0 ? proc : TopRamProcess() ?? "Chrome")} is using the most.",
-                        Kind = "cpu", Duration = 7, Icon = CpuBadge(),
-                    });
+                    QueueLoadNotice("memory", int.TryParse(arg, out var rp) ? rp : 88,
+                        () => proc.Length > 0 ? proc : TopRamProcess() ?? "Chrome", null);
                     break;
                 case "clock": case "hour": case "hourly":
                     var t = int.TryParse(arg, out var hr) && hr is >= 0 and <= 23 ? DateTime.Today.AddHours(hr) : DateTime.Now;
@@ -1378,8 +1364,8 @@ internal sealed class NotchController
         catch { path = ""; }
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
-            App = isScreenshot ? "Screenshot" : "Clipboard",
-            Title = isScreenshot ? "Screenshot captured" : "Image copied",
+            App = isScreenshot ? Halo.Notifications.NotifItem.ScreenshotApp : Halo.Notifications.NotifItem.ClipboardApp,
+            Title = isScreenshot ? Halo.Notifications.NotifItem.ScreenshotTitle : Halo.Notifications.NotifItem.ImageCopiedTitle,
             Preview = shot,
             LaunchPath = path,
         });

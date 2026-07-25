@@ -10,6 +10,10 @@ internal static class Fx
 {
     public static readonly Color White = Color.FromArgb(238, 255, 255, 255);
 
+    public const string NetLabel = "net";
+    public const string ApiLabel = "api";
+    public const string LossLabel = "loss";
+
     public static string CleanText(string? s)
     {
         if (string.IsNullOrEmpty(s)) return s ?? "";

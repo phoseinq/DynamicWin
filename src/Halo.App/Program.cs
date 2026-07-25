@@ -145,8 +145,8 @@ internal static class Program
             _ = icon;
             var n = new Halo.Notifications.NotifItem
             {
-                App = "Screenshot",
-                Title = "Screenshot captured",
+                App = Halo.Notifications.NotifItem.ScreenshotApp,
+                Title = Halo.Notifications.NotifItem.ScreenshotTitle,
                 Preview = shot,
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
