@@ -18,6 +18,15 @@ internal interface IWidget
     float IconOffsetX => 0f;
 
     bool IsActive { get; }
+
+    /// <summary>
+    /// Whether being active also means the pill has something worth showing. Widgets that
+    /// reflect a long-lived ambient state rather than an event — a device that stays
+    /// connected for hours — return false: they remain reachable in the swap strip and on
+    /// hover, but they do not keep the pill open on an otherwise idle desktop.
+    /// </summary>
+    bool CountsAsContent => true;
+
     int Version { get; }
 
     bool Animating => false;

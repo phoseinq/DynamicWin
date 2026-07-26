@@ -180,6 +180,8 @@ internal sealed class NotchController
     private float _pinHov;
     private float _shrink;
     private bool _empty;
+    /// <summary>Any widget at all is active, including ambient ones that don't count as content.</summary>
+    private bool _anyActive;
 
     private readonly Halo.Notifications.NotifSource _notifSrc = new();
     private Halo.Notifications.BtBattery? _bt;
@@ -272,15 +274,20 @@ internal sealed class NotchController
         var active = ActiveIndices();
         LoadOffset();
         _notch.SetCapturable(_pinned);
-        _empty = active.Length == 0;
+        _empty = !AnyContent(active);
+        _anyActive = active.Length > 0;
         _shrink = _empty ? 1f : 0f;
-        if (!_empty) _primary = active[0];
+        if (_anyActive) _primary = active[0];
         _prevActive = new bool[_widgets.Length];
         for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = _widgets[i].IsActive;
         Apply(0f);
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
-        _bt = new Halo.Notifications.BtBattery((name, pct) => _btWidget.Show(name, pct));
+        _bt = new Halo.Notifications.BtBattery(
+            (id, name, pct, flash) => _btWidget.Connect(id, name, pct, flash),
+            id => _btWidget.Disconnect(id),
+            (id, pct) => _btWidget.UpdateBattery(id, pct),
+            () => _btWidget.WorthRefreshing);
         _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
 
         Dispatcher.Ensure();
@@ -602,9 +609,13 @@ internal sealed class NotchController
             return;
 
         bool wasEmpty = _empty;
-        _empty = active.Length == 0;
+        // "Empty" is about content, not activity: an ambient widget (a connected Bluetooth
+        // device) stays in `active` so it remains selectable, but it must not hold the pill
+        // open on an idle desktop. Hover still expands whenever anything is active.
+        _empty = !AnyContent(active);
+        _anyActive = active.Length > 0;
 
-        if (!_empty && _drop < 0f && Array.IndexOf(active, _primary) < 0)
+        if (active.Length > 0 && _drop < 0f && Array.IndexOf(active, _primary) < 0)
         {
             _primary = active[0];
             _agentNotices.SetPrimary(_primary);
@@ -619,7 +630,7 @@ internal sealed class NotchController
         _agentNotices.Tick(now, i => _widgets[i].IsActive, allowSelection: _drop < 0f);
         if (_drop < 0f)
             _primary = _agentNotices.Primary;
-        if (!_empty && Array.IndexOf(active, _primary) < 0)
+        if (active.Length > 0 && Array.IndexOf(active, _primary) < 0)
         {
             _primary = active[0];
             _agentNotices.SetPrimary(_primary);
@@ -656,7 +667,10 @@ internal sealed class NotchController
                 if (_widgets[i] is DownloadWidget && _widgets[i].IsActive)
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
 
-        if (_drop < 0f && _btWidget.IsActive)
+        // Only steal focus for a few seconds right after connecting -- once JustConnected
+        // elapses, the widget stays active (persistent) but settles into the row like the
+        // other widgets instead of pinning itself as primary forever.
+        if (_drop < 0f && _btWidget.JustConnected)
             for (int i = 0; i < _widgets.Length; i++)
                 if (_widgets[i] is BtWidget) { _primary = i; _agentNotices.SetPrimary(i); break; }
 
@@ -749,7 +763,10 @@ internal sealed class NotchController
         float prevOffsetX = _offsetX, prevHoldT = _holdT;
         UpdateMove(p, down, hovered);
 
-        bool open = (hovered || notice || FileTray.DragActive) && !_empty && _notif == null && !_moving;
+        // Not !_empty: an ambient-only pill is tucked, but hovering it must still reveal the
+        // widget, otherwise "reachable while connected" would not be reachable at all.
+        bool open = (hovered || notice || FileTray.DragActive) && active.Length > 0
+            && _notif == null && !_moving;
 
         int dir = open ? 1 : -1;
         float step = _dt / (open ? OpenSeconds : CloseSeconds);
@@ -915,6 +932,14 @@ internal sealed class NotchController
             if (_widgets[i].IsActive)
                 active.Add(i);
         return [.. active];
+    }
+
+    /// <summary>Whether any active widget is one that should keep the pill open.</summary>
+    private bool AnyContent(int[] active)
+    {
+        foreach (int i in active)
+            if (_widgets[i].CountsAsContent) return true;
+        return false;
     }
 
     private int[] AltIndices()
@@ -1185,7 +1210,7 @@ internal sealed class NotchController
 
         Action<Graphics, int, int, float> content = _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
-            : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
+            : !_anyActive ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
         bool pin = _notif == null;
         _curW = w;
         _curH = h;
@@ -1193,7 +1218,7 @@ internal sealed class NotchController
         float holdCue = _moving ? 0f : _holdT;
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
-            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed);
+            !_anyActive ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed);
     }
 
     private void FollowForeground(IntPtr fg)
