@@ -46,6 +46,12 @@ public sealed class CodexHookTests
             Assert.NotNull(json["compactedAt"]);
     }
 
+#if HALO_PRIVATE_ASSETS
+    // These three read installer/ and hooks/, which are private: the public mirror ships src/ and tests/
+    // only. Halo.Tests.csproj defines HALO_PRIVATE_ASSETS when installer/Halo.iss is actually present, so
+    // they assert for real in this checkout and simply do not exist in the mirror's build. Skipping them
+    // at runtime was tried first and does not work -- xunit 2.x has no Assert.Skip, and its dynamic-skip
+    // message token is not honoured by the 2.9 runner, so the "skip" came back as three failures.
     [Fact]
     public async Task CodexInstaller_PrefersInstalledHookBinaryForShellSessions()
     {
@@ -99,6 +105,7 @@ public sealed class CodexHookTests
         Assert.Single(commands, command => command.Contains("Halo.Hooks.exe\" codex session-start", StringComparison.Ordinal));
         Assert.Equal(existing, File.ReadAllText(settingsPath + ".halo-bak"));
     }
+#endif
 
     [Fact]
     public async Task OfflineInstaller_MergesHooksAndIsIdempotent()
@@ -210,10 +217,11 @@ public sealed class CodexHookTests
     private static bool IsHaloCommand(string command) =>
         command.Contains("Halo.Hooks.exe", StringComparison.OrdinalIgnoreCase);
 
+#if HALO_PRIVATE_ASSETS
     [Fact]
     public void InstallerScript_WiresOfflineCodexInstallAndUninstall()
     {
-        var script = File.ReadAllText(RequireRepoFile("installer", "Halo.iss"));
+        var script = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "installer", "Halo.iss"));
 
         Assert.Contains("Name: \"codexhooks\"", script, StringComparison.Ordinal);
         Assert.Contains("install-codex-hooks \"\"{app}\\Halo.Hooks.exe\"\"", script, StringComparison.Ordinal);
@@ -221,6 +229,7 @@ public sealed class CodexHookTests
         Assert.DoesNotContain("pwsh", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("dotnet", script, StringComparison.OrdinalIgnoreCase);
     }
+#endif
 
     private static JsonObject ReadStatus(string directory, string surface) =>
         JsonNode.Parse(File.ReadAllText(Path.Combine(directory, $"{surface}.json")))!.AsObject();
@@ -248,10 +257,11 @@ public sealed class CodexHookTests
         return new ProcessResult(process.ExitCode, output, error);
     }
 
+#if HALO_PRIVATE_ASSETS
     private static async Task<ProcessResult> RunInstaller(string userProfile)
     {
         var repository = FindRepositoryRoot();
-        var script = RequireRepoFile("hooks", "install-codex-hooks.ps1");
+        var script = Path.Combine(repository, "hooks", "install-codex-hooks.ps1");
         var start = new ProcessStartInfo("pwsh",
             $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -Repo \"{repository}\"")
         {
@@ -269,6 +279,15 @@ public sealed class CodexHookTests
         return new ProcessResult(process.ExitCode, output, error);
     }
 
+    private static string FindRepositoryRoot()
+    {
+        for (var current = new DirectoryInfo(Directory.GetCurrentDirectory()); current is not null; current = current.Parent)
+            if (File.Exists(Path.Combine(current.FullName, "Halo.sln")))
+                return current.FullName;
+        throw new DirectoryNotFoundException("Could not find Halo.sln.");
+    }
+#endif
+
     private static void CopyHookHost(string destination)
     {
         foreach (var name in new[]
@@ -279,31 +298,6 @@ public sealed class CodexHookTests
             "Halo.Hooks.runtimeconfig.json",
         })
             File.Copy(Path.Combine(AppContext.BaseDirectory, name), Path.Combine(destination, name), overwrite: true);
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        for (var current = new DirectoryInfo(Directory.GetCurrentDirectory()); current is not null; current = current.Parent)
-            if (File.Exists(Path.Combine(current.FullName, "Halo.sln")))
-                return current.FullName;
-        throw new DirectoryNotFoundException("Could not find Halo.sln.");
-    }
-
-    // installer/ and hooks/ are private: the public mirror ships src/ and tests/ only, so on the public
-    // repo's CI these files genuinely are not there. Skipping is the honest answer — locally the file
-    // exists and the assertion runs for real; a hard failure would just mean the mirror can never be
-    // green, and passing silently would hide a real regression here.
-    // xunit 2.x has no Assert.Skip; a message starting with this token is how its runner is told to
-    // report a skip from inside a running test
-    private const string DynamicSkip = "$XunitDynamicSkip$";
-
-    private static string RequireRepoFile(params string[] parts)
-    {
-        var path = Path.Combine([FindRepositoryRoot(), .. parts]);
-        if (!File.Exists(path))
-            throw new InvalidOperationException(
-                $"{DynamicSkip}{Path.Combine(parts)} is not part of this checkout (private build asset)");
-        return path;
     }
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);

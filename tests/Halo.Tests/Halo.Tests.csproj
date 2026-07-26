@@ -7,6 +7,13 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- installer/ and hooks/ are private; the public mirror ships src/ and tests/ only. The tests that read
+       those files compile only where they exist, so the mirror's CI is not asked to assert about a file it
+       was never given. -->
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\installer\Halo.iss')">
+    <DefineConstants>$(DefineConstants);HALO_PRIVATE_ASSETS</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
