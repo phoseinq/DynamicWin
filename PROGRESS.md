@@ -1,8 +1,17 @@
 # Halo — progress
 
-## 2026-07-26 (night): mirror automation, banner alignment, cancel actually cancels
-**Committed to `master`, deployed locally (v3.1.0, pid 13700). Still NOT pushed / NOT released —
-GitHub is on v3.0.2.** Build 0/0, tests **153**.
+## 2026-07-26 (night): mirror automation, banner alignment, cancel actually cancels — **3.1.0 RELEASED**
+**Pushed and released.** `origin/V3` = `4833fae`, tag **v3.1.0** with `DynamicWinSetup.exe` +
+`DynamicWinPortable.zip`. Public **CI passed on the push** (1m39s) — the workflows build, test and run
+the source policy against our tree for the first time. Build 0/0, tests **153** local / **150** on the
+stripped mirror; installer signature `Valid`, thumbprint `2EB268…2E1D`, which is the one
+`AutoUpdate.SignerThumbprint` pins.
+
+**Nobody auto-updates *to* 3.1.0** — 3.0.2 has no updater. The daily check starts mattering at
+3.1.0 → 3.1.1, so this release's blast radius is only people who install it by hand. Verified the
+updater's own view of the release: `tag_name=v3.1.0` parses, and the asset is named exactly
+`DynamicWinSetup.exe` as `AssetName` expects. On this machine it logs
+`latest=v3.1.0 running=3.1.0.0` and correctly does nothing.
 
 Commits: `2b0980b` mirror automation · `0011b85`+`6e505cf` private-asset test gating ·
 `6921ea4` banner icon + alignment · `6c507b7` cancel.
@@ -82,14 +91,23 @@ prompts the user to install .NET. Hot-deploy **only `Halo.App.dll`**, or copy fr
 `dotnet publish -r win-x64 --self-contained` output.
 
 ### Still open
-1. Push + release 3.1.0 (run `scripts/publish-mirror.ps1 -Push`, then `installer/build.ps1` and a
-   GitHub release). Split `144c2c0`/`63feae0` first if the attribution matters — note the mirror
-   flattens history anyway, so this is cosmetic for the public repo.
-2. Higher-quality blog videos for `pvboy.dev/blog/halo-glass-notch` (`HALO_CAPTURABLE=1` + ffmpeg
+1. Higher-quality blog videos for `pvboy.dev/blog/halo-glass-notch` (`HALO_CAPTURABLE=1` + ffmpeg
    `ddagrab`).
+2. `144c2c0`/`63feae0` still carry Codex's work under my authorship. Cosmetic now: the mirror
+   flattens history, so the public repo never sees it. Split only if local attribution matters.
 3. Chrome's *bubble* cancel remains unreachable by design (one control per row); we route via the
    page instead, which works. Edge's cancel needs the browser focused — inherent, since the buttons
    do not exist otherwise.
+
+### How to release next time
+```powershell
+pwsh scripts\publish-mirror.ps1 -Message "v3.1.1 - ..." -Push   # strips, gates, builds, tests, pushes
+pwsh installer\build.ps1                                        # publish + sign + Inno + zip
+gh release create v3.1.1 --repo phoseinq/DynamicWin --target <mirror sha> `
+    --title "Halo v3.1.1 — ..." --notes-file notes.md dist\DynamicWinSetup.exe dist\DynamicWinPortable.zip
+```
+The mirror script refuses to publish if the tree is dirty, if `mirror/` is missing a required file, if
+the stripped tree fails the policy gate or its tests, or if any file would be deleted from V3.
 
 ---
 
