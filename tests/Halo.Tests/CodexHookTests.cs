@@ -213,7 +213,7 @@ public sealed class CodexHookTests
     [Fact]
     public void InstallerScript_WiresOfflineCodexInstallAndUninstall()
     {
-        var script = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "installer", "Halo.iss"));
+        var script = File.ReadAllText(RequireRepoFile("installer", "Halo.iss"));
 
         Assert.Contains("Name: \"codexhooks\"", script, StringComparison.Ordinal);
         Assert.Contains("install-codex-hooks \"\"{app}\\Halo.Hooks.exe\"\"", script, StringComparison.Ordinal);
@@ -251,7 +251,7 @@ public sealed class CodexHookTests
     private static async Task<ProcessResult> RunInstaller(string userProfile)
     {
         var repository = FindRepositoryRoot();
-        var script = Path.Combine(repository, "hooks", "install-codex-hooks.ps1");
+        var script = RequireRepoFile("hooks", "install-codex-hooks.ps1");
         var start = new ProcessStartInfo("pwsh",
             $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\" -Repo \"{repository}\"")
         {
@@ -287,6 +287,23 @@ public sealed class CodexHookTests
             if (File.Exists(Path.Combine(current.FullName, "Halo.sln")))
                 return current.FullName;
         throw new DirectoryNotFoundException("Could not find Halo.sln.");
+    }
+
+    // installer/ and hooks/ are private: the public mirror ships src/ and tests/ only, so on the public
+    // repo's CI these files genuinely are not there. Skipping is the honest answer — locally the file
+    // exists and the assertion runs for real; a hard failure would just mean the mirror can never be
+    // green, and passing silently would hide a real regression here.
+    // xunit 2.x has no Assert.Skip; a message starting with this token is how its runner is told to
+    // report a skip from inside a running test
+    private const string DynamicSkip = "$XunitDynamicSkip$";
+
+    private static string RequireRepoFile(params string[] parts)
+    {
+        var path = Path.Combine([FindRepositoryRoot(), .. parts]);
+        if (!File.Exists(path))
+            throw new InvalidOperationException(
+                $"{DynamicSkip}{Path.Combine(parts)} is not part of this checkout (private build asset)");
+        return path;
     }
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);
