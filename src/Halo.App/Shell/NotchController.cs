@@ -1521,6 +1521,9 @@ internal sealed class NotchController
             Title = isScreenshot ? Halo.Notifications.NotifItem.ScreenshotTitle : Halo.Notifications.NotifItem.ImageCopiedTitle,
             Preview = shot,       // the actual capture, shown as a 16:9 thumbnail in the banner
             LaunchPath = path,    // click → open the saved image
+            // this was the one banner shipping no icon at all: the preview takes the icon slot, so the
+            // badge was simply never drawn and Fx.AccentOf(null) left it the only banner with no glow
+            Icon = isScreenshot ? ShotBadge() : ClipBadge(),
         });
     }
 
@@ -1636,9 +1639,37 @@ internal sealed class NotchController
     private static Bitmap LimitBadge()   => LocalBadge(0xE9D9, 285);   // Speed/gauge — purple
     private static Bitmap ClockBadge()   => LocalBadge(0xE917, 205);   // Recent (clock) — blue
     private static Bitmap CpuBadge()     => LocalBadge(0xE950, 28);       // Processor icon tile
+    private static Bitmap ShotBadge()    => LocalBadge(0xE722, 200, 28f);// Camera — blue
+    private static Bitmap ClipBadge()    => LocalBadge(0xE8C8, 155, 28f);// Copy — teal
 
-    // dev-only: the five generated notif badges in a row, for a tofu eyeball via --render-badges
-    internal static Bitmap[] AllLocalBadges() => new[] { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge() };
+    // dev-only: the generated notif badges in a row, for a tofu eyeball via --render-badges
+    internal static Bitmap[] AllLocalBadges() => new[]
+        { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge() };
+
+    // dev-only: the banners Halo raises itself, for --render-local. They live here, beside the badge
+    // factories and the real EnqueueLocal calls, because the alignment bug this hook exists to catch was
+    // invisible for months — every hook rendered a MIRRORED toast, which always has a body, and it is the
+    // body-less ones that were broken. Kept next to the originals so the two cannot drift apart quietly.
+    internal static Halo.Notifications.NotifItem[] SampleLocalNotices(Bitmap shot) => new[]
+    {
+        new Halo.Notifications.NotifItem
+        {
+            App = Halo.Notifications.NotifItem.ScreenshotApp,
+            Title = Halo.Notifications.NotifItem.ScreenshotTitle,
+            Preview = shot, Icon = ShotBadge(),
+        },
+        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet :/", Icon = NetBadge() },
+        new Halo.Notifications.NotifItem
+        {
+            App = "System", Title = "High CPU usage — 92%", Body = "chrome.exe is using the most.",
+            Icon = CpuBadge(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Claude", Title = "Claude usage 85%", Body = "You've used 85% of your weekly limit.",
+            Icon = LimitBadge(),
+        },
+    };
 
     // banner is centred like the pill; left edge follows its animated width (+ any drag offset)
     private int NotifLeft() => _notch.WorkLeft + (_notch.WorkWidth - Sc(_curW)) / 2 + (int)_offsetX;

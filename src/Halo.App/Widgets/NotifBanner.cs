@@ -29,12 +29,24 @@ internal static class NotifBanner
     // Centred on the title row's own centre instead of sitting 3px above it. Width comes from the longer of
     // the code and "Copied", so pressing it does not resize the pill under the cursor.
     private const float TitleTop = 41f, TitleH = 26f, CopyH = 22f;
+    private const float EyebrowTop = 22f, EyebrowH = 14f, BodyTop = 70f;
+
+    // The text column's offsets are tuned for a two-line body, and a banner without one left its eyebrow
+    // and title floating well above the artwork they are meant to line up with — the 52px icon (or the
+    // 128×72 screenshot thumb) centres on SummaryH/2 = 64, while an eyebrow+title pair alone ends at 67,
+    // centred on 44. Halo's own alerts are exactly the ones that carry no body ("Screenshot captured",
+    // "Bad internet :/"), so this misalignment only ever showed on our own notifications, never on a
+    // mirrored toast. Nothing but the no-body case moves: a body is what the grow-to-detail reveal
+    // cross-fades, so the two-line layout keeps its tuned numbers untouched.
+    internal static float TextShift(bool hasBody) =>
+        hasBody ? 0f : (SummaryH - (EyebrowH + (TitleTop - (EyebrowTop + EyebrowH)) + TitleH)) / 2f - EyebrowTop;
 
     public static RectangleF CopyRect(NotifItem n, int w)
     {
         if (string.IsNullOrEmpty(n.Code)) return RectangleF.Empty;
         float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f; // 6 = "Copied"
-        return new RectangleF(w - bw - 20, TitleTop + (TitleH - CopyH) / 2f, bw, CopyH);
+        return new RectangleF(w - bw - 20,
+            TitleTop + TextShift(n.Body.Length > 0) + (TitleH - CopyH) / 2f, bw, CopyH);
     }
 
     // Hover and the copied flip used to snap. Eased here the way DownloadWidget eases its fill: the banner
@@ -101,7 +113,13 @@ internal static class NotifBanner
         bool hasPreview = n.Preview != null;
         float thumbW = hasPreview ? 128f : IconD, thumbH = hasPreview ? 72f : IconD;
         float iy = (SummaryH - thumbH) / 2f;
-        if (hasPreview) DrawThumb(g, n.Preview!, IconX, iy, thumbW, thumbH, a);
+        if (hasPreview)
+        {
+            DrawThumb(g, n.Preview!, IconX, iy, thumbW, thumbH, a);
+            // the thumb takes the icon's slot, so the badge rides its corner instead of being dropped
+            // entirely — a screenshot banner used to carry no identity mark at all
+            if (n.Icon != null) DrawCornerBadge(g, n.Icon, IconX + thumbW, iy + thumbH, a);
+        }
         else if (n.Icon != null) DrawAppIcon(g, n.Icon, IconX, iy, IconD, a);
         else
         {
@@ -116,6 +134,7 @@ internal static class NotifBanner
         }
 
         float tx = IconX + thumbW + 16, tw = w - tx - 22;
+        float ts = TextShift(n.Body.Length > 0);
         using var eyeF = new Font("Segoe UI", EyebrowPx, GraphicsUnit.Pixel);
         using var titleF = new Font("Segoe UI Semibold", TitlePx, GraphicsUnit.Pixel);
         using var bodyF = new Font("Segoe UI", BodyPx, GraphicsUnit.Pixel);
@@ -129,17 +148,18 @@ internal static class NotifBanner
             {
                 timeW = g.MeasureString(time, eyeF, 999, StringFormat.GenericTypographic).Width;
                 using var rf = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far };
-                g.DrawString(time, eyeF, b, new RectangleF(tx, 22, tw, 14), rf);
+                g.DrawString(time, eyeF, b, new RectangleF(tx, EyebrowTop + ts, tw, EyebrowH), rf);
             }
             using var lf = new StringFormat(StringFormat.GenericTypographic)
             { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-            g.DrawString(n.App.ToUpperInvariant(), eyeF, b, new RectangleF(tx, 22, Math.Max(10, tw - timeW - 10), 14), lf);
+            g.DrawString(n.App.ToUpperInvariant(), eyeF, b,
+                new RectangleF(tx, EyebrowTop + ts, Math.Max(10, tw - timeW - 10), EyebrowH), lf);
         }
         // Persian/Arabic title/body flow right-to-left; latin runs inside them are reordered by GDI+
         // bidi (DirectionRightToLeft) — without it, mixed FA+EN text gets mangled.
         using (var b = new SolidBrush(Mul(White, a)))
         using (var f = LineFmt(n.Title))
-            g.DrawString(n.Title, titleF, b, new RectangleF(tx, 41, tw, 26), f);
+            g.DrawString(n.Title, titleF, b, new RectangleF(tx, TitleTop + ts, tw, TitleH), f);
 
         // summary: two wrapped lines — they cross-fade into the full text as the pill grows
         // (detail 0→1), so the reveal reads as one continuous motion
@@ -148,11 +168,11 @@ internal static class NotifBanner
             using (var f = SummaryFmt(n.Body))
                 // +6: GenericTypographic carries LineLimit, which lays out only WHOLE lines. Two 14.5px
                 // lines measure ~38.6px, so an exactly-38px box silently dropped the second one.
-                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, BodyLinePx * 2 + 6), f);
+                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, BodyTop, tw, BodyLinePx * 2 + 6), f);
         if (detail > 0.01f && n.Body.Length > 0)
             using (var b = new SolidBrush(Mul(BodyInk, a * detail)))
             using (var f = WrapFmt(n.Body))
-                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, h - 70 - 14), f);
+                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, BodyTop, tw, h - BodyTop - 14), f);
 
         DrawCopyButton(g, n, w, a); // Copy button for a detected verification code
 
@@ -213,6 +233,21 @@ internal static class NotifBanner
         g.FillPath(tb, path);
         using var pen = new Pen(Mul(Color.FromArgb(45, 255, 255, 255), a), 1f);
         g.DrawPath(pen, path);
+    }
+
+    // Badge for a banner whose artwork is a preview: it straddles the thumb's bottom-right corner, which
+    // is where every platform puts a source mark. It gets a dark ring rather than a light one because a
+    // screenshot of a bright window is the common case and a white edge vanished into it.
+    private const float CornerBadgeD = 26f;
+
+    private static void DrawCornerBadge(Graphics g, Bitmap icon, float cornerX, float cornerY, float a)
+    {
+        var r = new RectangleF(cornerX - CornerBadgeD * 0.72f, cornerY - CornerBadgeD * 0.72f,
+            CornerBadgeD, CornerBadgeD);
+        using (var ring = new Pen(Mul(Color.FromArgb(170, 0, 0, 0), a), 2.4f))
+        using (var rp = Fx.Rounded(r, CornerBadgeD * 0.3f))
+            g.DrawPath(ring, rp);
+        DrawAppIcon(g, icon, r.X, r.Y, r.Width, a);
     }
 
     // language-switch banner: badge + language name as one horizontally + vertically centred group,

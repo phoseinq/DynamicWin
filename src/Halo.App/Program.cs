@@ -20,8 +20,11 @@ internal static class Program
         // dev hook: `Halo.App --render-notif <out.png>` — the notification banner (real shape path) on a
         // colourful backdrop so edge fringes show, with mixed Persian+English text to eyeball the font/RTL
         if (args.Length >= 2 && args[0] == "--render-notif") { RenderNotif(args[1]); return; }
-        // dev hook: `Halo.App --render-badges <out.png>` — the 5 generated notif badges, to catch tofu glyphs
+        // dev hook: `Halo.App --render-badges <out.png>` — the generated notif badges, to catch tofu glyphs
         if (args.Length >= 2 && args[0] == "--render-badges") { RenderBadges(args[1]); return; }
+        // dev hook: `Halo.App --render-local <out.png>` — the banners Halo raises ITSELF, stacked. Every
+        // other hook renders a mirrored toast, which always has a body; the body-less ones are our own.
+        if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
         // dev hook: `Halo.App --probe-icon <aumid>` — what the notif icon resolvers return for an app id
         if (args.Length >= 2 && args[0] == "--probe-icon") { ProbeIcon(args[1]); return; }
         // dev hook: `Halo.App --probe-tree <pid>` — the process's ancestor chain via Toolhelp
@@ -148,9 +151,10 @@ internal static class Program
             new Halo.Shell.LayeredNotch().DrawShape(g, W, H, 26, 245, glass: false);
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            _ = icon;
             var n = new Halo.Notifications.NotifItem
             {
+                Icon = icon,       // with a Preview this lands as the thumb's corner badge
+
                 App = Halo.Notifications.NotifItem.ScreenshotApp,
                 Title = Halo.Notifications.NotifItem.ScreenshotTitle,
                 // deliberately longer than two lines, so the hook shows where the summary wraps and
@@ -165,8 +169,51 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
-    // dev-only: the 5 generated notif badges (battery / net / limit / clock / cpu) on a dark strip, so
-    // a bad Fluent code point shows up as tofu instead of shipping invisible.
+    // dev-only: Halo's own banners stacked, each through the real NotifBanner.Draw and the real shape path.
+    // The guide-line down the middle is the point: the artwork and the text block must read as centred on
+    // it, which is exactly what a body-less banner used to get wrong.
+    private static void RenderLocal(string outPath)
+    {
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 20;
+        using var shot = new System.Drawing.Bitmap(1920, 1080);
+        using (var sg = System.Drawing.Graphics.FromImage(shot))
+        {
+            using var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, 1920, 1080),
+                System.Drawing.Color.FromArgb(240, 245, 250), System.Drawing.Color.FromArgb(150, 190, 235), 45f);
+            sg.FillRectangle(lg, 0, 0, 1920, 1080);   // a BRIGHT capture: the corner badge has to survive one
+            using var wf = new System.Drawing.Font("Segoe UI", 130f);
+            sg.DrawString("desktop", wf, System.Drawing.Brushes.DimGray, 430, 440);
+        }
+
+        var notices = Halo.Shell.NotchController.SampleLocalNotices(shot);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, notices.Length * (H + pad) + pad);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                System.Drawing.Color.FromArgb(60, 140, 200), System.Drawing.Color.FromArgb(200, 100, 60), 35f))
+                g.FillRectangle(lg, 0, 0, bmp.Width, bmp.Height);
+
+            var notch = new Halo.Shell.LayeredNotch();
+            for (int i = 0; i < notices.Length; i++)
+            {
+                var state = g.Save();
+                g.TranslateTransform(pad, pad + i * (H + pad));
+                notch.DrawShape(g, W, H, 26, 245, glass: false);
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, notices[i], 0f, false);
+                using (var guide = new System.Drawing.Pen(System.Drawing.Color.FromArgb(90, 255, 80, 80), 1f))
+                    g.DrawLine(guide, 0, H / 2f, W, H / 2f);
+                g.Restore(state);
+            }
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    // dev-only: the generated notif badges (battery / net / limit / clock / cpu / shot / clip) on a dark
+    // strip, so a bad Fluent code point shows up as tofu instead of shipping invisible.
     private static void RenderBadges(string outPath)
     {
         var badges = Halo.Shell.NotchController.AllLocalBadges();
