@@ -70,6 +70,6 @@ Windows 11 · x64. It opens at the top-center of your main monitor; drag it anyw
 
 ⭐ **If Halo earns a spot on your screen, consider starring the repo.**
 
-<sub>CC BY-SA 4.0 · made by <a href="https://github.com/phoseinq">phoseinq</a> · <a href="https://pvboy.dev">pvboy.dev</a></sub>
+<sub>MIT License · made by <a href="https://github.com/phoseinq">phoseinq</a> · <a href="https://pvboy.dev">pvboy.dev</a></sub>
 
 </div>
