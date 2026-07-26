@@ -12,7 +12,7 @@ namespace Halo.Tests;
 public class DownloadListTests
 {
     private static Downloads.DlItem It(string key, string name = "x", int pct = 0) =>
-        new(key, name, pct, 0, 0, false, false, false, false, false, false, null, null, null, 0, IntPtr.Zero);
+        new(key, name, pct, 0, 0, false, false, false, false, false, false, false, null, null, null, 0, IntPtr.Zero);
 
     private static List<string> Keys(List<Downloads.DlItem> l) => l.Select(i => i.Key).ToList();
 

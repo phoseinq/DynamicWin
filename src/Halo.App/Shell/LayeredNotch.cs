@@ -15,6 +15,7 @@ internal struct MenuFrame
     public float Appear;            // eased 0..1 — the strip grows/fades in instead of popping
     public string[] RowIcons;       // one row per app group, top-to-bottom; index 0 == the closed circle
     public Bitmap?[] RowImages;     // group icon (plain mark when the app has several sessions)
+    public float[] RowImageOffsets; // optical x correction in logical pixels
     public int[] RowCounts;         // sessions in the row's rightward fan (0 = row has no fan)
     public Bitmap?[][] SessImages;  // per-row session icons (badged), left-to-right
     public string[][] SessIcons;
@@ -471,7 +472,8 @@ internal sealed class LayeredNotch
             using (var b = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8)))
                 cg.FillPath(b, path);
 
-            void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring, float progress = -1f)
+            void Cell(string icon, Bitmap? img, float cx, float cy, float ia, Color? ring,
+                float progress = -1f, float imageOffsetX = 0f)
             {
                 if (ia <= 0.01f) return;
                 if (img != null)
@@ -486,7 +488,7 @@ internal sealed class LayeredNotch
                         cg.FillRectangle(gb, new RectangleF(cx, cy, D, D));
                         cg.Clip = clip;
                     }
-                    DrawCircleImage(cg, img, cx, cy, D, ia);
+                    DrawCircleImage(cg, img, cx + imageOffsetX * ss, cy, D, ia);
                 }
                 else
                     DrawGlyphCentered(cg, icon, cx, cy, D, D * 0.45f, (int)(235 * ia));
@@ -515,7 +517,8 @@ internal sealed class LayeredNotch
 
             for (int i = 0; i < rows; i++)
                 Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D,
-                    Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i], menu.RowProgress[i]);
+                    Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i], menu.RowProgress[i],
+                    menu.RowImageOffsets[i]);
             if (extf > 0.5f)
                 for (int j = 0; j < menu.RowCounts[or_]; j++)
                     Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,

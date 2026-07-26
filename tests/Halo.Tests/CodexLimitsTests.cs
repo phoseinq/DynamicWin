@@ -47,6 +47,23 @@ public sealed class CodexLimitsTests
         Assert.NotEqual(DateTimeOffset.MinValue, reloaded.LastSuccess);
     }
 
+    [Fact]
+    public void IdenticalObservation_DoesNotRefreshCacheAge()
+    {
+        using var temp = new TempDirectory();
+        var now = DateTimeOffset.Parse("2026-07-26T00:00:00Z");
+        var store = new CodexLimitsStore(temp.CachePath, () => now);
+        var snapshot = GoodLimits(22, 41);
+
+        store.Update(snapshot);
+        var firstSuccess = store.LastSuccess;
+        now = now.AddMinutes(1);
+        store.Update(snapshot);
+
+        Assert.Equal(firstSuccess, store.LastSuccess);
+        Assert.Equal(1, store.Version);
+    }
+
     private static CodexSnapshot GoodLimits(double primary, double secondary) => Snapshot(
         primary: new CodexLimit(primary, 300, DateTimeOffset.UtcNow.AddHours(5)),
         secondary: new CodexLimit(secondary, 10_080, DateTimeOffset.UtcNow.AddDays(7)));

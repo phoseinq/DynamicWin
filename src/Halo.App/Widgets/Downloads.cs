@@ -33,6 +33,12 @@ internal static class Downloads
     public static volatile bool IsStore;    // this item is a Microsoft Store download/install
     public static volatile bool CanControl; // Store item is AppInstallManager-backed → pause/cancel work
     public static volatile bool NoPct;      // GDK game staging: bytes are real but total is unknown → no %
+    // Bytes we cannot vouch for. Edge names every partial "Unconfirmed NNNNN.crdownload" and writes no
+    // History row until the download ends, so when nothing supplies a name the file on disk cannot be tied
+    // to this download: observed one such blob growing 72MB → 92MB across three separate test downloads.
+    // Its length is therefore not this download's progress, and the rule here is that a number we cannot
+    // stand behind is not shown at all.
+    public static volatile bool NoBytes;
     public static long Downloaded, Total;   // Store: bytes done / total (0 when unknown)
     public static IntPtr Hwnd;              // the downloader window (Stop button reveals it)
     public static int Version;              // bumped on any change (Interlocked)
@@ -111,7 +117,7 @@ internal static class Downloads
     // above. Keeping that projection is what let this become a list without touching a line of drawing
     // code: the widget still reads Downloads.Name, Downloads.Percent and the rest exactly as before.
     internal sealed record DlItem(string Key, string Name, int Percent, long Downloaded, long Total,
-        bool NoPct, bool Paused, bool Installing, bool Waiting, bool IsStore, bool CanControl,
+        bool NoPct, bool NoBytes, bool Paused, bool Installing, bool Waiting, bool IsStore, bool CanControl,
         string? ExePath, string? IconFile, string? FilePath, int OwnerPid, IntPtr Hwnd);
 
     private static DlItem[] _items = Array.Empty<DlItem>();
@@ -171,13 +177,13 @@ internal static class Downloads
         if (it is null)
         {
             Name = null; Percent = 0; ExePath = null; IconFile = null; Installing = false; Waiting = false;
-            Paused = false; IsStore = false; CanControl = false; NoPct = false; Downloaded = Total = 0;
+            Paused = false; IsStore = false; CanControl = false; NoPct = false; NoBytes = false; Downloaded = Total = 0;
             Hwnd = IntPtr.Zero; FilePath = null; OwnerPid = 0;
             Interlocked.Increment(ref Version);
             return;
         }
         Name = it.Name; Percent = it.Percent; Downloaded = it.Downloaded; Total = it.Total;
-        NoPct = it.NoPct; Paused = it.Paused; Installing = it.Installing; Waiting = it.Waiting;
+        NoPct = it.NoPct; NoBytes = it.NoBytes; Paused = it.Paused; Installing = it.Installing; Waiting = it.Waiting;
         IsStore = it.IsStore; CanControl = it.CanControl; ExePath = it.ExePath; IconFile = it.IconFile;
         FilePath = it.FilePath; OwnerPid = it.OwnerPid; Hwnd = it.Hwnd;
         Interlocked.Increment(ref Version);
@@ -210,7 +216,7 @@ internal static class Downloads
                 if (!winNames.Add(nm)) return true;   // same job, second window
                 Win32.GetWindowThreadProcessId(h, out uint wp);
                 winPids.Add(wp);
-                found.Add(new DlItem("win:" + nm, nm, p, 0, 0, false, false, false, false, false, false,
+                found.Add(new DlItem("win:" + nm, nm, p, 0, 0, false, false, false, false, false, false, false,
                                      ExeOf(h), null, null, (int)wp, h));
                 return true;
             }, IntPtr.Zero);
@@ -219,7 +225,7 @@ internal static class Downloads
             // AppInstallManager — see StoreInstall).
             var ph = StoreInstall.Poll(out string app, out int spct, out long done, out long total);
             if (ph != StoreInstall.Phase.None)
-                found.Add(new DlItem("store:" + app, app, spct, done, total, false,
+                found.Add(new DlItem("store:" + app, app, spct, done, total, false, false,
                                      ph == StoreInstall.Phase.Paused, ph == StoreInstall.Phase.Installing,
                                      ph == StoreInstall.Phase.Waiting, true, true, StoreAumid, null, null, 0, IntPtr.Zero));
 
@@ -229,7 +235,7 @@ internal static class Downloads
             // yet, NoPct → spinner + live MB until it arrives.
             if (GameInstall.Poll(out string gApp, out long gDone, out long gTotal, out bool gStalled))
                 found.Add(new DlItem("gdk:" + gApp, gApp, gTotal > 0 ? (int)Math.Clamp(gDone * 100 / gTotal, 0, 99) : 0,
-                                     gDone, gTotal, gTotal <= 0, gStalled, false, false, true, false,
+                                     gDone, gTotal, gTotal <= 0, false, gStalled, false, false, true, false,
                                      StoreAumid, GameInstall.LogoPath, null, 0, IntPtr.Zero));
 
             // Steam keeps no percentage in its window title, so the title scan above is blind to it.
@@ -237,7 +243,7 @@ internal static class Downloads
             if (SteamInstall.Current() is { } steam)
                 found.Add(new DlItem("steam:" + steam.Name, steam.Name,
                                      (int)Math.Clamp(steam.Done * 100 / Math.Max(steam.Total, 1), 0, 99),
-                                     steam.Done, steam.Total, false, false, false, false, false, false,
+                                     steam.Done, steam.Total, false, false, false, false, false, false, false,
                                      SteamExe(), null, null, 0, IntPtr.Zero));
 
             // Last and most general: partial files growing on disk. This is what covers browsers (skipped
@@ -261,10 +267,12 @@ internal static class Downloads
                 if (learned != null && OwnerLooksLike(learned, part.OwnerPid)) learned = null;
                 string label = part.Name.Length > 0 ? part.Name
                     : BrowserDownloads.NameFor(part.Path) ?? learned ?? "Downloading";
+                // nothing named this download, so the file on disk cannot be attributed to it
+                bool noName = part.Name.Length == 0 && label == "Downloading";
                 bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
                 found.Add(new DlItem("file:" + part.Path, label,
                                      noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99),
-                                     part.Bytes, noPct ? 0 : pTotal, noPct, part.Stalled, false, false,
+                                     part.Bytes, noPct ? 0 : pTotal, noPct, noName, part.Stalled, false, false,
                                      false, false, part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null,
                                      null, part.Path, part.OwnerPid, IntPtr.Zero));
             }
@@ -444,13 +452,20 @@ internal static class Downloads
     // SetForegroundWindow returns before the foreground has actually changed, so an immediate check said
     // "not us" and the keystroke was skipped — a button that did nothing at all. Never type unless the
     // window really came forward: a stray Ctrl+J belongs to whoever else held the foreground.
+    // Two attempts, and a longer wait than looks necessary. Observed intermittently on Edge: the first
+    // SetForegroundWindow returned but the window was still not in front 600ms later — restoring a window
+    // that Windows had tucked away takes longer than switching to a visible one, and a single short poll
+    // gave up and skipped the keystroke.
     private static bool FocusAndConfirm(IntPtr h)
     {
-        Focus(h);
-        for (int i = 0; i < 24 && Win32.GetForegroundWindow() != h; i++) Thread.Sleep(25);
-        bool got = Win32.GetForegroundWindow() == h;
-        CancelLog($"  focused={got}");
-        return got;
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            Focus(h);
+            for (int i = 0; i < 60 && Win32.GetForegroundWindow() != h; i++) Thread.Sleep(25);
+            if (Win32.GetForegroundWindow() == h) { CancelLog($"  focused=True attempt={attempt + 1}"); return true; }
+        }
+        CancelLog("  focused=False");
+        return false;
     }
 
     private static void SendCtrlJ()

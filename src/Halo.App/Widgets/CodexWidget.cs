@@ -23,20 +23,25 @@ internal sealed class CodexWidget : IWidget
     private readonly CodexSurface _surface;
     private readonly Action _cancel;
     private readonly Func<bool> _canCancelDesktop;
+    private readonly Action<CodexSnapshot?> _observeLimits;
 
     // one widget per surface: the ChatGPT desktop app and the codex CLI are separate sessions
-    public CodexWidget(CodexStatusStore store, CodexSurface surface, Action cancel, Func<bool>? canCancelDesktop = null)
+    public CodexWidget(CodexStatusStore store, CodexSurface surface, Action cancel,
+        Func<bool>? canCancelDesktop = null, Action<CodexSnapshot?>? observeLimits = null)
     {
         _store = store;
         _surface = surface;
         _cancel = cancel;
         _canCancelDesktop = canCancelDesktop ?? (static () => false);
+        _observeLimits = observeLimits ?? CodexLimits.UpdateFrom;
         CodexLimits.Attach(store);
     }
 
     private CodexSnapshot? Current => _store.Candidate(_surface);
 
     private static readonly Bitmap? OpenAiIcon = LoadIcon();
+    internal static Bitmap? PlainIcon => OpenAiIcon;
+    public float IconOffsetX => -1.25f;
     // icon-derived accent for the background wash; the OpenAI mark is white → ChatGPT green fallback
     private static readonly Color Accent = Fx.AccentOf(OpenAiIcon) is var a && a != Fx.White
         ? a : Color.FromArgb(16, 163, 127);
@@ -125,6 +130,7 @@ internal sealed class CodexWidget : IWidget
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
         var st = Current;
+        _observeLimits(st);
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         // mirrors ClaudeCodeWidget: the spent share of the usage window as a whisper-faint pill background,
@@ -618,10 +624,10 @@ internal sealed class CodexWidget : IWidget
     private static string? OutageText() =>
         CodexNetMon.NetDown ? "net error :(" : CodexNetMon.ApiDown ? "api error :(" : null;
 
-    // Codex-native tool names (rollout custom_tool_call, dotted prefix already stripped)
+    // codex has emitted both custom_tool_call and function_call names; dotted prefixes are already stripped
     private static string ToolVerb(string? tool) => tool switch
     {
-        "exec" or "shell" or "local_shell" or "exec_command" or "container" => "running…",
+        "exec" or "shell" or "shell_command" or "local_shell" or "exec_command" or "container" => "running…",
         "apply_patch" or "edit" or "write_file" => "patching…",
         "read_file" or "view" or "cat" => "reading…",
         "grep" or "rg" or "find" or "list_dir" or "ls" => "digging…",

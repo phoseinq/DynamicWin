@@ -16,6 +16,9 @@ internal interface IWidget
     // Real image for the circle/dropdown (album art, app icon). Overrides the glyph when non-null.
     Bitmap? IconImage => null;
 
+    // optical correction for asymmetric marks in the small app-strip circle; logical pixels
+    float IconOffsetX => 0f;
+
     // Only active widgets show in the pill / swap list. Bumps of Version force a re-render.
     bool IsActive { get; }
     int Version { get; }

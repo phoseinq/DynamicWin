@@ -28,7 +28,23 @@ $isControl = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::IsControlElementProperty, $true)
 $Desc = [System.Windows.Automation.TreeScope]::Descendants
 
-function Sweep { return $root.FindAll($Desc, $isControl) }
+# Chrome puts its downloads on a PAGE inside the frame window; Edge opens a FLYOUT, which is its own
+# top-level window. Searching only the frame's subtree therefore found Edge's menu button but never the
+# Cancel item inside the flyout, and reported "menu opened but no cancel item". Sweep every top-level
+# window the browser process owns instead of just the one we were handed.
+$ownerPid = $root.Current.ProcessId
+$byPid = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $ownerPid)
+
+function Sweep {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($top in [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+                 [System.Windows.Automation.TreeScope]::Children, $byPid)) {
+        try { foreach ($e in $top.FindAll($Desc, $isControl)) { [void]$out.Add($e) } } catch { }
+    }
+    if ($out.Count -eq 0) { foreach ($e in $root.FindAll($Desc, $isControl)) { [void]$out.Add($e) } }
+    return $out
+}
 
 function Named($all, $labels) {
     $r = @()

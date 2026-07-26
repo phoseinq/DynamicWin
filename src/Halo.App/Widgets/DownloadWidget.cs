@@ -455,7 +455,8 @@ internal sealed class DownloadWidget : IWidget
             using var nf = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
             using var nb = new SolidBrush(Mul(White, fade));
             float right = w - tx - 14;
-            if (!Downloads.Waiting && Downloads.Downloaded > 0) // show what has actually landed
+            // NoBytes: nothing tied the file on disk to this download, so its length is not progress
+            if (!Downloads.Waiting && !Downloads.NoBytes && Downloads.Downloaded > 0)
             {
                 string got = Bytes(Downloads.Downloaded);
                 using var sf2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);

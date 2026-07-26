@@ -39,12 +39,11 @@ internal sealed class CodexLimitsStore
             return;
 
         var next = new CodexCachedLimits(primary, secondary);
-        if (!Equals(Current, next))
-        {
-            Current = next;
-            Version++;
-        }
+        if (Equals(Current, next))
+            return;
 
+        Current = next;
+        Version++;
         LastSuccess = _clock();
         Save();
     }

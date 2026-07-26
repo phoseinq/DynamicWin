@@ -1190,6 +1190,21 @@ internal sealed class NotchController
         return false;
     }
 
+    internal static Bitmap? MenuRowImage(IWidget[] widgets, int[] group)
+    {
+        if (group.Length == 0) return null;
+        if (group.Length < 2) return widgets[group[0]].IconImage;
+        return widgets[group[0]] switch
+        {
+            ClaudeCodeWidget => ClaudeCodeWidget.PlainIcon,
+            CodexWidget => CodexWidget.PlainIcon,
+            _ => widgets[group[0]].IconImage,
+        };
+    }
+
+    internal static float MenuRowImageOffset(IWidget[] widgets, int[] group)
+        => group.Length == 0 ? 0f : widgets[group[0]].IconOffsetX;
+
     private void Apply(float t)
     {
         float e = EaseOutBack(t);
@@ -1234,8 +1249,8 @@ internal sealed class NotchController
             Appear = SmoothStep(_stripT),
             // an app with several sessions shows its plain mark on the row; the fan carries the badges
             RowIcons = groups.ConvertAll(gr => _widgets[gr[0]].Icon).ToArray(),
-            RowImages = groups.ConvertAll(gr => gr.Length >= 2 && _widgets[gr[0]] is ClaudeCodeWidget
-                ? ClaudeCodeWidget.PlainIcon : _widgets[gr[0]].IconImage).ToArray(),
+            RowImages = groups.ConvertAll(gr => MenuRowImage(_widgets, gr)).ToArray(),
+            RowImageOffsets = groups.ConvertAll(gr => MenuRowImageOffset(_widgets, gr)).ToArray(),
             RowCounts = groups.ConvertAll(gr => gr.Length >= 2 ? gr.Length : 0).ToArray(),
             SessIcons = groups.ConvertAll(gr => gr.Length >= 2
                 ? Array.ConvertAll(gr, i => _widgets[i].Icon) : Array.Empty<string>()).ToArray(),

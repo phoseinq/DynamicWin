@@ -93,6 +93,42 @@ public sealed class CodexRolloutTests
     }
 
     [Fact]
+    public void Parse_FunctionCallPublishesShellCommand()
+    {
+        var path = TempRollout(
+            Event("task_started", "\"model_context_window\":353400"),
+            Event("function_call", "\"name\":\"shell_command\""));
+
+        var value = CodexRollout.Parse(path)!;
+
+        Assert.Equal("working", value.State);
+        Assert.Equal("shell_command", value.CurrentTool);
+    }
+
+    [Fact]
+    public void Parse_FunctionCallOutputReturnsToThinkingState()
+    {
+        var path = TempRollout(
+            Event("task_started", "\"model_context_window\":353400"),
+            Event("function_call", "\"name\":\"shell_command\""),
+            Event("function_call_output", "\"call_id\":\"call-1\""));
+
+        var value = CodexRollout.Parse(path)!;
+
+        Assert.Equal("working", value.State);
+        Assert.Null(value.CurrentTool);
+    }
+
+    [Fact]
+    public void IdentifySurface_RejectsSubagentRollout()
+    {
+        var path = TempRollout(
+            "{\"type\":\"session_meta\",\"payload\":{\"originator\":\"Codex Desktop\",\"parent_thread_id\":\"parent-123\"}}");
+
+        Assert.Null(CodexRollout.IdentifySurface(path));
+    }
+
+    [Fact]
     public void Select_PrefersActiveDesktopOverCli()
     {
         var now = DateTimeOffset.UtcNow;
