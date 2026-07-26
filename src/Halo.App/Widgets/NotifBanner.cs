@@ -6,15 +6,21 @@ using Halo.Notifications;
 
 namespace Halo.Widgets;
 
-// The pill morphed into a notification banner: app icon + app name + title + one short summary
-// line; the grabber bar at the bottom expands it into the full message. Pure rendering — the
+// The pill morphed into a notification banner: app icon + app name + title + up to two summary
+// lines; the grabber bar at the bottom expands it into the full message. Pure rendering — the
 // open/close/detail state machine lives in NotchController.
 internal static class NotifBanner
 {
-    public const int W = 470, SummaryH = 112;
+    public const int W = 470, SummaryH = 128;
     private const float IconD = 52, IconX = 20;
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
+    // The summary is the line people actually read at a glance, and it was the least legible thing on the
+    // banner: Dim (alpha 150) at 13px, shrinking further the more there was to read. Body text gets its own
+    // near-white tone and holds its size; the eyebrow stays quiet because it is a label, not content.
+    private static readonly Color BodyInk = Color.FromArgb(205, 255, 255, 255);
+    private static readonly Color EyebrowInk = Color.FromArgb(175, 255, 255, 255);
+    private const float EyebrowPx = 11f, TitlePx = 18.5f, BodyPx = 14.5f, BodyLinePx = 19f;
 
     private static float TextX => IconX + IconD + 14;
 
@@ -50,13 +56,9 @@ internal static class NotifBanner
         g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y, r.Width - 26, r.Height), sf);
     }
 
-    // slightly smaller type overall, shrinking a touch more as the toast's text gets longer
-    // (1.0 for short toasts → 0.86 for walls of text), so long titles/bodies fit gracefully
-    private static float FontScale(NotifItem n)
-    {
-        int len = Math.Max(n.Title.Length, n.Body.Length / 2);
-        return Math.Clamp(1f - 0.14f * (len - 28) / 50f, 0.86f, 1f);
-    }
+    // There used to be a FontScale here that shrank every string as the toast got longer (1.0 → 0.86).
+    // That is backwards: the toasts with the most to say ended up the hardest to read. Long text is handled
+    // by the second summary line and the ellipsis instead, and the type keeps one size.
 
     // measured height of the detail state (clamped so a novel doesn't eat the screen)
     public static int DetailHeight(NotifItem n)
@@ -64,7 +66,7 @@ internal static class NotifBanner
         try
         {
             using var g = Graphics.FromHwnd(IntPtr.Zero);
-            using var f = new Font("Segoe UI", 13f * FontScale(n), GraphicsUnit.Pixel);
+            using var f = new Font("Segoe UI", BodyPx, GraphicsUnit.Pixel);
             var sz = g.MeasureString(n.Body, f, (int)(W - TextX - 22));
             return Math.Clamp(72 + (int)sz.Height + 22, SummaryH + 26, 280);
         }
@@ -100,13 +102,12 @@ internal static class NotifBanner
         }
 
         float tx = IconX + thumbW + 16, tw = w - tx - 22;
-        float k = FontScale(n);
-        using var eyeF = new Font("Segoe UI", 10.5f * k, GraphicsUnit.Pixel);
-        using var titleF = new Font("Segoe UI Semibold", 17.5f * k, GraphicsUnit.Pixel);
-        using var bodyF = new Font("Segoe UI", 13f * k, GraphicsUnit.Pixel);
+        using var eyeF = new Font("Segoe UI", EyebrowPx, GraphicsUnit.Pixel);
+        using var titleF = new Font("Segoe UI Semibold", TitlePx, GraphicsUnit.Pixel);
+        using var bodyF = new Font("Segoe UI", BodyPx, GraphicsUnit.Pixel);
 
         // eyebrow row: APP NAME (uppercase, muted) on the left, arrival time pinned to the right
-        using (var b = new SolidBrush(Mul(Dim, a * 0.82f)))
+        using (var b = new SolidBrush(Mul(EyebrowInk, a)))
         {
             string time = RelTime(n.Time);
             float timeW = 0;
@@ -126,14 +127,16 @@ internal static class NotifBanner
         using (var f = LineFmt(n.Title))
             g.DrawString(n.Title, titleF, b, new RectangleF(tx, 41, tw, 26), f);
 
-        // summary: one short truncated line — it cross-fades into the full wrapped text as the
-        // pill grows (detail 0→1), so the reveal reads as one continuous motion
+        // summary: two wrapped lines — they cross-fade into the full text as the pill grows
+        // (detail 0→1), so the reveal reads as one continuous motion
         if (detail < 0.999f && n.Body.Length > 0)
-            using (var b = new SolidBrush(Mul(Dim, a * (1f - detail))))
-            using (var f = LineFmt(n.Body))
-                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, 19), f);
+            using (var b = new SolidBrush(Mul(BodyInk, a * (1f - detail))))
+            using (var f = SummaryFmt(n.Body))
+                // +6: GenericTypographic carries LineLimit, which lays out only WHOLE lines. Two 14.5px
+                // lines measure ~38.6px, so an exactly-38px box silently dropped the second one.
+                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, BodyLinePx * 2 + 6), f);
         if (detail > 0.01f && n.Body.Length > 0)
-            using (var b = new SolidBrush(Mul(Dim, a * detail)))
+            using (var b = new SolidBrush(Mul(BodyInk, a * detail)))
             using (var f = WrapFmt(n.Body))
                 g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, h - 70 - 14), f);
 
@@ -232,6 +235,16 @@ internal static class NotifBanner
     {
         var sf = new StringFormat(StringFormat.GenericTypographic)
         { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+        if (IsRtl(s)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
+        return sf;
+    }
+
+    // Two-line summary: wraps, then ellipsizes whatever is left. EllipsisCharacter is not optional here —
+    // without a trimming mode GDI+ clips the third line through the middle of the glyphs instead of ending
+    // the second one cleanly, and on Persian text the cut lands on the wrong side of the string.
+    private static StringFormat SummaryFmt(string s)
+    {
+        var sf = new StringFormat(StringFormat.GenericTypographic) { Trimming = StringTrimming.EllipsisCharacter };
         if (IsRtl(s)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
         return sf;
     }

@@ -152,6 +152,10 @@ internal static class Program
             {
                 App = Halo.Notifications.NotifItem.ScreenshotApp,
                 Title = Halo.Notifications.NotifItem.ScreenshotTitle,
+                // deliberately mixed FA+EN and longer than two lines: this hook exists to catch RTL
+                // mangling and to show where the summary ellipsis actually lands
+                Body = "تصویر در clipboard ذخیره شد — برای ویرایش روی بنر کلیک کنید یا Ctrl+V را "
+                     + "در هر برنامه‌ای بزنید تا همان‌جا paste شود.",
                 Preview = shot,
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
