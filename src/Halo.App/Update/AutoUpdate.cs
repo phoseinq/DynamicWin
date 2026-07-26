@@ -92,9 +92,25 @@ internal static class AutoUpdate
         var (_, fails) = State();
         bool ok = false;
         try { ok = await TryUpdate(); }
-        catch { }
+        catch (Exception ex) { Log("failed: " + ex.GetType().Name + ": " + ex.Message); }
         // "nothing new" is a successful check: it proves we reached GitHub, so the ladder resets.
-        Save(DateTime.UtcNow, ok ? 0 : fails + 1);
+        int next = ok ? 0 : fails + 1;
+        Log($"attempt ok={ok} fails={next} nextIn={Wait(next)}");
+        Save(DateTime.UtcNow, next);
+    }
+
+    // A background feature nobody is watching needs a trace, or a machine that silently stopped updating
+    // cannot be told apart from one that had nothing to update.
+    internal static void Log(string s)
+    {
+        try
+        {
+            string p = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                                    "Halo", "update-log.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+            File.AppendAllText(p, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {s}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private static async Task<bool> TryUpdate()
@@ -115,6 +131,7 @@ internal static class AutoUpdate
 
         string tag = root.GetProperty("tag_name").GetString() ?? "";
         var current = typeof(AutoUpdate).Assembly.GetName().Version ?? new Version(0, 0);
+        Log($"latest={tag} running={current}");
         if (!IsNewer(tag, current)) return true;   // already current — a good outcome, not a failure
 
         string? url = null;

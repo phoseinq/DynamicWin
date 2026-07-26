@@ -157,6 +157,7 @@ internal static class Program
                 // where its ellipsis actually lands
                 Body = "Saved to the clipboard. Click the banner to edit it, or press Ctrl+V in any "
                      + "app to paste it straight in.",
+                Code = "482913",   // so the hook also shows the copy pill, which has its own alignment
                 Preview = shot,
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);

@@ -24,36 +24,50 @@ internal static class NotifBanner
 
     private static float TextX => IconX + IconD + 14;
 
-    // Copy-code button: a small pill on the right of the eyebrow row, shown only when the toast carries a
+    // Copy-code button: a small pill on the right of the TITLE row, shown only when the toast carries a
     // detected verification code. Returns Empty when there's no code (so NotchController skips the hit-test).
+    // Centred on the title row's own centre instead of sitting 3px above it. Width comes from the longer of
+    // the code and "Copied", so pressing it does not resize the pill under the cursor.
+    private const float TitleTop = 41f, TitleH = 26f, CopyH = 22f;
+
     public static RectangleF CopyRect(NotifItem n, int w)
     {
         if (string.IsNullOrEmpty(n.Code)) return RectangleF.Empty;
-        float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f, bh = 22; // fit "Copied" (6) too
-        return new RectangleF(w - bw - 20, 40, bw, bh);
+        float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f; // 6 = "Copied"
+        return new RectangleF(w - bw - 20, TitleTop + (TitleH - CopyH) / 2f, bw, CopyH);
     }
+
+    // Hover and the copied flip used to snap. Eased here the way DownloadWidget eases its fill: the banner
+    // redraws every frame while it is on screen, so a lerp per draw needs no timer of its own.
+    private static float _hoverEase, _copiedEase;
 
     private static void DrawCopyButton(Graphics g, NotifItem n, int w, float a)
     {
         var r = CopyRect(n, w);
-        if (r.IsEmpty) return;
+        if (r.IsEmpty) { _hoverEase = _copiedEase = 0f; return; }
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        _hoverEase += ((hov ? 1f : 0f) - _hoverEase) * 0.22f;
+        _copiedEase += ((n.Copied ? 1f : 0f) - _copiedEase) * 0.22f;
         var accent = Color.FromArgb(120, 185, 255);
-        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 64 : 34, accent), a)))
+        using (var bg = new SolidBrush(Mul(Color.FromArgb((int)(34 + 30 * _hoverEase), accent), a)))
         using (var p = Fx.Rounded(r, r.Height / 2f))
             g.FillPath(bg, p);
-        using (var pen = new Pen(Mul(Color.FromArgb(hov ? 120 : 70, accent), a), 1f))
+        using (var pen = new Pen(Mul(Color.FromArgb((int)(70 + 50 * _hoverEase), accent), a), 1f))
         using (var p = Fx.Rounded(r, r.Height / 2f))
             g.DrawPath(pen, p);
         // copy glyph (Segoe MDL2 "Copy" E8C8) + the code
         using var gf = new Font("Segoe MDL2 Assets", 11f, GraphicsUnit.Pixel);
         using var cf = new Font("Segoe UI Semibold", 12.5f, GraphicsUnit.Pixel);
-        using var b = new SolidBrush(Mul(White, a * (hov ? 1f : 0.9f)));
-        using var sf = new StringFormat(StringFormat.GenericTypographic) { LineAlignment = StringAlignment.Center };
+        using var b = new SolidBrush(Mul(White, a * (0.9f + 0.1f * _hoverEase)));
+        // LineAlignment.Center centres the EM BOX, which reserves descender space, so strings with no
+        // descenders ("Copied", digits) sat visibly low inside the pill. Fx.CenterLift derives the
+        // correction from each font's own metrics, so it is right for both fonts used here.
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
         string glyph = n.Copied ? "" : ""; // Accept (check) once copied, else Copy
         string label = n.Copied ? "Copied" : n.Code;
-        g.DrawString(glyph, gf, b, new RectangleF(r.X + 9, r.Y, 16, r.Height), sf);
-        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y, r.Width - 26, r.Height), sf);
+        g.DrawString(glyph, gf, b, new RectangleF(r.X + 6, r.Y - Fx.CenterLift(gf), 18, r.Height), sf);
+        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y - Fx.CenterLift(cf), r.Width - 30, r.Height), sf);
     }
 
     // There used to be a FontScale here that shrank every string as the toast got longer (1.0 → 0.86).

@@ -251,10 +251,16 @@ internal static class Downloads
                 // named by its title and once by its file
                 if (part.OwnerPid != 0 && winPids.Contains((uint)part.OwnerPid)) continue;
                 long pTotal = BrowserDownloads.TotalFor(part.Path);
+                // Edge never renames its partial away from "Unconfirmed 12345.crdownload" and writes no
+                // History row until the download ends, so there is genuinely no filename to show. The
+                // learned app name used to fill that gap, which meant the title read "msedge" next to
+                // Edge's own icon — the icon already says which app it is, so the name added nothing and
+                // read like a bug. Fall through to "Downloading" and let the icon carry the identity;
+                // AppFor is still worth asking for a downloader whose icon we could not resolve.
+                string? learned = Downloaders.AppFor(System.IO.Path.GetDirectoryName(part.Path));
+                if (learned != null && OwnerLooksLike(learned, part.OwnerPid)) learned = null;
                 string label = part.Name.Length > 0 ? part.Name
-                    : BrowserDownloads.NameFor(part.Path)
-                      ?? Downloaders.AppFor(System.IO.Path.GetDirectoryName(part.Path))
-                      ?? "Downloading";
+                    : BrowserDownloads.NameFor(part.Path) ?? learned ?? "Downloading";
                 bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
                 found.Add(new DlItem("file:" + part.Path, label,
                                      noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99),
@@ -532,6 +538,19 @@ internal static class Downloads
     }
 
     private const string StoreAumid = "Microsoft.WindowsStore_8wekyb3d8bbwe!App";
+
+    // Is this "name" just the writing process's own exe name? Then it is not a title, it is the icon
+    // spelled out, and the pill already draws the icon.
+    private static bool OwnerLooksLike(string name, int pid)
+    {
+        if (pid == 0) return false;
+        try
+        {
+            string stem = System.IO.Path.GetFileNameWithoutExtension(ExeOfPid(pid) ?? "");
+            return stem.Length > 0 && string.Equals(stem, name, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
 
     // icon source for a partial-file download: the exe of whichever process is writing the file
     private static string? ExeOfPid(int pid)
