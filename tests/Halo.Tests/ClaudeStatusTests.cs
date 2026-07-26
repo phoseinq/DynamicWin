@@ -177,6 +177,31 @@ public sealed class ClaudeStatusTests
         Assert.Null(store.SessionLive(2));
     }
 
+    // The session circle wears a number badge so two sessions can be told apart. One session badged "1"
+    // is noise -- it read as a notification count -- so the widget asks for the live count first, and only
+    // numbers the icon once there is something to disambiguate.
+    [Fact]
+    public void Sessions_LiveCountIsWhatDecidesWhetherIconsGetNumbered()
+    {
+        using var temp = new TempStatus();
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        WriteStatus(temp.Session(100), state: "working", pid: 100, updatedAt: now);
+        var one = NewStore(temp, now, _ => now.AddMinutes(-10));
+        Assert.Equal(1, one.LiveSessions());
+
+        WriteStatus(temp.Session(200), state: "idle", pid: 200, updatedAt: now);
+        var two = NewStore(temp, now, _ => now.AddMinutes(-10));
+        Assert.Equal(2, two.LiveSessions());
+    }
+
+    [Fact]
+    public void Sessions_NoLiveSessionsCountsZero()
+    {
+        using var temp = new TempStatus();
+        var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
+        Assert.Equal(0, NewStore(temp, now, _ => now.AddMinutes(-10)).LiveSessions());
+    }
+
     [Fact]
     public void Sessions_DedupeLegacyAndPerPidFilesBySamePid()
     {

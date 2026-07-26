@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -54,7 +55,9 @@ internal static class Fx
             {
                 float dx = (x - n / 2f) / (n / 2f), dy = (y - n / 2f) / (n / 2f);
                 float t = MathF.Min(1f, MathF.Sqrt(dx * dx + dy * dy));
-                float a = MathF.Pow(1f - t, 1.8f) * 255f + rnd.Next(-5, 6);
+
+                float f = MathF.Pow(1f - t, 1.8f);
+                float a = f * (255f + rnd.Next(-11, 12));
                 int i = y * data.Stride + x * 4;
                 byte av = (byte)Math.Clamp((int)a, 0, 255);
                 bytes[i] = bytes[i + 1] = bytes[i + 2] = av;
@@ -83,7 +86,8 @@ internal static class Fx
             Matrix22 = accent.B / 255f,
             Matrix33 = alpha * fade / 255f,
         });
-        ia.SetWrapMode(WrapMode.TileFlipXY);
+
+        ia.SetWrapMode(WrapMode.Clamp);
         g.DrawImage(GlowTex, new Rectangle((int)(cx - rx), (int)(cy - ry), (int)(rx * 2), (int)(ry * 2)),
             0, 0, GlowTex.Width, GlowTex.Height, GraphicsUnit.Pixel, ia);
         g.InterpolationMode = oldInterp;
@@ -185,6 +189,32 @@ internal static class Fx
         }
         catch { return 0f; }
     }
+
+    private static readonly Dictionary<string, float> _inkOffsets = new();
+
+    public static float InkCentreOffset(Font f, string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0f;
+        string key = f.FontFamily.Name + "|" + f.Style + "|" + f.Size.ToString("0.##") + "|" + s;
+        lock (_inkOffsets)
+        {
+            if (_inkOffsets.TryGetValue(key, out float v)) return v;
+            float off = 0f;
+            try
+            {
+                using var path = new GraphicsPath();
+                using var sf = new StringFormat(StringFormat.GenericTypographic);
+                path.AddString(s, f.FontFamily, (int)f.Style, f.Size, PointF.Empty, sf);
+                var b = path.GetBounds();
+                if (b.Height > 0) off = -(b.Top + b.Height / 2f);
+            }
+            catch { }
+            _inkOffsets[key] = off;
+            return off;
+        }
+    }
+
+    public static float CapCentreOffset(Font f) => InkCentreOffset(f, "H");
 
     public static Color Alpha(Color c, float a)
         => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);

@@ -826,7 +826,9 @@ internal sealed class NotchController
         _lastSec = DateTime.Now.Second;
 
         bool forceAnim = false;
-        if (_widgets[_primary].Animating && _progress < 0.5f && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }
+        bool animating = _widgets[_primary].Animating;
+        if (animating && _progress >= 0.5f) forceAnim = true;
+        else if (animating && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }
 
         bool overNow = _notif != null ? overNotif : hovered && next > 0.98f;
         var mouse = _notif != null
@@ -835,6 +837,8 @@ internal sealed class NotchController
         bool mouseMoved = WidgetInput.Over != overNow || (overNow && WidgetInput.Mouse != mouse);
         WidgetInput.Over = overNow;
         WidgetInput.Mouse = mouse;
+
+        WidgetInput.Down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
 
         float prevStrip = _stripT;
         _stripT = Math.Clamp(_stripT + (AltIndices().Length >= 1 ? 1 : -1) * _dt / 0.22f, 0f, 1f);
@@ -1558,6 +1562,22 @@ internal sealed class NotchController
         try { System.IO.File.WriteAllText(PinPath, _pinned ? "1" : "0"); } catch { }
     }
 
+    private bool PressOnControl(Win32.POINT p)
+    {
+        if (_progress <= 0.9f || _primary < 0 || _primary >= _widgets.Length) return false;
+        try
+        {
+            foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
+            {
+                float bx = _el + r.X * S, by = _et + r.Y * S;
+                if (p.X >= bx - 6 * S && p.X < bx + (r.Width + 6) * S
+                    && p.Y >= by - 8 * S && p.Y < by + (r.Height + 8) * S) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private void UpdateMove(Win32.POINT p, bool down, bool hovered)
     {
         int centre = _notch.WorkLeft + _notch.WorkWidth / 2;
@@ -1574,7 +1594,7 @@ internal sealed class NotchController
             return;
         }
 
-        bool holding = down && hovered && !_resizing && _notif == null;
+        bool holding = down && hovered && !_resizing && _notif == null && !PressOnControl(p);
         bool still = Math.Abs(p.X - _holdAnchor.X) <= 8 && Math.Abs(p.Y - _holdAnchor.Y) <= 8;
         if (holding && _holdStart != DateTime.MaxValue && still)
         {

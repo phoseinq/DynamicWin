@@ -44,6 +44,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         get
         {
             if (ClaudeIcon is null) return null;
+            if (_store.LiveSessions() < 2) return ClaudeIcon;
             return _badged ??= Fx.Badge(ClaudeIcon, (char)('1' + _slot));
         }
     }
@@ -51,6 +52,9 @@ internal sealed class ClaudeCodeWidget : IWidget
     public bool IsActive => Live is not null;
     private CcStatus? Live => _store.SessionLive(_slot);
     public Color? Ring => Live is { } st ? RingColor(st) : null;
+
+    public float RingProgress
+        => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)

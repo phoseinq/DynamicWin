@@ -445,11 +445,14 @@ internal sealed class LayeredNotch
                     var accent = Widgets.Fx.AccentOf(img);
                     if (accent != Widgets.Fx.White)
                     {
-                        var clip = cg.Clip;
-                        cg.SetClip(path);
-                        using var gb = new SolidBrush(Color.FromArgb((int)(20 * ia), accent));
-                        cg.FillRectangle(gb, new RectangleF(cx, cy, D, D));
-                        cg.Clip = clip;
+                        using var wash = new System.Drawing.Drawing2D.GraphicsPath();
+                        wash.AddEllipse(cx - D * 0.1f, cy - D * 0.1f, D * 1.2f, D * 1.2f);
+                        using var pgb = new System.Drawing.Drawing2D.PathGradientBrush(wash)
+                        {
+                            CenterColor = Color.FromArgb((int)(34 * ia), accent),
+                            SurroundColors = new[] { Color.FromArgb(0, accent) },
+                        };
+                        cg.FillPath(pgb, wash);
                     }
                     DrawCircleImage(cg, img, cx + imageOffsetX * ss, cy, D, ia);
                 }

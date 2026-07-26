@@ -90,6 +90,7 @@ internal sealed class MediaWidget : IWidget
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
             _totalDelay = 0;
             if (_delays != null) foreach (var d in _delays) _totalDelay += d;
+            _animatedArt = _frames is { Length: > 1 } && _totalDelay > 0;
             _artKey = key;
             _accent = _art != null ? Fx.Accent(_art) : White;
             _palette = Palette(_accent);
@@ -439,17 +440,23 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
 
         EnsureArt();
+        float dt = Dt();
 
         const float artX = 26, artY = 26, artSize = 132;
-        Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 0.85f, h * 1.2f, 38, _accent);
+
+        Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 1.35f, h * 1.9f, 38, _accent);
         DrawArt(g, artX, artY, artSize, fade);
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
         using var titleF = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+
+        var titleRow = new RectangleF(tx, 34, tw, titleF.Height + 4);
+        titleRow.Inflate(6f, 6f);
+        bool onTitle = WidgetInput.Over && titleRow.Contains(WidgetInput.Mouse);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawLine(g, title, titleF, tb, tx, 34, tw);
+            DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, onTitle, dt);
         if (!string.IsNullOrEmpty(artist))
             using (var ab = new SolidBrush(Mul(Dim, fade)))
                 DrawLine(g, artist, bodyF, ab, tx, 66, tw);
@@ -458,36 +465,66 @@ internal sealed class MediaWidget : IWidget
         float frac = end > TimeSpan.Zero ? (float)Math.Clamp(now / end, 0, 1) : 0f;
         int epoch; lock (_lock) epoch = _trackEpoch;
         if (epoch != _shownEpoch) { _shownEpoch = epoch; _fracShown = frac; }
-        _fracShown = _fracShown < 0 ? frac : _fracShown + (frac - _fracShown) * 0.18f;
-        if (Math.Abs(frac - _fracShown) < 0.002f) _fracShown = frac;
-        float by = 116, bh = 5;
+        _fracShown = _fracShown < 0 ? frac : Ease(_fracShown, frac, dt, 0.10f);
+        if (Math.Abs(frac - _fracShown) < 0.0004f) _fracShown = frac;
+
+        var seek = SeekRect(w);
+        var seekHit = seek; seekHit.Inflate(6f, 10f);
+        bool onSeek = WidgetInput.Over && seekHit.Contains(WidgetInput.Mouse);
+        bool seekable; lock (_lock) seekable = _seekEnabled;
+        if (WidgetInput.Down && !_wasDown && onSeek && seekable) _scrubbing = true;
+        if (_scrubbing)
+        {
+            _scrubFrac = Math.Clamp((WidgetInput.Mouse.X - seek.X) / Math.Max(1f, seek.Width), 0f, 1f);
+            if (!WidgetInput.Down) { Seek(_scrubFrac); _scrubbing = false; _fracShown = _scrubFrac; }
+        }
+        _seekHover = Ease(_seekHover, _scrubbing ? 1f : 0f, dt, 0.07f);
+        float st = _seekHover;
+        if (_scrubbing) _fracShown = _scrubFrac;
+        const float barCy = 118.5f, bhRest = 5f;
+        float bh = bhRest * (1f + 2f * st);
+        float by = barCy - bh / 2f;
         Fill(g, tx, by, tw, bh, Mul(Track, fade));
         if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(White, fade));
         if (end > TimeSpan.Zero)
         {
             using var eb = new SolidBrush(Mul(Dim, fade));
-            g.DrawString(Fmt(now), timeF, eb, tx, by + 8);
+            float ty = barCy + bh / 2f + 3f;
+
+            var shown = _scrubbing ? end * _scrubFrac : now;
+            g.DrawString(Fmt(shown), timeF, eb, tx, ty);
             var ts = g.MeasureString(Fmt(end), timeF);
-            g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, by + 8);
+            g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, ty);
         }
 
         var (vbar, mute) = VolLayout(w);
         bool muted = _meter.Muted();
         float volNow = muted ? 0f : _meter.Volume();
-        _volShown = _volShown < 0 ? volNow : _volShown + (volNow - _volShown) * 0.30f;
-        if (Math.Abs(volNow - _volShown) < 0.004f) _volShown = volNow;
-        float vol = _volShown;
+        _volShown = _volShown < 0 ? volNow : Ease(_volShown, volNow, dt, 0.06f);
+        if (Math.Abs(volNow - _volShown) < 0.002f) _volShown = volNow;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var volHit = RectangleF.Union(vbar, mute); volHit.Inflate(4f, 6f);
-        bool vHov = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
-        _volHover += ((vHov ? 1f : 0f) - _volHover) * 0.35f;
+
+        var volHit = vbar; volHit.Inflate(8f, 10f);
+        bool onVol = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
+        if (WidgetInput.Down && !_wasDown && onVol) _volScrubbing = true;
+        if (_volScrubbing)
+        {
+            float f = Math.Clamp((WidgetInput.Mouse.X - vbar.X) / Math.Max(1f, vbar.Width), 0f, 1f);
+            _volShown = f;
+
+            if (Math.Abs(f - _volSent) > 0.004f) { SetVol(f); _volSent = f; }
+            if (!WidgetInput.Down) { SetVol(f); _volScrubbing = false; }
+        }
+        float vol = _volShown;
+        _volHover = Ease(_volHover, _volScrubbing ? 1f : 0f, dt, 0.07f);
         float vt = _volHover;
+        _wasDown = WidgetInput.Down;
         using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(13 + 16 * vt), 255, 255, 255), fade)))
             g.FillEllipse(fb, mute);
         using (var pen = new Pen(Mul(Color.FromArgb((int)(28 + 26 * vt), 255, 255, 255), fade), 1f))
             g.DrawEllipse(pen, mute);
         DrawGlyphSoft(g, mute, muted ? "\uE74F" : "\uE767", 16f, muted ? fade * 0.55f : fade * (0.8f + 0.2f * vt));
-        float vy = vbar.Y + vbar.Height / 2f, bh2 = 4f + 2f * vt;
+        float vy = vbar.Y + vbar.Height / 2f, bh2 = 4f * (1f + 2f * vt);
         Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width, bh2, Mul(Color.FromArgb(34, 255, 255, 255), fade));
         if (vol > 0)
             Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width * vol, bh2,
@@ -540,9 +577,23 @@ internal sealed class MediaWidget : IWidget
     }
 
     private readonly float[] _btnHover = new float[8];
-    private float _volHover;
+    private float _volHover, _seekHover;
+    private bool _wasDown, _scrubbing, _volScrubbing;
+    private float _scrubFrac, _volSent = -1f;
     private float _volShown = -1f, _fracShown = -1f;
     private int _trackEpoch, _shownEpoch;
+
+    private long _lastTick;
+    private float Dt()
+    {
+        long now = Environment.TickCount64;
+        float dt = _lastTick == 0 ? 1f / 60f : (now - _lastTick) / 1000f;
+        _lastTick = now;
+        return Math.Clamp(dt, 1f / 240f, 0.1f);
+    }
+
+    private static float Ease(float shown, float target, float dt, float tau)
+        => shown + (target - shown) * (1f - MathF.Exp(-dt / tau));
 
     private static readonly FontFamily FluentFamily = new("Segoe Fluent Icons");
 
@@ -602,7 +653,14 @@ internal sealed class MediaWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    public bool Animating { get { lock (_lock) { return _title != null && _playing; } } }
+    private volatile bool _animatedArt;
+
+    private volatile bool _marqueeScrolling;
+
+    public bool Animating
+    {
+        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling); } }
+    }
 
     public Color? Ring
     {
@@ -731,6 +789,52 @@ internal sealed class MediaWidget : IWidget
         using var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter };
         if (IsRtl(text)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
         g.DrawString(text, f, b, new RectangleF(x, y, w, f.Height + 4), sf);
+    }
+
+    private float _marquee;
+    private float _marqueeHold;
+
+    internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 0.35f;
+
+    internal static (float offset, float hold) MarqueeStep(float offset, float hold, float dt, float span)
+    {
+        if (span <= 0f) return (0f, 0f);
+        if (hold < MarqueeHold) return (offset, hold + dt);
+        offset += MarqueeSpeed * dt;
+        return offset >= span ? (offset - span, 0f) : (offset, hold);
+    }
+
+    private void DrawScrollingLine(Graphics g, string text, Font f, Brush b, float x, float y, float w,
+        bool hovered, float dt)
+    {
+        float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
+        if (textW <= w || !hovered)
+        {
+
+            if (!hovered) { _marquee = 0f; _marqueeHold = 0f; }
+            _marqueeScrolling = false;
+            DrawLine(g, text, f, b, x, y, w);
+            return;
+        }
+        _marqueeScrolling = true;
+
+        float span = textW + MarqueeGap;
+        (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span);
+
+        var state = g.Save();
+        g.SetClip(new RectangleF(x, y, w, f.Height + 4));
+        bool rtl = IsRtl(text);
+        using var sf = new StringFormat(StringFormatFlags.NoWrap);
+        if (rtl) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
+        float h2 = f.Height + 4;
+        for (int pass = 0; pass < 2; pass++)
+        {
+
+            float ox = rtl ? x + w - textW + (_marquee - pass * span)
+                           : x - (_marquee - pass * span);
+            g.DrawString(text, f, b, new RectangleF(ox, y, textW + 2, h2), sf);
+        }
+        g.Restore(state);
     }
 
     private static bool IsRtl(string s)

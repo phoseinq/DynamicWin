@@ -261,6 +261,14 @@ internal sealed class StatusStore
         }
     }
 
+    public int LiveSessions()
+    {
+        int n = 0;
+        for (int i = 0; i < MaxSessions; i++)
+            if (SessionLive(i) is not null) n++;
+        return n;
+    }
+
     public CcStatus? SessionLive(int slot)
     {
         var now = _clock();

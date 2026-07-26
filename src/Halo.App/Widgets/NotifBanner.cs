@@ -55,11 +55,12 @@ internal static class NotifBanner
         using var b = new SolidBrush(Mul(White, a * (0.9f + 0.1f * _hoverEase)));
 
         using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        { Alignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        float cy = r.Y + r.Height / 2f;
         string glyph = n.Copied ? "" : "";
         string label = n.Copied ? "Copied" : n.Code;
-        g.DrawString(glyph, gf, b, new RectangleF(r.X + 6, r.Y - Fx.CenterLift(gf), 18, r.Height), sf);
-        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y - Fx.CenterLift(cf), r.Width - 30, r.Height), sf);
+        g.DrawString(glyph, gf, b, new PointF(r.X + 15f, cy + Fx.InkCentreOffset(gf, glyph)), sf);
+        g.DrawString(label, cf, b, new PointF(r.X + 24f + (r.Width - 30f) / 2f, cy + Fx.CapCentreOffset(cf)), sf);
     }
 
     public static int DetailHeight(NotifItem n)

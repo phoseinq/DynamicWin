@@ -23,6 +23,8 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
 
+        if (args.Length >= 2 && args[0] == "--render-copy") { RenderCopy(args[1]); return; }
+
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
 
         if (args.Length >= 1 && args[0] == "--cancel-download") { CancelDownload(); return; }
@@ -212,6 +214,57 @@ internal static class Program
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
         }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static void RenderCopy(string outPath)
+    {
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH;
+        const int Zoom = 4, Pad = 6;
+
+        var states = new[] { false, true };
+        var shots = new System.Drawing.Bitmap[states.Length];
+        var rects = new System.Drawing.RectangleF[states.Length];
+
+        for (int s = 0; s < states.Length; s++)
+        {
+            var n = new Halo.Notifications.NotifItem
+            {
+                App = "Aurora", Title = "Verify your sign-in",
+                Body = "Your verification code is 482913. It expires in 10 minutes.",
+                Code = "482913", Copied = states[s],
+            };
+            rects[s] = Halo.Widgets.NotifBanner.CopyRect(n, W);
+            var full = new System.Drawing.Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var g = System.Drawing.Graphics.FromImage(full))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(255, 18, 18, 22));
+                Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
+            }
+            shots[s] = full;
+        }
+
+        int cw = (int)Math.Ceiling(rects[0].Width) + Pad * 2;
+        int ch = (int)Math.Ceiling(rects[0].Height) + Pad * 2;
+        using var bmp = new System.Drawing.Bitmap(cw * Zoom, ch * Zoom * states.Length);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            g.Clear(System.Drawing.Color.FromArgb(255, 12, 12, 14));
+            for (int s = 0; s < states.Length; s++)
+            {
+                var r = rects[s];
+                var src = new System.Drawing.Rectangle((int)r.X - Pad, (int)r.Y - Pad, cw, ch);
+                var dst = new System.Drawing.Rectangle(0, s * ch * Zoom, cw * Zoom, ch * Zoom);
+                g.DrawImage(shots[s], dst, src, System.Drawing.GraphicsUnit.Pixel);
+
+                float mid = dst.Y + (Pad + r.Height / 2f) * Zoom;
+                using var guide = new System.Drawing.Pen(System.Drawing.Color.FromArgb(150, 255, 70, 70), 1f);
+                g.DrawLine(guide, dst.X, mid, dst.Right, mid);
+            }
+        }
+        foreach (var s in shots) s.Dispose();
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
