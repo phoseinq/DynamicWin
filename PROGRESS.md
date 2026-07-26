@@ -1,5 +1,93 @@
 # Halo — progress
 
+## 2026-07-26 (later): Edge progress, auto-update, real cancel — HANDOFF
+**All committed to `master` and deployed locally (hot-copied, v3.1.0). NOT pushed, NOT released —
+GitHub is still on v3.0.2.** Build 0/0, tests **144/144**.
+
+### READ THIS FIRST — history needs cleaning up
+Two of my commits swept in Codex's in-flight work because `git add -A src tests` was too broad.
+Nothing is lost, but the attribution is wrong and the eventual stripped-mirror push will be hard to
+reason about until it is split:
+- `144c2c0` ("Edge showed a byte count...") also contains Codex's `Codex/Limits.cs`, `Codex/Status.cs`,
+  `Shell/LayeredNotch.cs`, `Shell/NotchController.cs`, `Widgets/CodexWidget.cs`, `Widgets/IWidget.cs`
+  and four `Codex*Tests.cs` files.
+- `63feae0` ("real Edge download progress...") also contains Codex's
+  `src/Halo.Hooks/CodexHookInstaller.cs` and `src/Halo.Hooks/Program.cs`.
+
+Still uncommitted and deliberately untouched: `hooks/install-codex-hooks.ps1`, `installer/Halo.iss`,
+plus untracked `AGENTS.md` and `docs/superpowers/plans/2026-07-26-offline-codex-hook-installer.md`.
+
+### Edge downloads — the whole picture, measured
+Edge is not Chrome, and both earlier attempts failed because of it:
+- **History is written only when a download ENDS.** `max(id)` did not move through 22s of active
+  downloading with 85MB on disk. Chrome writes its row up front, which is why Chrome always worked.
+- **The partial is never renamed** away from `Unconfirmed 12345.crdownload`, and `current_path` stays
+  empty even in the finished row — so neither path can be matched by name.
+- **The file on disk is not the download.** One `Unconfirmed` blob grew 72MB → 92MB across three
+  separate test downloads. We were showing its length as progress. A folder-based heuristic was tried
+  and reverted (it named a 1GB transfer after a different row).
+
+The fix is `Widgets/ChromiumProgress.cs`: read Chromium's own in-progress store, a LevelDB under
+`<profile>\shared_proto_db`, by hand — 32KB blocks, crc/len/type record headers with FIRST/MIDDLE/LAST
+fragments to stitch, WriteBatch entries, then a minimal protobuf walk to
+`DownloadDBEntry.f1.f4 → { url = 1, total = 10, received = 15, state = 21 }` (state 0 = in progress).
+**Those field numbers were read off the live store — there is no `.proto` in this repo.**
+Two traps inside it, both found by measuring: a write-ahead log keeps *every* revision, so one transfer
+came back as twenty rows with `received` climbing through all of them (now keyed by guid, last write
+wins, delete drops it); and requiring `received` to match the file size made the pill flicker back to
+"Downloading" when the store lagged the disk (88MB vs 55MB), so with one download running no match is
+required. Verified live: `100Mb.dat 55,098,542 / 104,857,600` at 52%, climbing to 99%, then cleared.
+
+### Cancel
+Chrome: **works**. Edge: **does not, structurally.** Chrome puts downloads on a page inside the frame
+window; Edge opens a flyout that is its own top-level window *and auto-dismisses*, so by the time the
+UIA tree is swept there is nothing left to press, and with no filename there is no row to target.
+What was learned building it (`Assets/uia-cancel.ps1`, driven from PowerShell 5.1 out-of-process):
+- MSAA is useless here — `AccessibleObjectFromWindow` returns **0 children** on the frame window and on
+  all three `Chrome_RenderWidgetHostHWND` children. Chrome is UIA-first.
+- Chrome builds the renderer a11y tree only *after* a UIA client attaches, so the first sweep sees
+  browser chrome and no page content. It retries until the list appears.
+- An in-progress row shows no Cancel: only "Copy download link" and "More actions". Cancel is a
+  **MenuItem inside that menu**, and the menu button carries `ExpandCollapsePattern` and no
+  `InvokePattern` — an Invoke-only filter silently discarded the control that opens it.
+- Judge success on the **file**, never the browser UI: a cancelled row keeps its menu, so a row-based
+  check reported failure on a cancel that worked (and earlier, success on one that had not).
+- `SetForegroundWindow` returns before the foreground changes; a 600ms poll gave up and skipped the
+  keystroke. Now 1.5s with one retry.
+
+### Auto-update (`Update/AutoUpdate.cs`)
+Daily silent check of the GitHub latest release; installs with no prompt (install lives under
+`%LOCALAPPDATA%`, so no elevation). **Signer is pinned by thumbprint, not chain-validated** — the
+certificate is self-signed, so `Status == Valid` on the build machine and invalid everywhere else;
+chain validation would have disabled updates for every real user. Rotating the cert means updating
+`SignerThumbprint`, and until then updates stop rather than accept a different signer. Failure backs
+off 30m → 6h → 12h → 24h, once each; "nothing new" counts as success and resets it. Downloads to
+`.part` and renames on completion. Portable copies are skipped. Log:
+`%LOCALAPPDATA%\Halo\update-log.txt`. Verified: `latest=v3.0.2 running=3.1.0.0 → ok=True nextIn=24h`.
+
+### Smaller
+- Notification summary readability (idea from `codex/notif-readability`, reimplemented — its 8-field
+  metrics record was seven literals behind a function and its test asserted them back at themselves).
+  Gotcha: `GenericTypographic` carries `LineLimit` and lays out only WHOLE lines, so two 14.5px lines
+  (~38.6px) vanished to one in an exactly-38px box.
+- Copy pill: `LineAlignment.Center` centres the EM box, so digits and "Copied" sat low — `Fx.CenterLift`
+  fixes it. Also moved onto the title row and eased.
+- No Persian in source (user rule). Pre-existing Persian *comment quotes* in `Fx.cs`,
+  `NotchController.cs`, `LayeredNotch.cs`, `MediaWidget.cs`, `AudioSpectrum.cs` were left alone.
+- Both PR reviews on GitHub were **edited** to withdraw the "remove your comments" request, which
+  contradicted this repo's own workflow (the fork is a *mechanically* stripped mirror; `master` is the
+  comment-bearing truth and contributions land there first).
+
+### Next, in the order I would do it
+1. **Comment-stripping in CI/CD** (user's idea, fixes the root cause). Trap: branch
+   `codex/ci-guardrails` adds a gate that *fails* on comment lines — it must become a post-merge strip
+   step or the two will fight.
+2. Split `144c2c0` and `63feae0` so Codex's work is its own commit.
+3. Our own local notifications: no icon, text not aligned. Not investigated.
+4. Higher-quality blog videos for `pvboy.dev/blog/halo-glass-notch` (`HALO_CAPTURABLE=1` + ffmpeg
+   `ddagrab`).
+5. Push to GitHub + release 3.1.0 — only after 1 and 2, so the stripped mirror deletes nothing.
+
 ## 2026-07-26: multi-download, a real cancel, and the pill-as-bar colour
 **Deployed locally (hot-copied over the install, v3.1.0); committed to `master`; NOT pushed and NOT
 released — GitHub is still on v3.0.2.**
