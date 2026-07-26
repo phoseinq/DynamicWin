@@ -190,7 +190,8 @@ internal static class Downloads
         LogState();
     }
 
-    private static void Scan()
+    // internal, not private, only so the --probe-downloads hook can run one scan on demand
+    internal static void Scan()
     {
         var found = new List<DlItem>();
         try
@@ -270,10 +271,10 @@ internal static class Downloads
                 // nothing named this download, so the file on disk cannot be attributed to it
                 bool noName = part.Name.Length == 0 && label == "Downloading";
                 // Edge tells us nothing through its file name or its History, but its in-progress store
-                // keeps the name, the total AND the received count current — see ChromiumProgress. When it
-                // can explain a partial of this size, it is strictly better than the file: the numbers are
-                // the download's own rather than whatever that reused Unconfirmed blob happens to hold.
-                if (noName && ChromiumProgress.For(part.Bytes) is { } live)
+                // keeps the name, the total AND the received count current — see ChromiumProgress. It also
+                // records the partial's own path, so the record is matched to this exact file rather than to
+                // whatever that reused Unconfirmed blob happens to hold.
+                if (noName && ChromiumProgress.For(part.Path, part.Bytes) is { } live)
                 {
                     found.Add(new DlItem("file:" + part.Path, live.Name,
                                          (int)Math.Clamp(live.Received * 100 / Math.Max(live.Total, 1), 0, 99),
@@ -340,7 +341,15 @@ internal static class Downloads
         string? target = null, partial = FilePath;
         try
         {
-            if (partial is { Length: > 0 } fp && PartialFiles.IsPartial(fp, out string clean) && clean.Length > 0)
+            // The browser's row is matched by file name, and Edge never renames its partial away from
+            // "Unconfirmed 12345.crdownload" — so deriving the name from the file produced "Unconfirmed
+            // 12345", which matches no row, and the cancel silently picked whatever single row it found.
+            // Name is the download's real saved name (ChromiumProgress reads it out of the browser's own
+            // store), which is the exact string the downloads row shows. Chrome agrees either way.
+            if (Name is { Length: > 0 } shown && shown != "Downloading" && shown.Contains('.'))
+                target = shown;
+            if (target is null && partial is { Length: > 0 } fp
+                && PartialFiles.IsPartial(fp, out string clean) && clean.Length > 0)
                 target = clean;
         }
         catch { }
@@ -349,13 +358,24 @@ internal static class Downloads
         {
             try
             {
-                if (!FocusAndConfirm(h)) return;
-                SendCtrlJ();
-                System.Threading.Thread.Sleep(900);   // the list has to render before its controls exist
-                int rc = UiaCancel(h, target);
-                CancelLog($"  uia rc={rc} target='{target}' stopped={StoppedGrowing(partial)}");
-                // rc 2 = no control we could name, in this locale or this Chrome layout. Either way the
-                // downloads list is already in front of the user, which is the honest fallback.
+                // A failed focus used to return here, so a click on Cancel did LITERALLY NOTHING — no
+                // keystroke, no attempt, no list. That is one of the ways this button kept "not working":
+                // Windows only grants foreground rights to the process receiving input, and the pill does
+                // not always still hold them by the time this task runs.
+                bool focused = FocusAndConfirm(h);
+                int rc = UiaCancel(h, target, focused);
+                // Ctrl+J moved INTO the script. Both browsers now answer it with a list that closes itself,
+                // and sending it from here spent the ~2s of process start and UIA attach with the clock
+                // already running — measured on Chrome: by the time the tree could be read the bubble was
+                // gone and the sweep saw the New Tab page. This path only sends it when the script could
+                // not be used at all, so the user is at least left looking at their downloads.
+                if (rc < 0 && focused) SendCtrlJ();
+                bool stopped = StoppedGrowing(partial);
+                CancelLog($"  uia rc={rc} target='{target}' focused={focused} stopped={stopped}");
+                // rc 2 = no control we could name, in this locale or this browser's layout; not focused =
+                // we never got to open the list at all. Either way, put the browser's own downloads list in
+                // front of the user, where Cancel is one click away. Never silently give up.
+                if (!stopped) Reveal();
             }
             catch (Exception ex) { CancelLog("  threw " + ex.Message); }
         });
@@ -384,7 +404,10 @@ internal static class Downloads
     // access violation inside the pill. 5.1 has UIAutomationClient in the GAC on every Windows install, so
     // the cost is a process boundary that also contains any crash or hang. Returns the script's exit code,
     // or -1 when PowerShell itself could not be used.
-    private static int UiaCancel(IntPtr hwnd, string? target)
+    // canTab gates the keyboard strategy: Edge's row buttons only exist once focus reaches them, so that
+    // route has to press Tab — and Tab goes to whatever holds the foreground. If we did not confirm the
+    // browser is in front, sending it would type into somebody else's window.
+    private static int UiaCancel(IntPtr hwnd, string? target, bool canTab)
     {
         try
         {
@@ -396,25 +419,38 @@ internal static class Downloads
                 script = r.ReadToEnd();
             }
             script = script.Replace("__HWND__", ((long)hwnd).ToString())
+                           .Replace("__CANTAB__", canTab ? "1" : "0")
                            .Replace("__TARGET__", (target ?? "").Replace("'", "''"));
-            // -EncodedCommand sidesteps every layer of quoting between here and the script
-            string enc = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
-            var psi = new ProcessStartInfo
+            // A temp file, not -EncodedCommand. Encoding the script as base64 UTF-16 more than doubles it,
+            // and the command line has a hard ~32K ceiling: once a third strategy went in, powershell was
+            // never launched at all and every cancel came back as rc=-1 with nothing to show for it. -File
+            // has no such limit and quotes nothing.
+            string path = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                                                 $"halo-uia-{Guid.NewGuid():N}.ps1");
+            // BOM: Windows PowerShell 5.1 reads a BOM-less UTF-8 file as ANSI, which mangles any non-ASCII
+            // in the file name we are matching on
+            System.IO.File.WriteAllText(path, script, new UTF8Encoding(true));
+            try
             {
-                FileName = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
-                                                  @"WindowsPowerShell\v1.0\powershell.exe"),
-                Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + enc,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-            };
-            using var p = Process.Start(psi);
-            if (p == null) return -1;
-            string outp = p.StandardOutput.ReadToEnd();
-            if (!p.WaitForExit(12000)) { try { p.Kill(true); } catch { } return -1; }
-            if (outp.Length > 0) CancelLog("  uia: " + outp.Replace("\r\n", " | ").Trim());
-            return p.ExitCode;
+                var psi = new ProcessStartInfo
+                {
+                    FileName = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                                                      @"WindowsPowerShell\v1.0\powershell.exe"),
+                    Arguments = $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{path}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                };
+                using var p = Process.Start(psi);
+                if (p == null) return -1;
+                string outp = p.StandardOutput.ReadToEnd();
+                // three strategies, each with its own settling delay, so the old 12s was not enough
+                if (!p.WaitForExit(30000)) { try { p.Kill(true); } catch { } return -1; }
+                if (outp.Length > 0) CancelLog("  uia: " + outp.Replace("\r\n", " | ").Trim());
+                return p.ExitCode;
+            }
+            finally { try { System.IO.File.Delete(path); } catch { } }
         }
         catch { return -1; }
     }

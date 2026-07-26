@@ -25,6 +25,13 @@ internal static class Program
         // dev hook: `Halo.App --render-local <out.png>` — the banners Halo raises ITSELF, stacked. Every
         // other hook renders a mirrored toast, which always has a body; the body-less ones are our own.
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
+        // dev hook: `Halo.App --probe-downloads <out.txt>` — every download each source can see, plus the
+        // raw rows out of Chromium's in-progress store. Written to a file because this is a WinExe.
+        if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
+        // dev hook: `Halo.App --cancel-download` — scan, then run the pill's own Cancel on what it found.
+        // The cancel path has broken more than once and cannot be reached from a screenshot, so it needs a
+        // way to be exercised without a real click on an invisible window.
+        if (args.Length >= 1 && args[0] == "--cancel-download") { CancelDownload(); return; }
         // dev hook: `Halo.App --probe-icon <aumid>` — what the notif icon resolvers return for an app id
         if (args.Length >= 2 && args[0] == "--probe-icon") { ProbeIcon(args[1]); return; }
         // dev hook: `Halo.App --probe-tree <pid>` — the process's ancestor chain via Toolhelp
@@ -79,6 +86,61 @@ internal static class Program
         Console.WriteLine($"snapshot has {map.Count} processes");
         int p = pid, guard = 0;
         while (p > 4 && guard++ < 20) { Console.WriteLine($"  {p}"); if (!map.TryGetValue(p, out p)) break; }
+    }
+
+    // dev-only: the pill's Cancel, without the pill. Cancel runs on a background task and the browser needs
+    // a moment to react, so this waits and then reports whether the partial actually stopped growing —
+    // which is the only answer that counts. See dl-cancel.txt for the step-by-step.
+    private static void CancelDownload()
+    {
+        Halo.Widgets.Downloads.Scan();
+        if (Halo.Widgets.Downloads.Count == 0) { Console.WriteLine("nothing downloading"); return; }
+        string? file = Halo.Widgets.Downloads.FilePath;
+        Console.WriteLine($"cancelling '{Halo.Widgets.Downloads.Name}' file='{file}'");
+        long before = -1;
+        try { if (file != null) before = new System.IO.FileInfo(file).Length; } catch { }
+
+        Halo.Widgets.Downloads.CancelDownload();
+        System.Threading.Thread.Sleep(14000);
+
+        long after = -1;
+        try { if (file != null && System.IO.File.Exists(file)) after = new System.IO.FileInfo(file).Length; } catch { }
+        Console.WriteLine(after < 0 ? "partial is gone -> stopped"
+            : after == before ? $"partial held at {before:n0} -> stopped"
+            : $"partial grew {before:n0} -> {after:n0} -> STILL RUNNING");
+    }
+
+    // dev-only: what the download sources actually see right now. Edge gives nothing in its History until a
+    // download ENDS and never renames its partial, so "is it even detected, and under what name" was a
+    // question we kept answering by squinting at dl-debug.txt after the fact.
+    private static void ProbeDownloads(string outPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"{DateTime.Now:HH:mm:ss}  probe-downloads");
+
+        sb.AppendLine("\nChromiumProgress.Live():");
+        var live = Halo.Widgets.ChromiumProgress.Live();
+        if (live.Length == 0) sb.AppendLine("  (nothing in progress)");
+        foreach (var e in live)
+            sb.AppendLine($"  name='{e.Name}' received={e.Received:n0} total={e.Total:n0}"
+                        + $" pct={(e.Total > 0 ? 100.0 * e.Received / e.Total : 0):0.0}");
+
+        sb.AppendLine("\nChromiumProgress.DumpFields():");
+        sb.AppendLine(Halo.Widgets.ChromiumProgress.DumpFields());
+
+        sb.AppendLine("\nPartialFiles.All():");
+        foreach (var p in Halo.Widgets.PartialFiles.All())
+            sb.AppendLine($"  {p}");
+
+        Halo.Widgets.Downloads.Scan();
+        sb.AppendLine($"\nDownloads.Scan() -> {Halo.Widgets.Downloads.Count} item(s), selected="
+                    + Halo.Widgets.Downloads.SelectedIndex);
+        foreach (var d in Halo.Widgets.Downloads.Items)
+            sb.AppendLine($"  key='{d.Key}' name='{d.Name}' pct={d.Percent} got={d.Downloaded:n0}"
+                        + $" total={d.Total:n0} noPct={d.NoPct} noBytes={d.NoBytes} pid={d.OwnerPid}"
+                        + $" exe='{d.ExePath}' file='{d.FilePath}'");
+
+        System.IO.File.WriteAllText(outPath, sb.ToString());
     }
 
     private static void ProbeIcon(string aumid)

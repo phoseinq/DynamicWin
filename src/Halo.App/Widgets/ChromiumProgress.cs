@@ -24,11 +24,11 @@ namespace Halo.Widgets;
 // compacted, which is the same reason the History reader has to snapshot the -wal.
 internal static class ChromiumProgress
 {
-    internal readonly record struct Entry(string Name, long Received, long Total);
+    internal readonly record struct Entry(string Name, long Received, long Total, string CurrentPath);
 
     // state is carried while scanning so the final revision decides; 0 = in progress, 1 = complete,
     // 2 = interrupted. Read off the live store, since there is no .proto in this repo.
-    private readonly record struct Row(string Name, long Received, long Total, long State);
+    private readonly record struct Row(string Name, long Received, long Total, long State, string CurrentPath);
 
     private const double CacheSeconds = 2.0;
     private static readonly object _lock = new();
@@ -52,18 +52,30 @@ internal static class ChromiumProgress
         var found = new List<Entry>();
         foreach (var r in live.Values)
             if (r.State == 0 && r.Total > 0 && r.Name.Length > 0)
-                found.Add(new Entry(r.Name, r.Received, r.Total));
+                found.Add(new Entry(r.Name, r.Received, r.Total, r.CurrentPath));
         var arr = found.ToArray();
         lock (_lock) { _cache = arr; _cacheAt = DateTime.UtcNow; }
         return arr;
     }
 
-    // The in-progress entry that best explains a partial file of this size. Edge's own file name says
-    // nothing, so the size is the only honest link between the two — and it is a good one, because
-    // received_bytes is what produced those bytes. A generous window absorbs the store lagging the disk.
-    public static Entry? For(long fileBytes)
+    // The in-progress entry that belongs to a particular partial file.
+    //
+    // The store records the partial's own path (current_path), so this is an exact identity and not a
+    // guess. It used to be a guess: Edge's "Unconfirmed 12345.crdownload" carries no name, so the closest
+    // received_bytes was the only link, and with two Edge downloads of similar size in flight that could
+    // name the wrong one. The size match is still the fallback, because current_path is empty for the first
+    // moment of a download, before Chromium has settled on a file.
+    public static Entry? For(string? partialPath, long fileBytes)
     {
         var live = Live();
+        if (live.Length == 0) return null;
+
+        if (!string.IsNullOrEmpty(partialPath))
+            foreach (var e in live)
+                if (e.CurrentPath.Length > 0 &&
+                    string.Equals(e.CurrentPath, partialPath, StringComparison.OrdinalIgnoreCase))
+                    return e;
+
         // One download running means no ambiguity to resolve, and this is the common case. Insisting on a
         // size match here made the pill flicker back to a bare "Downloading" whenever the store lagged the
         // disk — seen at 88MB on disk against 55MB recorded, a 33MB gap that a tight window rejected.
@@ -131,6 +143,12 @@ internal static class ChromiumProgress
         }
         catch { return; }
 
+        Blocks(data, (key, b, off, len) => Parse(b, off, len, into, key), key => into.Remove(key));
+    }
+
+    // The block/batch walk, shared by the reader and the field dump so the two cannot drift.
+    private static void Blocks(byte[] data, Action<string, byte[], int, int> onPut, Action<string> onDelete)
+    {
         var frag = new List<byte>();
         int pos = 0;
         while (pos + 7 <= data.Length)
@@ -145,13 +163,13 @@ internal static class ChromiumProgress
 
             switch (type)
             {
-                case 1: Batch(data, pos, len, into); break;                 // FULL
+                case 1: Batch(data, pos, len, onPut, onDelete); break;      // FULL
                 case 2: frag.Clear(); Add(frag, data, pos, len); break;     // FIRST
                 case 3: Add(frag, data, pos, len); break;                   // MIDDLE
                 case 4:
                     Add(frag, data, pos, len);
                     var whole = frag.ToArray();
-                    Batch(whole, 0, whole.Length, into);
+                    Batch(whole, 0, whole.Length, onPut, onDelete);
                     frag.Clear();
                     break;
             }
@@ -166,7 +184,8 @@ internal static class ChromiumProgress
 
     // WriteBatch: sequence(8) count(4), then per entry a tag byte (1 = put, 0 = delete) and
     // varint-length-prefixed key, plus the same for the value on a put.
-    private static void Batch(byte[] b, int off, int len, Dictionary<string, Row> into)
+    private static void Batch(byte[] b, int off, int len,
+        Action<string, byte[], int, int> onPut, Action<string> onDelete)
     {
         int i = off + 12, end = off + len;
         while (i < end)
@@ -175,7 +194,7 @@ internal static class ChromiumProgress
             if (!Len(b, ref i, end, out int kl)) return;
             int kOff = i; i += kl;
             if (i > end) return;
-            if (tag != 1) { if (kl >= 12) into.Remove(Encoding.ASCII.GetString(b, kOff, kl)); continue; }
+            if (tag != 1) { if (kl >= 12) onDelete(Encoding.ASCII.GetString(b, kOff, kl)); continue; }
             if (!Len(b, ref i, end, out int vl)) return;
             int vOff = i; i += vl;
             if (i > end) return;
@@ -183,8 +202,8 @@ internal static class ChromiumProgress
             // keys look like "21_download,<guid>"; anything else in this shared store is someone else's
             if (kl < 12 || Encoding.ASCII.GetString(b, kOff, 11) != "21_download") continue;
             string key = Encoding.ASCII.GetString(b, kOff, kl);
-            if (vl == 0) { into.Remove(key); continue; }   // deleted, or cleared on completion
-            Parse(b, vOff, vl, into, key);
+            if (vl == 0) { onDelete(key); continue; }   // deleted, or cleared on completion
+            onPut(key, b, vOff, vl);
         }
     }
 
@@ -198,14 +217,15 @@ internal static class ChromiumProgress
 
     // ── just enough protobuf ──────────────────────────────────────────────────────────────────────────
     // DownloadDBEntry { DownloadInfo f1 { ... InProgressInfo f4 { string url = 1; int64 total = 10;
-    // int64 received = 15; int32 state = 21; } } } — field numbers read off the live store, since there is
-    // no .proto here. state 0 is in progress; 1 complete, 2 interrupted.
+    // FilePath current_path = 13; FilePath target_path = 14; int64 received = 15; int32 state = 21; } } }
+    // — field numbers read off the live store with --probe-downloads, since there is no .proto here.
+    // state 0 is in progress; 1 complete, 2 interrupted.
     private static void Parse(byte[] b, int off, int len, Dictionary<string, Row> into, string key)
     {
         if (!Sub(b, off, len, 1, out int iOff, out int iLen)) return;          // DownloadInfo
         if (!Sub(b, iOff, iLen, 4, out int pOff, out int pLen)) return;        // InProgressInfo
 
-        string url = ""; long total = 0, recv = 0, state = -1;
+        string url = "", current = "", target = ""; long total = 0, recv = 0, state = -1;
         int i = pOff, end = pOff + pLen;
         while (i < end)
         {
@@ -222,6 +242,8 @@ internal static class ChromiumProgress
             {
                 if (!Len(b, ref i, end, out int l)) return;
                 if (field == 1) url = Encoding.UTF8.GetString(b, i, l);
+                else if (field == 13) current = PickledPath(b, i, l);
+                else if (field == 14) target = PickledPath(b, i, l);
                 i += l;
             }
             else if (wire == 5) i += 4;
@@ -229,9 +251,109 @@ internal static class ChromiumProgress
             else return;
         }
 
+        // the saved name beats the URL's last segment: a Content-Disposition header renames the file, and
+        // then the URL segment is not what the browser's own downloads row says either
+        string name = "";
+        try { if (target.Length > 0) name = Path.GetFileName(target); } catch { }
+        if (name.Length == 0) name = NameFromUrl(url);
+
         // every revision is recorded, not just the running ones: a later "complete" or "interrupted"
         // revision has to be able to overwrite an earlier "in progress" one
-        into[key] = new Row(NameFromUrl(url), recv, total, state);
+        into[key] = new Row(name, recv, total, state, current);
+    }
+
+    // A base::FilePath is Pickle-serialised, not a plain string: uint32 payload size, uint32 character
+    // count, then that many UTF-16 chars (native wide chars on Windows). Read as UTF-8 it looks like binary,
+    // which is exactly how the path sat here unnoticed while the code guessed by file size instead.
+    private static string PickledPath(byte[] b, int off, int len)
+    {
+        try
+        {
+            if (len < 8) return "";
+            int chars = b[off + 4] | (b[off + 5] << 8) | (b[off + 6] << 16) | (b[off + 7] << 24);
+            if (chars <= 0 || 8 + chars * 2 > len) return "";
+            return Encoding.Unicode.GetString(b, off + 8, chars * 2);
+        }
+        catch { return ""; }
+    }
+
+    // dev-only: every field of every in-progress record, so a field number can be READ off the live store
+    // instead of guessed. There is no .proto in this repo, and guessing produced a name that was right only
+    // until a Content-Disposition header renamed the file.
+    internal static string DumpFields()
+    {
+        var sb = new StringBuilder();
+        foreach (var log in Logs())
+        {
+            byte[] data;
+            try
+            {
+                using var src = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var ms = new MemoryStream();
+                src.CopyTo(ms);
+                data = ms.ToArray();
+            }
+            catch { continue; }
+
+            var recs = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            Blocks(data,
+                (key, b, off, len) =>
+                {
+                    var copy = new byte[len];
+                    Array.Copy(b, off, copy, 0, len);
+                    recs[key] = copy;
+                },
+                key => recs.Remove(key));
+            foreach (var kv in recs)
+            {
+                sb.AppendLine($"-- {kv.Key}");
+                if (!Sub(kv.Value, 0, kv.Value.Length, 1, out int iOff, out int iLen)) continue;
+                Fields(sb, kv.Value, iOff, iLen, "f1");
+                if (Sub(kv.Value, iOff, iLen, 4, out int pOff, out int pLen))
+                    Fields(sb, kv.Value, pOff, pLen, "f1.f4");
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static void Fields(StringBuilder sb, byte[] b, int off, int len, string prefix)
+    {
+        int i = off, end = off + len;
+        while (i < end)
+        {
+            if (!Varint(b, ref i, end, out ulong tag)) return;
+            int field = (int)(tag >> 3), wire = (int)(tag & 7);
+            if (wire == 0)
+            {
+                if (!Varint(b, ref i, end, out ulong v)) return;
+                sb.AppendLine($"   {prefix}.{field} varint = {v}");
+            }
+            else if (wire == 2)
+            {
+                if (!Len(b, ref i, end, out int l)) return;
+                string s = Encoding.UTF8.GetString(b, i, l);
+                bool text = true;
+                foreach (char c in s) if (char.IsControl(c) && c != '\t') { text = false; break; }
+                // a pickled base::FilePath reads as binary under UTF-8, which is how the path fields sat here
+                // unnoticed; show it decoded, then hex for anything still unrecognised
+                if (!text)
+                {
+                    string p = PickledPath(b, i, l);
+                    if (p.Length > 0) { s = "FilePath " + p; text = true; }
+                }
+                if (!text)
+                {
+                    var hex = new StringBuilder();
+                    for (int k = 0; k < Math.Min(l, 48); k++) hex.Append(b[i + k].ToString("x2")).Append(' ');
+                    s = "<binary> " + hex;
+                }
+                sb.AppendLine($"   {prefix}.{field} bytes[{l}] = {s}");
+                i += l;
+            }
+            else if (wire == 5) i += 4;
+            else if (wire == 1) i += 8;
+            else return;
+        }
     }
 
     private static bool Sub(byte[] b, int off, int len, int field, out int subOff, out int subLen)
