@@ -1,0 +1,15 @@
+<!-- Deliberately not in Halo.sln: `dotnet build Halo.sln` must stay at 0/0 with only System.Drawing.Common,
+     and this dev-only tool pulls Roslyn. Build it directly: dotnet build tools\strip\strip.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>strip</AssemblyName>
+    <RootNamespace>Halo.Tools.Strip</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />
+  </ItemGroup>
+</Project>
