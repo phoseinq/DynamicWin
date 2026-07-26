@@ -1,5 +1,52 @@
 # Halo — progress
 
+## 2026-07-27: UI polish round — **3.1.1 RELEASED**
+`origin/V3` = `31fa557`, tag **v3.1.1**, CI green, installed here from the signed setup (3.1.1.0,
+autostart shortcut present). Build 0/0 with `-warnaserror`, **160 tests**.
+
+### The one that explains most of the "choppy" reports
+`NotchController` honoured `IWidget.Animating` **only while the pill was collapsed** (`_progress < 0.5f`).
+An open panel therefore redrew only when something else marked it dirty. **Measured: 42 distinct frames
+in 12s (~3.5fps) with a title scrolling at 42px/s; 249 after the fix.** `AdaptFrameRate` already pins 60
+while the panel is open, so the gate saved nothing — it was starving the waveform, animated covers and
+the marquee at once. Measure this with `mpdecimate` on a ddagrab capture, not by eye.
+
+### Media
+- **Press-and-drag scrubbing.** The click dispatch is edge-triggered, so a drag was N separate seeks each
+  awaiting the player — that was the "تیکه تیکه". `WidgetInput.Down` added; while held the bar tracks the
+  cursor and the seek commits **once**, on release. Grows 3× **while held** (hover was rejected: it
+  twitches whenever the pointer crosses). Timestamp previews the target.
+- **Holding a control used to walk off with the pill** — press-and-hold is the move gesture, and the
+  offset is persisted, so it *stayed* moved (found it at 269). `PressOnControl` excludes any rect the
+  widget's `Buttons()` describes.
+- Title marquee bound to **its own row**, not the panel; 0.35s hold; resets on leave. `MarqueeStep` is
+  pure and unit-tested so the rate cannot become frame-dependent again.
+
+### Shapes that showed their edges
+- **Glow was a rectangle**: dither noise was *added* to the falloff, so everything outside the inscribed
+  circle sat at alpha 1–5 and the texture's square boundary stayed lit. Now noise is **scaled by** the
+  falloff (true 0 at the edge), `WrapMode.Clamp`, and radii overshoot the panel.
+- **Strip icon wash was a flat square** clipped to the strip path → rounded-corner box around every
+  circular icon. Now a radial `PathGradientBrush`, no clip.
+- **Copy pill**: icons must be centred on their **ink**, not font metrics — two glyphs of one icon font
+  differ in ink height (page icon 1.4px high, check on centre). `Fx.InkCentreOffset` / `CapCentreOffset`.
+  New `--render-copy` hook draws both states at 4× with a centre guide.
+
+### Session circle
+`RingProgress` for Claude and Codex = 5-hour window, weekly as stand-in, `-1` (full ring) when neither is
+known. Colour still = state. A lone session no longer wears a "1" — `StatusStore.LiveSessions()` gates it,
+which is the rule the Codex twin already followed.
+
+### Notes for next time
+- **Recording/verifying the pill is hostile while a Claude session runs**: the agent widget is promoted on
+  every state change, and every tool call *is* one. Park `~/.claude/notch/*.json` for the shot and restore
+  in a `finally` — that is the only reliable way to get media on screen.
+- `SetCursorPos` is remapped by the calling process's DPI (asked 1280, landed 980). Use `mouse_event` with
+  absolute 0..65535 coordinates. And **never name a helper `Move`** — it is an alias for `Move-Item` and
+  silently ate every pointer call for a whole take.
+- ddagrab draws some cursors as a white box; `draw_mouse=0` for anything but a drag shot.
+
+
 ## 2026-07-26 (night): mirror automation, banner alignment, cancel actually cancels — **3.1.0 RELEASED**
 **Pushed and released.** `origin/V3` = `4833fae`, tag **v3.1.0** with `DynamicWinSetup.exe` +
 `DynamicWinPortable.zip`. Public **CI passed on the push** (1m39s) — the workflows build, test and run
