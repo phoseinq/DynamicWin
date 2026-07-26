@@ -489,8 +489,14 @@ internal sealed class MediaWidget : IWidget
         using var titleF = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+        // The scroll follows the TITLE ROW, not the whole panel: hovering anywhere on the panel kept it
+        // travelling long after the pointer had left the name, which reads as the title having a mind of its
+        // own. Bound to its own row, moving off it returns the title to the start immediately.
+        var titleRow = new RectangleF(tx, 34, tw, titleF.Height + 4);
+        titleRow.Inflate(6f, 6f);
+        bool onTitle = WidgetInput.Over && titleRow.Contains(WidgetInput.Mouse);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, WidgetInput.Over, dt);
+            DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, onTitle, dt);
         if (!string.IsNullOrEmpty(artist))
             using (var ab = new SolidBrush(Mul(Dim, fade)))
                 DrawLine(g, artist, bodyF, ab, tx, 66, tw);
@@ -720,7 +726,15 @@ internal sealed class MediaWidget : IWidget
     // by EnsureArt and only read here, so a volatile bool is the whole synchronisation it needs.
     private volatile bool _animatedArt;
 
-    public bool Animating { get { lock (_lock) { return _title != null && (_playing || _animatedArt); } } }
+    // _marqueeScrolling is set while the title is actually travelling, so a PAUSED track with a long name
+    // still gets frames while the pointer is on it — otherwise the scroll would only move on whatever else
+    // happened to trigger a repaint.
+    private volatile bool _marqueeScrolling;
+
+    public bool Animating
+    {
+        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling); } }
+    }
 
     // ring around the collapsed album-art circle = playback position (like the download %). Only when a
     // real duration exists (live streams have none → no ring). Extrapolated each frame so it glides.
@@ -864,7 +878,9 @@ internal sealed class MediaWidget : IWidget
     private float _marquee;          // scroll offset in px, 0 while parked
     private float _marqueeHold;      // seconds paused at the start of each pass
 
-    internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 1.1f;   // px, px/s, seconds
+    // Hold was 1.1s, which read as the title being slow to react rather than as a beat to start reading —
+    // long enough that a hover felt broken. A third of a second is enough to register the name's start.
+    internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 0.35f;   // px, px/s, seconds
 
     // One step of the title scroll, kept pure so the motion is a test rather than an eyeball: it holds
     // still for MarqueeHold at the start of each pass (so you can begin reading), then travels at a fixed
@@ -891,9 +907,11 @@ internal sealed class MediaWidget : IWidget
         {
             // parked: reset so the next hover starts from the beginning rather than mid-word
             if (!hovered) { _marquee = 0f; _marqueeHold = 0f; }
+            _marqueeScrolling = false;
             DrawLine(g, text, f, b, x, y, w);
             return;
         }
+        _marqueeScrolling = true;   // keep asking for frames even if the track is paused
 
         float span = textW + MarqueeGap;
         (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span);

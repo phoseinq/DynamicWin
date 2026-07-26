@@ -57,6 +57,17 @@ internal sealed class ClaudeCodeWidget : IWidget
     public bool IsActive => Live is not null;
     private CcStatus? Live => _store.SessionLive(_slot);
     public Color? Ring => Live is { } st ? RingColor(st) : null;
+
+    // The ring around the session circle was a full circle that said nothing — permanently "100%". It now
+    // draws the usage window as an arc, so the one thing you actually want at a glance (how much of the
+    // budget is spent) is readable without opening anything. The COLOUR still comes from what the session
+    // is doing, so two facts sit in one mark: colour = state, fill = budget. The 5-hour window first, the
+    // weekly one standing in when it is missing; a full ring when neither is known, rather than drawing an
+    // empty arc and implying a fresh budget.
+    // UsageFrac already prefers the 5-hour window and stands in the weekly one; it returns 0 when neither is
+    // known, which as an ARC would read as a fresh budget, so that case asks for a full ring instead.
+    public float RingProgress
+        => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)

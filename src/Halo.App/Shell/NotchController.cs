@@ -899,9 +899,15 @@ internal sealed class NotchController
         bool tick = DateTime.Now.Second != _lastSec;
         _lastSec = DateTime.Now.Second;
 
-        // animated preview (e.g. equalizer): force ~30fps re-render while collapsed
+        // Anything that says it is animating gets frames — and while the panel is OPEN it gets every frame.
+        // This used to be gated on _progress < 0.5f, i.e. on the pill being COLLAPSED, so an open panel only
+        // redrew when something else happened to mark it dirty. Measured with a title trying to scroll at
+        // 42px/s: 42 distinct frames in 12 seconds, about 3.5fps, which is exactly as choppy as it sounds.
+        // AdaptFrameRate already holds a solid 60 while the panel is open, so there is nothing to save here.
         bool forceAnim = false;
-        if (_widgets[_primary].Animating && _progress < 0.5f && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }
+        bool animating = _widgets[_primary].Animating;
+        if (animating && _progress >= 0.5f) forceAnim = true;                               // open: every frame
+        else if (animating && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }         // collapsed: ~30fps
 
         // cursor in logical panel coords for widget hover effects; redraw as it moves over the open panel
         // (while a banner is up, coords are banner-local instead so its grabber can react to hover)
