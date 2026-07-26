@@ -1,5 +1,98 @@
 # Halo — progress
 
+## 2026-07-26 (night): mirror automation, banner alignment, cancel actually cancels
+**Committed to `master`, deployed locally (v3.1.0, pid 13700). Still NOT pushed / NOT released —
+GitHub is on v3.0.2.** Build 0/0, tests **153**.
+
+Commits: `2b0980b` mirror automation · `0011b85`+`6e505cf` private-asset test gating ·
+`6921ea4` banner icon + alignment · `6c507b7` cancel.
+
+### Publishing the mirror is now one command
+`scripts/publish-mirror.ps1`. The public tree is **derived, never edited**: `src/` and `tests/` come
+from master, and everything that exists only on the public side lives in `mirror/` here — workflows,
+CODEOWNERS, the policy script, the **MIT** LICENSE and the public READMEs. It stages into a temp dir,
+strips comments from `src/` only, runs the public repo's own policy gate, builds and tests the
+stripped tree, then writes the commit with `commit-tree` (this repo's index is never touched).
+
+- **The guard that matters:** before committing it diffs its tree against `origin/V3` and refuses if
+  any file would disappear. First run it immediately caught Codex's `NotchVisibilityTests.cs`, which
+  existed only on the fork. That test is now back-ported (148 → and the mirror is safe to regenerate).
+- **The strip tool lives in `tools/strip/`** now, not `%TEMP%`. Deliberately outside `Halo.sln` — it
+  pulls Roslyn, and `dotnet build Halo.sln` must stay at 0/0 with only System.Drawing.Common.
+- **Comments survive in `tests/`.** They are not shipped source, and three of the six defects in the
+  last outside patch came from load-bearing comments being stripped before the contributor saw them.
+  For the same reason the CI comment rule is now **advisory on pull requests**, fatal only on a push
+  to V3 where an unstripped file is our own bug.
+- **`LICENSE` diverges on purpose and must not be "fixed":** public is MIT, master is CC BY-SA. The
+  overlay is what stops a mirror push from silently relicensing the public repo. `RequiredOverlay`
+  fails loudly if it is missing.
+- `installer/` and `hooks/` are private, so three Codex tests that read them now compile only behind
+  `HALO_PRIVATE_ASSETS` (defined when `installer/Halo.iss` exists). Runtime skipping does **not** work
+  here: xunit 2.x has no `Assert.Skip` and the 2.9 runner ignores its dynamic-skip message token.
+
+### Halo's own banners: no icon, text too high
+Both from one blind spot — **every `--render-*` hook rendered a mirrored toast, and a mirrored toast
+always has a body.** The body-less ones are ours.
+- The text column's offsets are tuned for two body lines, so eyebrow+title alone ended at y=67 and
+  read as centred on 44 while the artwork centres on 64. `NotifBanner.TextShift(hasBody)` centres the
+  pair when there is no body; the two-line layout keeps its tuned numbers untouched (a body is what
+  the grow-to-detail reveal cross-fades). The copy pill travels with the title row.
+- `OnClipboardImage` set `Preview` but never `Icon`, and the preview takes the icon's slot — so the
+  screenshot/clipboard banners shipped **no identity mark at all** and `Fx.AccentOf(null)` left them
+  the only banners with no glow. They now carry a camera / copy badge on the thumb's bottom-right
+  corner, with a **dark** ring because a capture of a bright window is the common case.
+- New hook **`--render-local`**: the four real local banners stacked, each with a centre guide-line
+  drawn across it. That is the hook that was missing.
+
+### Cancel — six defects, all measured against a local trickle server
+`scratchpad/trickle.ps1` serves 60MB at 24KB/s over loopback, so this was all verified **without
+spending any of the user's bandwidth**. Both browsers now end the transfer: `rc=0`, partial gone.
+
+1. **Edge had no name to match a row on** — target came out as `Unconfirmed 12345`. Fixed by reading
+   `target_path` from the store.
+2. **Those paths were unread in the store.** `InProgressInfo` **f13 = current_path, f14 = target_path**,
+   both **pickled `base::FilePath`**: `uint32 payloadSize, uint32 charCount, UTF-16 chars`. Under UTF-8
+   they look like binary, which is why they were skipped. `current_path` also replaces the old
+   closest-`received_bytes` guess, which could attribute a file to the wrong download.
+3. **Edge's row has no buttons until keyboard focus reaches it** — a descendant search returns Image,
+   two Texts, ProgressBar, nothing else. Tab into the row and `Pause`/`Cancel` are the next two stops.
+   **This is the whole reason Edge never worked.** It therefore needs the browser in front.
+4. **Chrome's Ctrl+J bubble is not in the a11y tree at all**, and the bubble from toggling the toolbar
+   button exposes one Button per row and no Cancel. The way in is Chrome's **app menu → the MenuItem
+   whose name contains `Ctrl+J`** (locale-independent), which opens the real downloads *page* where
+   each row has a `More actions` menu holding Cancel.
+5. **A failed focus returned early → the click did literally nothing.** Foreground rights belong to
+   the process receiving input, which the pill does not always still have. The toolbar button is now
+   pressed through UIA (no rights needed), and if nothing can be pressed the browser's own list is put
+   in front of the user. Never silently give up.
+6. **Advertising a pattern is not honouring it:** Edge's toolbar button answers `Expand` with
+   `E_FAIL`, and `ErrorActionPreference=Stop` killed the script on its first strategy. Every UIA call
+   is its own `try` now. Chrome's toolbar button carries **only** `TogglePattern`, which `Press` never
+   tried.
+- The script outgrew `-EncodedCommand`'s ~32K command line and stopped launching at all (`rc=-1`); it
+  goes through a temp file now, written **with a BOM** (5.1 reads BOM-less UTF-8 as ANSI).
+- New hooks: **`--cancel-download`** (scan, cancel, then report whether the partial actually stopped)
+  and **`--probe-downloads`** (every source's view, plus raw store fields — this is how f13/f14 were
+  found).
+
+### Trap that cost time tonight — hot-deploy
+Copying `Halo.App.{deps.json,runtimeconfig.json}` from `bin/Release` over the install **breaks it**:
+the installed app is self-contained, and bin's runtimeconfig says framework-dependent, so Windows
+prompts the user to install .NET. Hot-deploy **only `Halo.App.dll`**, or copy from a real
+`dotnet publish -r win-x64 --self-contained` output.
+
+### Still open
+1. Push + release 3.1.0 (run `scripts/publish-mirror.ps1 -Push`, then `installer/build.ps1` and a
+   GitHub release). Split `144c2c0`/`63feae0` first if the attribution matters — note the mirror
+   flattens history anyway, so this is cosmetic for the public repo.
+2. Higher-quality blog videos for `pvboy.dev/blog/halo-glass-notch` (`HALO_CAPTURABLE=1` + ffmpeg
+   `ddagrab`).
+3. Chrome's *bubble* cancel remains unreachable by design (one control per row); we route via the
+   page instead, which works. Edge's cancel needs the browser focused — inherent, since the buttons
+   do not exist otherwise.
+
+---
+
 ## 2026-07-26 (later): Edge progress, auto-update, real cancel — HANDOFF
 **All committed to `master` and deployed locally (hot-copied, v3.1.0). NOT pushed, NOT released —
 GitHub is still on v3.0.2.** Build 0/0, tests **144/144**.
