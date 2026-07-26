@@ -120,7 +120,7 @@ internal sealed class NotchController
     private const int TintAppCollapsed = 120, TintAppExpanded = 60;
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f;
 
-    private const float HoldSeconds = 1.5f;
+    private const float HoldSeconds = 0.75f;
     private const int CaptureFast = 2, CaptureSlow = 12;
     private const int EmptyCatchAlpha = 1;
 
@@ -985,6 +985,7 @@ internal sealed class NotchController
                     }
                 }
             }
+            else if (_progress < 0.1f && TryCollapsedButton(p)) { }
             else if (_progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && InMenu(p))
             {
                 var rows = Groups();
@@ -1073,6 +1074,40 @@ internal sealed class NotchController
     private static bool InRect(Win32.POINT p, int left, int top, int w, int h)
         => p.X >= left && p.X < left + w && p.Y >= top && p.Y < top + h;
 
+    private bool TryCollapsedButton(Win32.POINT p)
+    {
+        if (_primary < 0 || _primary >= _widgets.Length || _empty) return false;
+        try
+        {
+            foreach (var (r, onClick) in _widgets[_primary].CollapsedButtons(CollapsedW, CollapsedH))
+            {
+                float bx = _cl + r.X * S, by = _ct + r.Y * S;
+                if (p.X >= bx && p.X < bx + r.Width * S && p.Y >= by && p.Y < by + r.Height * S)
+                {
+                    onClick(new PointF((p.X - _cl) / S, (p.Y - _ct) / S));
+                    return true;
+                }
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    internal static Bitmap? MenuRowImage(IWidget[] widgets, int[] group)
+    {
+        if (group.Length == 0) return null;
+        if (group.Length < 2) return widgets[group[0]].IconImage;
+        return widgets[group[0]] switch
+        {
+            ClaudeCodeWidget => ClaudeCodeWidget.PlainIcon,
+            CodexWidget => CodexWidget.PlainIcon,
+            _ => widgets[group[0]].IconImage,
+        };
+    }
+
+    internal static float MenuRowImageOffset(IWidget[] widgets, int[] group)
+        => group.Length == 0 ? 0f : widgets[group[0]].IconOffsetX;
+
     private void Apply(float t)
     {
         float e = EaseOutBack(t);
@@ -1116,8 +1151,8 @@ internal sealed class NotchController
             Appear = SmoothStep(_stripT),
 
             RowIcons = groups.ConvertAll(gr => _widgets[gr[0]].Icon).ToArray(),
-            RowImages = groups.ConvertAll(gr => gr.Length >= 2 && _widgets[gr[0]] is ClaudeCodeWidget
-                ? ClaudeCodeWidget.PlainIcon : _widgets[gr[0]].IconImage).ToArray(),
+            RowImages = groups.ConvertAll(gr => MenuRowImage(_widgets, gr)).ToArray(),
+            RowImageOffsets = groups.ConvertAll(gr => MenuRowImageOffset(_widgets, gr)).ToArray(),
             RowCounts = groups.ConvertAll(gr => gr.Length >= 2 ? gr.Length : 0).ToArray(),
             SessIcons = groups.ConvertAll(gr => gr.Length >= 2
                 ? Array.ConvertAll(gr, i => _widgets[i].Icon) : Array.Empty<string>()).ToArray(),
@@ -1368,6 +1403,8 @@ internal sealed class NotchController
             Title = isScreenshot ? Halo.Notifications.NotifItem.ScreenshotTitle : Halo.Notifications.NotifItem.ImageCopiedTitle,
             Preview = shot,
             LaunchPath = path,
+
+            Icon = isScreenshot ? ShotBadge() : ClipBadge(),
         });
     }
 
@@ -1470,8 +1507,32 @@ internal sealed class NotchController
     private static Bitmap LimitBadge()   => LocalBadge(0xE9D9, 285);
     private static Bitmap ClockBadge()   => LocalBadge(0xE917, 205);
     private static Bitmap CpuBadge()     => LocalBadge(0xE950, 28);
+    private static Bitmap ShotBadge()    => LocalBadge(0xE722, 200, 28f);
+    private static Bitmap ClipBadge()    => LocalBadge(0xE8C8, 155, 28f);
 
-    internal static Bitmap[] AllLocalBadges() => new[] { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge() };
+    internal static Bitmap[] AllLocalBadges() => new[]
+        { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge() };
+
+    internal static Halo.Notifications.NotifItem[] SampleLocalNotices(Bitmap shot) => new[]
+    {
+        new Halo.Notifications.NotifItem
+        {
+            App = Halo.Notifications.NotifItem.ScreenshotApp,
+            Title = Halo.Notifications.NotifItem.ScreenshotTitle,
+            Preview = shot, Icon = ShotBadge(),
+        },
+        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet :/", Icon = NetBadge() },
+        new Halo.Notifications.NotifItem
+        {
+            App = "System", Title = "High CPU usage — 92%", Body = "chrome.exe is using the most.",
+            Icon = CpuBadge(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Claude", Title = "Claude usage 85%", Body = "You've used 85% of your weekly limit.",
+            Icon = LimitBadge(),
+        },
+    };
 
     private int NotifLeft() => _notch.WorkLeft + (_notch.WorkWidth - Sc(_curW)) / 2 + (int)_offsetX;
 

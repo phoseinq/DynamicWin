@@ -15,6 +15,8 @@ internal interface IWidget
 
     Bitmap? IconImage => null;
 
+    float IconOffsetX => 0f;
+
     bool IsActive { get; }
     int Version { get; }
 
@@ -33,4 +35,7 @@ internal interface IWidget
     void DrawCollapsed(Graphics g, int w, int h, float fade) { }
 
     IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h);
+
+    IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> CollapsedButtons(int w, int h)
+        => Array.Empty<(RectangleF, Action<PointF>)>();
 }

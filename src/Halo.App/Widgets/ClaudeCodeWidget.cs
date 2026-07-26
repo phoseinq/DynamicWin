@@ -94,6 +94,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         var st = Live;
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st))
         {
@@ -103,7 +105,7 @@ internal sealed class ClaudeCodeWidget : IWidget
             g.FillPath(pb, pp);
         }
 
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (ClaudeIcon != null) DrawIcon(g, ClaudeIcon, x, y, sz, fade, sz / 2f);
         else
@@ -149,14 +151,14 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h));
         float zoneW = centred ? avail - 34f : avail + 16f;
 
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -1.5f, zoneW, h), sf);
+        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0)
             using (var eb = new SolidBrush(Mul(Dim, fade * e)))
             using (var esf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -1.5f, elW + 4, h), esf);
+                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -Fx.CenterLift(tf2), elW + 4, h), esf);
 
     }
 
@@ -485,9 +487,13 @@ internal sealed class ClaudeCodeWidget : IWidget
         return Math.Clamp((double)s.ContextUsed / s.ContextMax, 0, 1);
     }
 
+    private static float UsageFrac()
+        => Limits.FiveHour >= 0 ? Limits.FiveHour : Limits.Week >= 0 ? Limits.Week : 0f;
+
     private static Color RingColor(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
-         : LimitHit ? Amber
+         : LimitHit ? White
+
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)

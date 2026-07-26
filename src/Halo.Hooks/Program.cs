@@ -19,6 +19,33 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] is "install-codex-hooks" or "uninstall-codex-hooks")
+        {
+            try
+            {
+                var settingsPath = Environment.GetEnvironmentVariable("HALO_CODEX_HOOKS_PATH");
+                if (string.IsNullOrWhiteSpace(settingsPath))
+                    settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "hooks.json");
+
+                if (args[0] == "install-codex-hooks")
+                {
+                    if (args.Length != 2)
+                        throw new ArgumentException("install-codex-hooks requires an executable path.");
+                    CodexHookInstaller.Install(settingsPath, args[1]);
+                }
+                else
+                {
+                    CodexHookInstaller.Uninstall(settingsPath);
+                }
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
+        }
+
         try
         {
             if (args.Length == 0) return 0;
@@ -115,7 +142,9 @@ internal static class Program
                     }
                     break;
                 case "notify":
-                    status["state"] = "waiting_input";
+
+                    var prevState = status["state"]?.GetValue<string>();
+                    if (prevState is "working" or "compacting") status["state"] = "waiting_input";
                     status["message"] = Truncate(Field("message"), 160);
                     break;
                 case "stop":

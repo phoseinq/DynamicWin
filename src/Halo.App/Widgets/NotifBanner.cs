@@ -8,47 +8,58 @@ namespace Halo.Widgets;
 
 internal static class NotifBanner
 {
-    public const int W = 470, SummaryH = 112;
+    public const int W = 470, SummaryH = 128;
     private const float IconD = 52, IconX = 20;
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
 
+    private static readonly Color BodyInk = Color.FromArgb(205, 255, 255, 255);
+    private static readonly Color EyebrowInk = Color.FromArgb(175, 255, 255, 255);
+    private const float EyebrowPx = 11f, TitlePx = 18.5f, BodyPx = 14.5f, BodyLinePx = 19f;
+
     private static float TextX => IconX + IconD + 14;
+
+    private const float TitleTop = 41f, TitleH = 26f, CopyH = 22f;
+    private const float EyebrowTop = 22f, EyebrowH = 14f, BodyTop = 70f;
+
+    internal static float TextShift(bool hasBody) =>
+        hasBody ? 0f : (SummaryH - (EyebrowH + (TitleTop - (EyebrowTop + EyebrowH)) + TitleH)) / 2f - EyebrowTop;
 
     public static RectangleF CopyRect(NotifItem n, int w)
     {
         if (string.IsNullOrEmpty(n.Code)) return RectangleF.Empty;
-        float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f, bh = 22;
-        return new RectangleF(w - bw - 20, 40, bw, bh);
+        float bw = 34 + Math.Max(n.Code.Length, 6) * 8.5f;
+        return new RectangleF(w - bw - 20,
+            TitleTop + TextShift(n.Body.Length > 0) + (TitleH - CopyH) / 2f, bw, CopyH);
     }
+
+    private static float _hoverEase, _copiedEase;
 
     private static void DrawCopyButton(Graphics g, NotifItem n, int w, float a)
     {
         var r = CopyRect(n, w);
-        if (r.IsEmpty) return;
+        if (r.IsEmpty) { _hoverEase = _copiedEase = 0f; return; }
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        _hoverEase += ((hov ? 1f : 0f) - _hoverEase) * 0.22f;
+        _copiedEase += ((n.Copied ? 1f : 0f) - _copiedEase) * 0.22f;
         var accent = Color.FromArgb(120, 185, 255);
-        using (var bg = new SolidBrush(Mul(Color.FromArgb(hov ? 64 : 34, accent), a)))
+        using (var bg = new SolidBrush(Mul(Color.FromArgb((int)(34 + 30 * _hoverEase), accent), a)))
         using (var p = Fx.Rounded(r, r.Height / 2f))
             g.FillPath(bg, p);
-        using (var pen = new Pen(Mul(Color.FromArgb(hov ? 120 : 70, accent), a), 1f))
+        using (var pen = new Pen(Mul(Color.FromArgb((int)(70 + 50 * _hoverEase), accent), a), 1f))
         using (var p = Fx.Rounded(r, r.Height / 2f))
             g.DrawPath(pen, p);
 
         using var gf = new Font("Segoe MDL2 Assets", 11f, GraphicsUnit.Pixel);
         using var cf = new Font("Segoe UI Semibold", 12.5f, GraphicsUnit.Pixel);
-        using var b = new SolidBrush(Mul(White, a * (hov ? 1f : 0.9f)));
-        using var sf = new StringFormat(StringFormat.GenericTypographic) { LineAlignment = StringAlignment.Center };
+        using var b = new SolidBrush(Mul(White, a * (0.9f + 0.1f * _hoverEase)));
+
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
         string glyph = n.Copied ? "" : "";
         string label = n.Copied ? "Copied" : n.Code;
-        g.DrawString(glyph, gf, b, new RectangleF(r.X + 9, r.Y, 16, r.Height), sf);
-        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y, r.Width - 26, r.Height), sf);
-    }
-
-    private static float FontScale(NotifItem n)
-    {
-        int len = Math.Max(n.Title.Length, n.Body.Length / 2);
-        return Math.Clamp(1f - 0.14f * (len - 28) / 50f, 0.86f, 1f);
+        g.DrawString(glyph, gf, b, new RectangleF(r.X + 6, r.Y - Fx.CenterLift(gf), 18, r.Height), sf);
+        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y - Fx.CenterLift(cf), r.Width - 30, r.Height), sf);
     }
 
     public static int DetailHeight(NotifItem n)
@@ -56,7 +67,7 @@ internal static class NotifBanner
         try
         {
             using var g = Graphics.FromHwnd(IntPtr.Zero);
-            using var f = new Font("Segoe UI", 13f * FontScale(n), GraphicsUnit.Pixel);
+            using var f = new Font("Segoe UI", BodyPx, GraphicsUnit.Pixel);
             var sz = g.MeasureString(n.Body, f, (int)(W - TextX - 22));
             return Math.Clamp(72 + (int)sz.Height + 22, SummaryH + 26, 280);
         }
@@ -76,7 +87,12 @@ internal static class NotifBanner
         bool hasPreview = n.Preview != null;
         float thumbW = hasPreview ? 128f : IconD, thumbH = hasPreview ? 72f : IconD;
         float iy = (SummaryH - thumbH) / 2f;
-        if (hasPreview) DrawThumb(g, n.Preview!, IconX, iy, thumbW, thumbH, a);
+        if (hasPreview)
+        {
+            DrawThumb(g, n.Preview!, IconX, iy, thumbW, thumbH, a);
+
+            if (n.Icon != null) DrawCornerBadge(g, n.Icon, IconX + thumbW, iy + thumbH, a);
+        }
         else if (n.Icon != null) DrawAppIcon(g, n.Icon, IconX, iy, IconD, a);
         else
         {
@@ -91,12 +107,12 @@ internal static class NotifBanner
         }
 
         float tx = IconX + thumbW + 16, tw = w - tx - 22;
-        float k = FontScale(n);
-        using var eyeF = new Font("Segoe UI", 10.5f * k, GraphicsUnit.Pixel);
-        using var titleF = new Font("Segoe UI Semibold", 17.5f * k, GraphicsUnit.Pixel);
-        using var bodyF = new Font("Segoe UI", 13f * k, GraphicsUnit.Pixel);
+        float ts = TextShift(n.Body.Length > 0);
+        using var eyeF = new Font("Segoe UI", EyebrowPx, GraphicsUnit.Pixel);
+        using var titleF = new Font("Segoe UI Semibold", TitlePx, GraphicsUnit.Pixel);
+        using var bodyF = new Font("Segoe UI", BodyPx, GraphicsUnit.Pixel);
 
-        using (var b = new SolidBrush(Mul(Dim, a * 0.82f)))
+        using (var b = new SolidBrush(Mul(EyebrowInk, a)))
         {
             string time = RelTime(n.Time);
             float timeW = 0;
@@ -104,25 +120,27 @@ internal static class NotifBanner
             {
                 timeW = g.MeasureString(time, eyeF, 999, StringFormat.GenericTypographic).Width;
                 using var rf = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far };
-                g.DrawString(time, eyeF, b, new RectangleF(tx, 22, tw, 14), rf);
+                g.DrawString(time, eyeF, b, new RectangleF(tx, EyebrowTop + ts, tw, EyebrowH), rf);
             }
             using var lf = new StringFormat(StringFormat.GenericTypographic)
             { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-            g.DrawString(n.App.ToUpperInvariant(), eyeF, b, new RectangleF(tx, 22, Math.Max(10, tw - timeW - 10), 14), lf);
+            g.DrawString(n.App.ToUpperInvariant(), eyeF, b,
+                new RectangleF(tx, EyebrowTop + ts, Math.Max(10, tw - timeW - 10), EyebrowH), lf);
         }
 
         using (var b = new SolidBrush(Mul(White, a)))
         using (var f = LineFmt(n.Title))
-            g.DrawString(n.Title, titleF, b, new RectangleF(tx, 41, tw, 26), f);
+            g.DrawString(n.Title, titleF, b, new RectangleF(tx, TitleTop + ts, tw, TitleH), f);
 
         if (detail < 0.999f && n.Body.Length > 0)
-            using (var b = new SolidBrush(Mul(Dim, a * (1f - detail))))
-            using (var f = LineFmt(n.Body))
-                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, 19), f);
+            using (var b = new SolidBrush(Mul(BodyInk, a * (1f - detail))))
+            using (var f = SummaryFmt(n.Body))
+
+                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, BodyTop, tw, BodyLinePx * 2 + 6), f);
         if (detail > 0.01f && n.Body.Length > 0)
-            using (var b = new SolidBrush(Mul(Dim, a * detail)))
+            using (var b = new SolidBrush(Mul(BodyInk, a * detail)))
             using (var f = WrapFmt(n.Body))
-                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, 70, tw, h - 70 - 14), f);
+                g.DrawString(n.Body, bodyF, b, new RectangleF(tx, BodyTop, tw, h - BodyTop - 14), f);
 
         DrawCopyButton(g, n, w, a);
 
@@ -182,6 +200,18 @@ internal static class NotifBanner
         g.DrawPath(pen, path);
     }
 
+    private const float CornerBadgeD = 26f;
+
+    private static void DrawCornerBadge(Graphics g, Bitmap icon, float cornerX, float cornerY, float a)
+    {
+        var r = new RectangleF(cornerX - CornerBadgeD * 0.72f, cornerY - CornerBadgeD * 0.72f,
+            CornerBadgeD, CornerBadgeD);
+        using (var ring = new Pen(Mul(Color.FromArgb(170, 0, 0, 0), a), 2.4f))
+        using (var rp = Fx.Rounded(r, CornerBadgeD * 0.3f))
+            g.DrawPath(ring, rp);
+        DrawAppIcon(g, icon, r.X, r.Y, r.Width, a);
+    }
+
     private static void DrawCentered(Graphics g, int w, int h, Bitmap? icon, string text, float a)
     {
         var accent = icon != null ? Fx.AccentOf(icon) : Fx.White;
@@ -211,6 +241,13 @@ internal static class NotifBanner
     {
         var sf = new StringFormat(StringFormat.GenericTypographic)
         { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+        if (IsRtl(s)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
+        return sf;
+    }
+
+    private static StringFormat SummaryFmt(string s)
+    {
+        var sf = new StringFormat(StringFormat.GenericTypographic) { Trimming = StringTrimming.EllipsisCharacter };
         if (IsRtl(s)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
         return sf;
     }

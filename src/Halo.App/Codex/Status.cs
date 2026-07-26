@@ -93,8 +93,12 @@ internal static class CodexRollout
                             }
                             break;
                         case "custom_tool_call":
+                        case "function_call":
                             state = "working";
                             currentTool = ShortTool(String(payload, "name") ?? String(payload, "tool_name") ?? String(payload, "tool"));
+                            break;
+                        case "function_call_output":
+                            if (state == "working") currentTool = null;
                             break;
                         case "request_user_input":
                         case "request_user_approval":
@@ -250,6 +254,9 @@ internal static class CodexRollout
                     var root = document.RootElement;
                     if (String(root, "type") != "session_meta" || Property(root, "payload") is not { } payload)
                         continue;
+
+                    if (!string.IsNullOrWhiteSpace(String(payload, "parent_thread_id")))
+                        return null;
 
                     return String(payload, "originator")?.Contains("Desktop", StringComparison.OrdinalIgnoreCase) == true
                         ? CodexSurface.Desktop

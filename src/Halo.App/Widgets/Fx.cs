@@ -74,6 +74,7 @@ internal static class Fx
         g.SetClip(clip);
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+
         using var ia = new ImageAttributes();
         ia.SetColorMatrix(new ColorMatrix
         {
@@ -89,15 +90,117 @@ internal static class Fx
         g.Clip = old;
     }
 
+    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength)
+    {
+        if (accent == White || fade <= 0.01f || strength <= 0f) return;
+        frac = Math.Clamp(frac, 0f, 1f);
+
+        using var pp = PillPath(w, h, h / 2f, 0.5f);
+
+        RgbToHsv(accent, out float th, out float ts, out float tv);
+        var track = HsvToRgb(th, ts * 0.42f, Math.Max(0.16f, tv * 0.34f));
+
+        using (var tb = new SolidBrush(Alpha(track, fade * strength * (0.34f + 0.28f * strength))))
+            g.FillPath(tb, pp);
+        if (frac <= 0.001f) return;
+
+        float fill = w * frac;
+        var solid = Alpha(accent, fade * 0.52f * strength);
+
+        if (fill > 6f)
+            Glow(g, w, h, fade, fill * 0.45f, h * 0.44f, Math.Max(fill, h * 1.2f), h * 1.9f,
+                 (int)(16 * strength), accent);
+
+        if (frac >= 0.999f) { using (var fb = new SolidBrush(solid)) g.FillPath(fb, pp); }
+        else
+        {
+
+            float soft = Math.Clamp(2.5f / w, 0.0008f, 0.02f);
+            float cut = Math.Clamp(fill / w, soft + 0.0005f, 0.9985f);
+            using var lb = new LinearGradientBrush(new RectangleF(0, 0, w, h), solid, Color.FromArgb(0, accent),
+                       LinearGradientMode.Horizontal);
+            lb.InterpolationColors = new ColorBlend(4)
+            {
+                Positions = new[] { 0f, cut - soft, cut, 1f },
+                Colors = new[] { solid, solid, Color.FromArgb(0, accent), Color.FromArgb(0, accent) },
+            };
+            g.FillPath(lb, pp);
+        }
+
+        if (fill > 4f && strength >= 0.4f)
+        {
+            using var sheen = new LinearGradientBrush(new RectangleF(0, -0.5f, Math.Max(w, 1), h + 1f),
+                Color.White, Color.White, LinearGradientMode.Vertical);
+            sheen.InterpolationColors = new ColorBlend(4)
+            {
+                Positions = new[] { 0f, 0.34f, 0.70f, 1f },
+                Colors = new[]
+                {
+                    Alpha(Color.White, fade * 0.14f * strength),
+                    Alpha(Color.White, fade * 0.05f * strength),
+                    Color.FromArgb(0, 255, 255, 255),
+                    Alpha(Color.FromArgb(0, 0, 0), fade * 0.10f * strength),
+                },
+            };
+            var oldC = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
+            g.FillPath(sheen, pp);
+            g.Clip = oldC;
+        }
+
+        if (fill > 8f && strength >= 0.5f)
+        {
+            float lipW = 26f, x0 = Math.Max(0f, fill - lipW);
+            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, (fill - x0) + 1f, h),
+                Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), LinearGradientMode.Horizontal);
+            var lipBlend = new ColorBlend(3)
+            {
+                Positions = new[] { 0f, 0.94f, 1f },
+                Colors = new[] { Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), Color.FromArgb(0, accent) },
+            };
+            lip.InterpolationColors = lipBlend;
+            var old = g.Clip;
+            g.SetClip(new RectangleF(x0, 0, fill - x0, h), CombineMode.Intersect);
+            g.FillPath(lip, pp);
+            g.Clip = old;
+        }
+
+        if (fill > 6f)
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f, (int)(26 * strength), accent);
+    }
+
+    public static float CenterLift(Font f)
+    {
+        try
+        {
+            var ff = f.FontFamily;
+            var st = f.Style;
+            float em = ff.GetEmHeight(st);
+            if (em <= 0) return 0f;
+            float line = (ff.GetCellAscent(st) + ff.GetCellDescent(st)) / em;
+            float baseline = ff.GetCellAscent(st) / em;
+            const float capRatio = 0.70f;
+            float visual = baseline - capRatio / 2f;
+            return (visual - line / 2f) * f.Size;
+        }
+        catch { return 0f; }
+    }
+
+    public static Color Alpha(Color c, float a)
+        => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);
+
     private static GraphicsPath PillClip(int w, int h) => PillPath(w, h, Math.Min(h / 2f, 30f));
 
-    public static GraphicsPath PillPath(int w, int h, float r)
+    public static GraphicsPath PillPath(int w, int h, float r) => PillPath(w, h, r, 0f);
+
+    public static GraphicsPath PillPath(int w, int h, float r, float inset)
     {
-        float d = Math.Min(r, Math.Min(w, h) / 2f) * 2f;
+        float x0 = inset, y0 = inset, x1 = w - inset, y1 = h - inset;
+        float d = Math.Min(r, Math.Min(x1 - x0, y1 - y0) / 2f) * 2f;
         var p = new GraphicsPath();
-        p.AddLine(0, 0, w, 0);
-        p.AddArc(w - d, h - d, d, d, 0, 90);
-        p.AddArc(0, h - d, d, d, 90, 90);
+        p.AddLine(x0, y0, x1, y0);
+        p.AddArc(x1 - d, y1 - d, d, d, 0, 90);
+        p.AddArc(x0, y1 - d, d, d, 90, 90);
         p.CloseFigure();
         return p;
     }

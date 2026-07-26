@@ -29,7 +29,48 @@ internal static class BannerGate
         lock (_lock)
             foreach (var aumid in new List<string>(_orig.Keys))
                 changed |= WriteZero(aumid);
+        changed |= SeedKnownApps();
         if (changed) ScheduleApply();
+    }
+
+    private static bool SeedKnownApps()
+    {
+        bool changed = false;
+        int seeded = 0;
+        try
+        {
+            using var root = Registry.CurrentUser.OpenSubKey(SettingsPath);
+            if (root == null) return false;
+            foreach (var aumid in Walk(root, "", 0))
+            {
+                lock (_lock)
+                {
+                    if (_orig.ContainsKey(aumid)) continue;
+                    try { using var k = root.OpenSubKey(aumid); _orig[aumid] = k?.GetValue("ShowBanner") as int?; }
+                    catch { _orig[aumid] = null; }
+                    AppendState(aumid, _orig[aumid]);
+                    if (WriteZero(aumid)) { changed = true; seeded++; }
+                }
+            }
+        }
+        catch (Exception ex) { Log("seed failed: " + ex.Message); }
+        if (seeded > 0) Log($"seeded {seeded} already-known app(s) from the registry");
+        return changed;
+    }
+
+    private static IEnumerable<string> Walk(RegistryKey root, string prefix, int depth)
+    {
+        if (depth > 4) yield break;
+        string[] names;
+        try { using var k = prefix.Length == 0 ? null : root.OpenSubKey(prefix); names = (k ?? root).GetSubKeyNames(); }
+        catch { yield break; }
+        foreach (var name in names)
+        {
+            if (string.IsNullOrEmpty(name)) continue;
+            string full = prefix.Length == 0 ? name : prefix + "\\" + name;
+            yield return full;
+            foreach (var child in Walk(root, full, depth + 1)) yield return child;
+        }
     }
 
     public static void SuppressApp(string aumid)

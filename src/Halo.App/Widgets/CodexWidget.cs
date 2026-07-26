@@ -23,19 +23,24 @@ internal sealed class CodexWidget : IWidget
     private readonly CodexSurface _surface;
     private readonly Action _cancel;
     private readonly Func<bool> _canCancelDesktop;
+    private readonly Action<CodexSnapshot?> _observeLimits;
 
-    public CodexWidget(CodexStatusStore store, CodexSurface surface, Action cancel, Func<bool>? canCancelDesktop = null)
+    public CodexWidget(CodexStatusStore store, CodexSurface surface, Action cancel,
+        Func<bool>? canCancelDesktop = null, Action<CodexSnapshot?>? observeLimits = null)
     {
         _store = store;
         _surface = surface;
         _cancel = cancel;
         _canCancelDesktop = canCancelDesktop ?? (static () => false);
+        _observeLimits = observeLimits ?? CodexLimits.UpdateFrom;
         CodexLimits.Attach(store);
     }
 
     private CodexSnapshot? Current => _store.Candidate(_surface);
 
     private static readonly Bitmap? OpenAiIcon = LoadIcon();
+    internal static Bitmap? PlainIcon => OpenAiIcon;
+    public float IconOffsetX => -1.25f;
 
     private static readonly Color Accent = Fx.AccentOf(OpenAiIcon) is var a && a != Fx.White
         ? a : Color.FromArgb(16, 163, 127);
@@ -121,8 +126,11 @@ internal sealed class CodexWidget : IWidget
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
         var st = Current;
+        _observeLimits(st);
         float sz = (h - 16f) * 0.82f, x = 13, y = (h - sz) / 2f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st))
         {
@@ -132,7 +140,7 @@ internal sealed class CodexWidget : IWidget
             g.FillPath(pb, pp);
         }
 
-        using (var pen = new Pen(Mul(RingColor(st), fade * 0.55f), 1.9f))
+        using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
         if (OpenAiIcon != null) DrawIcon(g, OpenAiIcon, x, y, sz, fade, sz / 2f);
         else
@@ -178,14 +186,14 @@ internal sealed class CodexWidget : IWidget
         g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h));
         float zoneW = centred ? avail - 34f : avail + 16f;
 
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -1.5f, zoneW, h), sf);
+        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0)
             using (var eb = new SolidBrush(Mul(Dim, fade * e)))
             using (var esf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -1.5f, elW + 4, h), esf);
+                g.DrawString(el, tf2, eb, new RectangleF(w - 14 - elW - 4, -Fx.CenterLift(tf2), elW + 4, h), esf);
 
     }
 
@@ -513,9 +521,13 @@ internal sealed class CodexWidget : IWidget
         _ => Color.FromArgb(140, 255, 255, 255),
     };
 
+    private static float UsageFrac()
+        => CodexLimits.FiveHour >= 0 ? CodexLimits.FiveHour : CodexLimits.Week >= 0 ? CodexLimits.Week : 0f;
+
     private static Color RingColor(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
-         : LimitHit ? Amber
+         : LimitHit ? White
+
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
          : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
@@ -588,7 +600,7 @@ internal sealed class CodexWidget : IWidget
 
     private static string ToolVerb(string? tool) => tool switch
     {
-        "exec" or "shell" or "local_shell" or "exec_command" or "container" => "running…",
+        "exec" or "shell" or "shell_command" or "local_shell" or "exec_command" or "container" => "running…",
         "apply_patch" or "edit" or "write_file" => "patching…",
         "read_file" or "view" or "cat" => "reading…",
         "grep" or "rg" or "find" or "list_dir" or "ls" => "digging…",

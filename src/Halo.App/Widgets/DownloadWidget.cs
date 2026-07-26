@@ -53,36 +53,74 @@ internal sealed class DownloadWidget : IWidget
     }
 
     private const float ArtX = 26, ArtY = 26, ArtSize = 132;
-    private static RectangleF[] CtlRects(int w, int n)
+    private static RectangleF[] CtlRects(int n)
     {
-        const float size = 40, gap = 18;
-        float colL = ArtX + ArtSize + 22, colR = w - 26, cx = (colL + colR) / 2f;
-        float total = n * size + (n - 1) * gap, x0 = cx - total / 2f, y = 158;
+        const float size = 40, gap = 14, y = 158;
+        float x0 = ArtX + ArtSize + 24;
         var r = new RectangleF[n];
         for (int i = 0; i < n; i++) r[i] = new RectangleF(x0 + i * (size + gap), y, size, size);
         return r;
     }
 
+    public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> CollapsedButtons(int w, int h)
+        => Array.Empty<(RectangleF, Action<PointF>)>();
+
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
-        if (Downloads.Name == null) return Array.Empty<(RectangleF, Action<PointF>)>();
-        if (Downloads.IsStore && Downloads.CanControl)
+        var hits = new List<(RectangleF, Action<PointF>)>();
+        int n = Downloads.Count;
+        if (Downloads.HasMore) hits.Add((MenuRect(w), _ => _menuOpen = !_menuOpen));
+        if (_menuOpen && Downloads.HasMore)
         {
-            var r = CtlRects(w, 2);
-            return new (RectangleF, Action<PointF>)[]
+            int top = MenuTop(n), rows = Math.Min(n - top, MaxRows);
+            for (int v = 0; v < rows; v++)
             {
-                (r[0], _ => { if (Downloads.Paused) Downloads.StoreResume(); else Downloads.StorePause(); }),
-                (r[1], _ => Downloads.StoreCancel()),
-            };
+                int idx = top + v;
+                hits.Add((RowRect(w, n, v), _ => { Downloads.Select(idx); _menuOpen = false; }));
+            }
+
+            hits.Add((new RectangleF(0, 0, w, h), _ => _menuOpen = false));
+            return hits;
         }
-        if (Downloads.Hwnd == IntPtr.Zero) return Array.Empty<(RectangleF, Action<PointF>)>();
-        var wr = CtlRects(w, 2);
-        return new (RectangleF, Action<PointF>)[]
-        {
-            (wr[0], _ => Downloads.Reveal()),
-            (wr[1], _ => Downloads.StopProcess()),
-        };
+        foreach (var c in Chips()) { var act = c.Click; hits.Add((c.Rect, _ => act())); }
+        return hits;
     }
+
+    private readonly record struct Chip(RectangleF Rect, int Glyph, bool Danger, bool Stop, Action Click);
+
+    private static Chip[] Chips()
+    {
+        var row = Row(Downloads.Name != null, Downloads.IsStore, Downloads.CanControl,
+                      Downloads.Hwnd != IntPtr.Zero, Downloads.FilePath is { Length: > 0 });
+        var rects = CtlRects(row.Length);
+        var chips = new Chip[row.Length];
+        for (int i = 0; i < row.Length; i++) chips[i] = Make(rects[i], row[i]);
+        return chips;
+    }
+
+    internal enum DlCtl { PauseResume, StoreCancel, Reveal, Stop, ShowInFolder, RevealOwner, Cancel }
+
+    internal static DlCtl[] Row(bool named, bool store, bool canControl, bool hasWindow, bool hasPath)
+    {
+        if (!named) return Array.Empty<DlCtl>();
+        if (store && canControl) return new[] { DlCtl.PauseResume, DlCtl.StoreCancel };
+        if (hasWindow) return new[] { DlCtl.Reveal, DlCtl.Stop };
+        if (hasPath) return new[] { DlCtl.ShowInFolder, DlCtl.RevealOwner, DlCtl.Cancel };
+        return Array.Empty<DlCtl>();
+    }
+
+    private static Chip Make(RectangleF r, DlCtl c) => c switch
+    {
+        DlCtl.PauseResume => new Chip(r, Downloads.Paused ? 0xE768 : 0xE769, false, false,
+                                      () => { if (Downloads.Paused) Downloads.StoreResume(); else Downloads.StorePause(); }),
+        DlCtl.StoreCancel => new Chip(r, 0xE711, true, false, Downloads.StoreCancel),
+        DlCtl.Reveal => new Chip(r, 0xE838, false, false, Downloads.Reveal),
+        DlCtl.Stop => new Chip(r, 0, false, true, Downloads.StopProcess),
+        DlCtl.ShowInFolder => new Chip(r, 0xE838, false, false, Downloads.ShowInFolder),
+        DlCtl.RevealOwner => new Chip(r, 0xE7C4, false, false, Downloads.RevealOwner),
+
+        _ => new Chip(r, 0xE711, true, false, Downloads.CancelDownload),
+    };
 
     private static float _fracShown = -1f;
     private static string? _lastName;
@@ -92,7 +130,7 @@ internal sealed class DownloadWidget : IWidget
         if (fade <= 0.01f) return;
         string? name = Downloads.Name;
         if (name == null) return;
-        bool installing = Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
+        bool indeterminate = Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
         bool paused = Downloads.Paused;
         int pct = Math.Clamp(Downloads.Percent, 0, 100);
         long done = Downloads.Downloaded, tot = Downloads.Total;
@@ -101,29 +139,40 @@ internal sealed class DownloadWidget : IWidget
         float pulse = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 480f);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        var oldHint = g.TextRenderingHint;
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
-        Fx.Glow(g, w, h, fade * (installing ? 0.55f + 0.45f * pulse : 1f),
-            ArtX + ArtSize / 2f, ArtY + ArtSize / 2f, w * 0.85f, h * 1.2f, 38, accent);
+        Fx.Glow(g, w, h, fade * (indeterminate ? 0.55f + 0.45f * pulse : 1f),
+            ArtX + ArtSize / 2f, h / 2f, w * 0.85f, h * 1.2f, 34, accent);
         DrawArt(g, icon, fade);
 
-        float tx = ArtX + ArtSize + 22, tw = w - tx - 26;
-        using var titleF = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
-        using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
-        using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
-        using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawEllipsized(g, name, titleF, tb, tx, 34, tw, 30);
-        string state = Downloads.Waiting ? "Waiting…" : installing ? "Installing…"
-            : paused ? "Paused" : "Downloading";
-        string sub = installing || Downloads.NoPct ? state : $"{state}   ·   {pct}%";
-        using (var lb = new SolidBrush(Mul(Dim, fade)))
-            DrawEllipsized(g, sub, bodyF, lb, tx, 66, tw, 22);
+        float tx = ArtX + ArtSize + 24, tw = w - tx - MenuSlot - 26;
+        using var titleF = new Font("Segoe UI Semibold", 23f, GraphicsUnit.Pixel);
+        using var metaF = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        using var smallF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
 
-        float by = 116, bh = 5;
-        Fill(g, tx, by, tw, bh, Mul(Track, fade), bh / 2);
-        if (installing)
+        float y = ArtY + 4;
+        using (var tb = new SolidBrush(Mul(White, fade)))
+            DrawEllipsized(g, name, titleF, tb, tx, y, tw, 30);
+        y += 32;
+
+        string state = Downloads.Waiting ? "Waiting…" : Downloads.Installing ? "Installing…"
+            : paused ? "Paused" : "Downloading";
+        string meta = state;
+
+        if (Downloads.NoBytes) { }
+        else if (done > 1_048_576 && tot > 1_048_576) meta += $"   ·   {Bytes(done)} / {Bytes(tot)}   ·   {pct}%";
+        else if (done > 1_048_576) meta += $"   ·   {Bytes(done)}";
+        using (var mb = new SolidBrush(Mul(Dim, fade)))
+            DrawEllipsized(g, meta, metaF, mb, tx, y, tw, 20);
+        y += 30;
+
+        float bh = 6;
+        Fill(g, tx, y, tw, bh, Mul(Track, fade), bh / 2);
+        if (indeterminate)
         {
             float seg = tw * 0.34f, sx = tx + (tw - seg) * (0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 700f));
-            Fill(g, sx, by, seg, bh, Mul(accent, fade * (0.5f + 0.5f * pulse)), bh / 2);
+            Fill(g, sx, y, seg, bh, Mul(accent, fade * (0.5f + 0.5f * pulse)), bh / 2);
         }
         else
         {
@@ -131,33 +180,137 @@ internal sealed class DownloadWidget : IWidget
             if (name != _lastName) { _lastName = name; _fracShown = frac; }
             _fracShown = _fracShown < 0 ? frac : _fracShown + (frac - _fracShown) * 0.18f;
             if (Math.Abs(frac - _fracShown) < 0.002f) _fracShown = frac;
-            if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(paused ? Dim : accent, fade), bh / 2);
+            if (_fracShown > 0) Fill(g, tx, y, tw * _fracShown, bh, Mul(paused ? Dim : accent, fade), bh / 2);
+        }
+        y += bh + 10;
 
-            using var eb = new SolidBrush(Mul(Dim, fade));
-            if (done > 1_048_576) g.DrawString(Bytes(done), timeF, eb, tx, by + 9);
-            if (tot > 1_048_576)
-            {
-                var ts = g.MeasureString(Bytes(tot), timeF);
-                g.DrawString(Bytes(tot), timeF, eb, tx + tw - ts.Width, by + 9);
-            }
+        if (Downloads.FilePath is { Length: > 0 } fp)
+        {
+            string? dir = null;
+            try { dir = System.IO.Path.GetDirectoryName(fp); } catch { }
+            if (!string.IsNullOrEmpty(dir))
+                using (var pb = new SolidBrush(Mul(Color.FromArgb(115, 255, 255, 255), fade)))
+                using (var psf = new StringFormat(StringFormat.GenericTypographic)
+                { Trimming = StringTrimming.EllipsisPath, FormatFlags = StringFormatFlags.NoWrap })
+                    g.DrawString(dir, smallF, pb, new RectangleF(tx, y, tw, 18), psf);
         }
 
-        if (Downloads.IsStore && Downloads.CanControl)
+        DrawControls(g, fade);
+        DrawMenuSlot(g, w, fade);
+        DrawMenuList(g, w, h, fade);
+        g.TextRenderingHint = oldHint;
+    }
+
+    private const float MenuSlot = 44;
+
+    internal static RectangleF MenuRect(int w) => new(w - MenuSlot - 8, 22, 34, 34);
+
+    private static bool _menuOpen;
+    private const float MenuW = 252f, RowH = 32f, MenuPad = 7f, MenuR = 15f;
+    private const int MaxRows = 4;
+
+    internal static RectangleF MenuListRect(int w, int n)
+        => new(w - MenuW - 8, MenuRect(w).Bottom + 8, MenuW, Math.Min(n, MaxRows) * RowH + MenuPad * 2);
+
+    private static int MenuTop(int n) => MenuTop(n, Downloads.SelectedIndex, MaxRows);
+
+    internal static int MenuTop(int n, int selected, int maxRows)
+        => n <= maxRows ? 0 : Math.Clamp(selected - maxRows + 1, 0, n - maxRows);
+
+    private static RectangleF RowRect(int w, int n, int visible)
+    {
+        var l = MenuListRect(w, n);
+        return new RectangleF(l.X + MenuPad, l.Y + MenuPad + visible * RowH, l.Width - MenuPad * 2, RowH);
+    }
+
+    private void DrawMenuList(Graphics g, int w, int h, float fade)
+    {
+        if (!_menuOpen || !Downloads.HasMore) return;
+        var items = Downloads.Items;
+        int n = items.Count;
+        if (n == 0) return;
+
+        using (var scrim = new SolidBrush(Mul(Color.FromArgb(120, 0, 0, 0), fade)))
+            g.FillRectangle(scrim, 0, 0, w, h);
+        var l = MenuListRect(w, n);
+
+        for (int i = 6; i >= 1; i--)
         {
-            var r = CtlRects(w, 2);
-            DrawCtl(g, r[0], paused ? 0xE768 : 0xE769, fade, danger: false);
-            DrawCtl(g, r[1], 0xE711, fade, danger: true);
+            var s = RectangleF.Inflate(l, i, i);
+            s.Y += 2f;
+            using var sp = Fx.Rounded(s, MenuR + i);
+            using var pen = new Pen(Mul(Color.FromArgb(11, 0, 0, 0), fade), 2f);
+            g.DrawPath(pen, sp);
         }
-        else if (Downloads.Hwnd != IntPtr.Zero)
+
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(232, 22, 22, 26), fade)))
+        using (var p = Fx.Rounded(l, MenuR))
+            g.FillPath(bg, p);
+
+        using (var pen = new Pen(Mul(Color.FromArgb(52, 255, 255, 255), fade), 1f))
+        using (var p = Fx.Rounded(RectangleF.Inflate(l, -0.5f, -0.5f), MenuR - 0.5f))
+            g.DrawPath(pen, p);
+        using (var pen = new Pen(Mul(Color.FromArgb(30, 0, 0, 0), fade), 1f))
+        using (var p = Fx.Rounded(RectangleF.Inflate(l, 0.5f, 0.5f), MenuR + 0.5f))
+            g.DrawPath(pen, p);
+
+        using var f = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        using var bold = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Pixel);
+        var accent = Accent();
+        int top = MenuTop(n), sel = Downloads.SelectedIndex, rows = Math.Min(n - top, MaxRows);
+        for (int v = 0; v < rows; v++)
         {
-            var wr = CtlRects(w, 2);
-            DrawCtl(g, wr[0], 0xE838, fade, danger: false);
-            DrawStop(g, wr[1], fade);
+            int idx = top + v;
+            var r = RowRect(w, n, v);
+            bool cur = idx == sel, hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+            if (cur || hov)
+                using (var hb = new SolidBrush(Mul(Color.FromArgb(cur ? 34 : 18, 255, 255, 255), fade)))
+                using (var p = Fx.Rounded(r, 10f))
+                    g.FillPath(hb, p);
+
+            if (cur)
+                using (var ab = new SolidBrush(Mul(accent, fade)))
+                using (var p = Fx.Rounded(new RectangleF(r.X + 4, r.Y + RowH * 0.26f, 3f, RowH * 0.48f), 1.5f))
+                    g.FillPath(ab, p);
+
+            var it = items[idx];
+
+            string tail = it.NoPct ? Bytes(it.Downloaded) : $"{it.Percent}%";
+            var tsz = g.MeasureString(tail, f);
+            using (var tb = new SolidBrush(Mul(cur ? Dim : Color.FromArgb(112, 255, 255, 255), fade)))
+                g.DrawString(tail, f, tb, r.Right - tsz.Width - 10, r.Y + (RowH - tsz.Height) / 2f);
+            using (var nb = new SolidBrush(Mul(cur ? White : Dim, fade)))
+                DrawEllipsized(g, it.Name, cur ? bold : f, nb, r.X + 14, r.Y + (RowH - 17) / 2f,
+                               r.Width - tsz.Width - 32, 17);
+        }
+    }
+
+    private static void DrawMenuSlot(Graphics g, int w, float fade)
+    {
+        if (!Downloads.HasMore) { _menuOpen = false; return; }
+        var r = MenuRect(w);
+        bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+        bool lit = hov || _menuOpen;
+        using (var bg = new SolidBrush(Mul(Color.FromArgb(lit ? 42 : 24, 255, 255, 255), fade)))
+        using (var p = Fx.Rounded(r, 10f))
+            g.FillPath(bg, p);
+        using var b = new SolidBrush(Mul(lit ? White : Dim, fade));
+        float bw = r.Width * 0.44f, x = r.X + (r.Width - bw) / 2f;
+        for (int i = 0; i < 3; i++) g.FillRectangle(b, x, r.Y + 11 + i * 6, bw, 2f);
+    }
+
+    private void DrawControls(Graphics g, float fade)
+    {
+        foreach (var c in Chips())
+        {
+            if (c.Stop) DrawStop(g, c.Rect, fade);
+            else DrawCtl(g, c.Rect, c.Glyph, fade, c.Danger);
         }
     }
 
     private static void DrawArt(Graphics g, Bitmap? icon, float fade)
-        => IconTile(g, new RectangleF(ArtX, ArtY, ArtSize, ArtSize), ArtSize * 0.24f, icon, fade, 46f, border: true);
+        => IconTile(g, new RectangleF(ArtX, ArtY, ArtSize, ArtSize), ArtSize * 0.24f, icon, fade, 46f,
+            border: icon == null);
 
     private static void IconTile(Graphics g, RectangleF box, float radius, Bitmap? icon, float fade, float glyphPx, bool border)
     {
@@ -221,6 +374,7 @@ internal sealed class DownloadWidget : IWidget
 
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
+        _menuOpen = false;
         string? name = Downloads.Name;
         if (name == null) return;
         var icon = Ico();
@@ -229,22 +383,35 @@ internal sealed class DownloadWidget : IWidget
         float sz = h - 14f, ix = 9, iy = (h - sz) / 2f;
         float tx = ix + sz + 12;
 
-        if (Downloads.Waiting)
+        bool breathe = Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused && !Downloads.Installing);
+        if (breathe)
         {
             float pulse = 0.5f - 0.5f * MathF.Cos(Environment.TickCount % 2400 / 2400f * MathF.Tau);
             using (var pb = new SolidBrush(Mul(accent, fade * (0.05f + 0.12f * pulse))))
             using (var pp = Fx.PillPath(w, h, h / 2f))
                 g.FillPath(pb, pp);
             DrawCollapsedIcon(g, icon, ix, iy, sz, fade);
+            DrawCountBadge(g, ix, iy, sz, fade, Downloads.Count);
             using var nf = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
             using var nb = new SolidBrush(Mul(White, fade));
-            DrawEllipsized(g, name, nf, nb, tx, (h - 18f) / 2f, w - tx - 14, 18);
+            float right = w - tx - 14;
+
+            if (!Downloads.Waiting && !Downloads.NoBytes && Downloads.Downloaded > 0)
+            {
+                string got = Bytes(Downloads.Downloaded);
+                using var sf2 = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+                using var sb2 = new SolidBrush(Mul(Dim, fade));
+                var gsz = g.MeasureString(got, sf2);
+                g.DrawString(got, sf2, sb2, w - gsz.Width - 14, (h - gsz.Height) / 2f);
+                right -= gsz.Width + 8;
+            }
+            DrawEllipsized(g, name, nf, nb, tx, (h - 18f) / 2f, right, 18);
             return;
         }
 
         DrawCollapsedIcon(g, icon, ix, iy, sz, fade);
         float by = h / 2f - 3, bh = 6;
-        if (Downloads.Installing || (Downloads.NoPct && !Downloads.Paused))
+        if (Downloads.Installing)
         {
             float p = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 480f);
             float bw = w - tx - 16;
@@ -253,15 +420,80 @@ internal sealed class DownloadWidget : IWidget
             Fill(g, sx, by, seg, bh, Mul(accent, 0.5f + 0.5f * p), bh / 2);
             return;
         }
-        int pct = Math.Clamp(Downloads.Percent, 0, 100);
+        DrawPillProgress(g, w, h, fade, Math.Clamp(Downloads.Percent, 0, 100), accent,
+            Downloads.Paused, ix + sz);
+    }
+
+    private static void DrawPillProgress(Graphics g, int w, int h, float fade, int pct, Color accent,
+        bool paused, float iconRight)
+    {
+        var bar = paused ? Dim : accent;
+        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
+
+        float sz = h - 14f;
+        DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade);
+        if (paused) DrawPausedBadge(g, 9, (h - sz) / 2f, sz, fade);
+        DrawCountBadge(g, 9, (h - sz) / 2f, sz, fade, Downloads.Count);
+
+        long done = Downloads.Downloaded, tot = Downloads.Total;
+
+        var oldHint = g.TextRenderingHint;
+
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
         using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
-        using var tb = new SolidBrush(White);
-        var tsz = g.MeasureString(pct + "%", f);
-        float px = w - tsz.Width - 14, py = (h - tsz.Height) / 2f;
-        g.DrawString(pct + "%", f, tb, px, py);
-        float bw2 = px - tx - 12;
-        Fill(g, tx, by, bw2, bh, Track, bh / 2);
-        Fill(g, tx, by, bw2 * pct / 100f, bh, Downloads.Paused ? Dim : accent, bh / 2);
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+
+        float left = iconRight + 8f, right = w - 12f;
+
+        string text = $"{pct}%";
+        foreach (var candidate in new[]
+        {
+            done > 1_048_576 && tot > 1_048_576 ? $"{Bytes(done)} / {Bytes(tot)}  ·  {pct}%" : null,
+            done > 1_048_576 ? $"{Bytes(done)}  ·  {pct}%" : null,
+        })
+        {
+            if (candidate == null) continue;
+            if (g.MeasureString(candidate, f, int.MaxValue, sf).Width <= right - left) { text = candidate; break; }
+        }
+        var zone = new RectangleF(left, -Fx.CenterLift(f), right - left, h);
+        using (var shadow = new SolidBrush(Mul(Color.FromArgb(110, 0, 0, 0), fade)))
+            g.DrawString(text, f, shadow, new RectangleF(zone.X + 0.6f, zone.Y + 0.6f, zone.Width, zone.Height), sf);
+        using (var nb = new SolidBrush(Mul(White, fade)))
+            g.DrawString(text, f, nb, zone, sf);
+        g.TextRenderingHint = oldHint;
+
+    }
+
+    private static void DrawCountBadge(Graphics g, float x, float y, float sz, float fade, int n)
+    {
+        if (n < 2) return;
+        float d = sz * 0.60f, bx = x + sz - d + 1f, by = y - 1f;
+        using (var shade = new SolidBrush(Mul(Color.FromArgb(215, 12, 12, 14), fade)))
+            g.FillEllipse(shade, bx, by, d, d);
+        using (var ring = new Pen(Mul(Color.FromArgb(190, 255, 255, 255), fade), 1.1f))
+            g.DrawEllipse(ring, bx, by, d, d);
+        using var f = new Font("Segoe UI Semibold", d * 0.62f, GraphicsUnit.Pixel);
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        using var b = new SolidBrush(Mul(White, fade));
+        g.DrawString(n > 9 ? "9+" : n.ToString(), f, b,
+                     new RectangleF(bx, by - Fx.CenterLift(f), d, d), sf);
+    }
+
+    private static void DrawPausedBadge(Graphics g, float x, float y, float sz, float fade)
+    {
+        float d = sz * 0.62f, bx = x + sz - d + 2f, by = y + sz - d + 2f;
+        using (var shade = new SolidBrush(Mul(Color.FromArgb(190, 12, 12, 14), fade)))
+            g.FillEllipse(shade, bx, by, d, d);
+        using (var ring = new Pen(Mul(Color.FromArgb(210, 255, 255, 255), fade), 1.2f))
+            g.DrawEllipse(ring, bx, by, d, d);
+
+        float bw = d * 0.16f, bh = d * 0.42f, gap = d * 0.14f;
+        float cx = bx + d / 2f, cy = by + d / 2f;
+        using var b = new SolidBrush(Mul(White, fade));
+        g.FillRectangle(b, cx - gap / 2f - bw, cy - bh / 2f, bw, bh);
+        g.FillRectangle(b, cx + gap / 2f, cy - bh / 2f, bw, bh);
     }
 
     private static readonly Color Red = Color.FromArgb(255, 120, 110);

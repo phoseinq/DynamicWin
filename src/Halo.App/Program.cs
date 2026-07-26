@@ -21,6 +21,12 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--render-badges") { RenderBadges(args[1]); return; }
 
+        if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
+
+        if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
+
+        if (args.Length >= 1 && args[0] == "--cancel-download") { CancelDownload(); return; }
+
         if (args.Length >= 2 && args[0] == "--probe-icon") { ProbeIcon(args[1]); return; }
 
         if (args.Length >= 2 && args[0] == "--probe-tree") { ProbeTree(int.Parse(args[1])); return; }
@@ -48,6 +54,7 @@ internal static class Program
             Halo.ClaudeCode.Limits.Poke();
             Halo.ClaudeCode.NetMon.Poke();
             Halo.Codex.CodexNetMon.Poke();
+            Halo.Update.AutoUpdate.Start();
             _ = new NotchController(notch);
             Win32.RunMessageLoop();
         }
@@ -73,6 +80,55 @@ internal static class Program
         Console.WriteLine($"snapshot has {map.Count} processes");
         int p = pid, guard = 0;
         while (p > 4 && guard++ < 20) { Console.WriteLine($"  {p}"); if (!map.TryGetValue(p, out p)) break; }
+    }
+
+    private static void CancelDownload()
+    {
+        Halo.Widgets.Downloads.Scan();
+        if (Halo.Widgets.Downloads.Count == 0) { Console.WriteLine("nothing downloading"); return; }
+        string? file = Halo.Widgets.Downloads.FilePath;
+        Console.WriteLine($"cancelling '{Halo.Widgets.Downloads.Name}' file='{file}'");
+        long before = -1;
+        try { if (file != null) before = new System.IO.FileInfo(file).Length; } catch { }
+
+        Halo.Widgets.Downloads.CancelDownload();
+        System.Threading.Thread.Sleep(14000);
+
+        long after = -1;
+        try { if (file != null && System.IO.File.Exists(file)) after = new System.IO.FileInfo(file).Length; } catch { }
+        Console.WriteLine(after < 0 ? "partial is gone -> stopped"
+            : after == before ? $"partial held at {before:n0} -> stopped"
+            : $"partial grew {before:n0} -> {after:n0} -> STILL RUNNING");
+    }
+
+    private static void ProbeDownloads(string outPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"{DateTime.Now:HH:mm:ss}  probe-downloads");
+
+        sb.AppendLine("\nChromiumProgress.Live():");
+        var live = Halo.Widgets.ChromiumProgress.Live();
+        if (live.Length == 0) sb.AppendLine("  (nothing in progress)");
+        foreach (var e in live)
+            sb.AppendLine($"  name='{e.Name}' received={e.Received:n0} total={e.Total:n0}"
+                        + $" pct={(e.Total > 0 ? 100.0 * e.Received / e.Total : 0):0.0}");
+
+        sb.AppendLine("\nChromiumProgress.DumpFields():");
+        sb.AppendLine(Halo.Widgets.ChromiumProgress.DumpFields());
+
+        sb.AppendLine("\nPartialFiles.All():");
+        foreach (var p in Halo.Widgets.PartialFiles.All())
+            sb.AppendLine($"  {p}");
+
+        Halo.Widgets.Downloads.Scan();
+        sb.AppendLine($"\nDownloads.Scan() -> {Halo.Widgets.Downloads.Count} item(s), selected="
+                    + Halo.Widgets.Downloads.SelectedIndex);
+        foreach (var d in Halo.Widgets.Downloads.Items)
+            sb.AppendLine($"  key='{d.Key}' name='{d.Name}' pct={d.Percent} got={d.Downloaded:n0}"
+                        + $" total={d.Total:n0} noPct={d.NoPct} noBytes={d.NoBytes} pid={d.OwnerPid}"
+                        + $" exe='{d.ExePath}' file='{d.FilePath}'");
+
+        System.IO.File.WriteAllText(outPath, sb.ToString());
     }
 
     private static void ProbeIcon(string aumid)
@@ -142,14 +198,59 @@ internal static class Program
             new Halo.Shell.LayeredNotch().DrawShape(g, W, H, 26, 245, glass: false);
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            _ = icon;
             var n = new Halo.Notifications.NotifItem
             {
+                Icon = icon,
+
                 App = Halo.Notifications.NotifItem.ScreenshotApp,
                 Title = Halo.Notifications.NotifItem.ScreenshotTitle,
+
+                Body = "Saved to the clipboard. Click the banner to edit it, or press Ctrl+V in any "
+                     + "app to paste it straight in.",
+                Code = "482913",
                 Preview = shot,
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static void RenderLocal(string outPath)
+    {
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 20;
+        using var shot = new System.Drawing.Bitmap(1920, 1080);
+        using (var sg = System.Drawing.Graphics.FromImage(shot))
+        {
+            using var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, 1920, 1080),
+                System.Drawing.Color.FromArgb(240, 245, 250), System.Drawing.Color.FromArgb(150, 190, 235), 45f);
+            sg.FillRectangle(lg, 0, 0, 1920, 1080);
+            using var wf = new System.Drawing.Font("Segoe UI", 130f);
+            sg.DrawString("desktop", wf, System.Drawing.Brushes.DimGray, 430, 440);
+        }
+
+        var notices = Halo.Shell.NotchController.SampleLocalNotices(shot);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, notices.Length * (H + pad) + pad);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                System.Drawing.Color.FromArgb(60, 140, 200), System.Drawing.Color.FromArgb(200, 100, 60), 35f))
+                g.FillRectangle(lg, 0, 0, bmp.Width, bmp.Height);
+
+            var notch = new Halo.Shell.LayeredNotch();
+            for (int i = 0; i < notices.Length; i++)
+            {
+                var state = g.Save();
+                g.TranslateTransform(pad, pad + i * (H + pad));
+                notch.DrawShape(g, W, H, 26, 245, glass: false);
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, notices[i], 0f, false);
+                using (var guide = new System.Drawing.Pen(System.Drawing.Color.FromArgb(90, 255, 80, 80), 1f))
+                    g.DrawLine(guide, 0, H / 2f, W, H / 2f);
+                g.Restore(state);
+            }
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
