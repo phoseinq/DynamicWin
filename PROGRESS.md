@@ -1,5 +1,155 @@
 # Halo — progress
 
+## 2026-07-26: multi-download, a real cancel, and the pill-as-bar colour
+**Deployed locally (hot-copied over the install, v3.1.0); committed to `master`; NOT pushed and NOT
+released — GitHub is still on v3.0.2.**
+
+### The Cancel chip was two bugs stacked, and the second was mine
+- **No hit rect.** `DrawControls` and `Buttons` each laid the control row out independently and had
+  drifted: the painter grew a third chip for partial-file downloads (folder / switch app / cancel)
+  while the hit-tester still built two, so Cancel had *nothing* behind it and the two that did work
+  sat 29px left of the circles being aimed at. Both now read one pure `DownloadWidget.Row`, pinned by
+  `DownloadControlsTests`. The row is also left-aligned to the title's edge instead of centred the way
+  media's transport is — media has a symmetric prev/play/next cluster; this is a toolbar.
+- **Deleting the partial file was never a cancel.** Chrome opens its `.crdownload` with
+  `FILE_SHARE_DELETE`, so the delete succeeds and the directory entry disappears while the handle
+  stays valid and the transfer keeps running. Measured across the delete: **1694 KB/s before, a
+  sustained ~350 KB/s for the next 15s with no partial file on disk at all.** Worse than doing
+  nothing — the pill collapsed (we cleared `Name`) so it looked like it had worked, while the
+  download kept spending bandwidth invisibly and threw the bytes away when the final rename failed.
+  My earlier "verified live, the transfer stops" had only ever checked that the *file* was gone,
+  which is not evidence about the bytes. Reported from the other side three times.
+- **What it does now:** a browser gets its own downloads list pushed in front of the user (focus +
+  Ctrl+J, the shortcut every Chromium browser and Firefox share), the partial file is left alone and
+  the pill keeps showing the download because it is still running. Anything else is a plain
+  downloader we can stop for real by ending it, and only then is the leftover partial safe to delete.
+  `OwnerIsBrowser` guards that branch by name **and by process-fleet size** (chrome 19 processes,
+  msedge 9, a downloader 1) so an unrecognised Chromium fork is never mistaken for a downloader and
+  killed.
+- `SetForegroundWindow` returns before the foreground has actually changed, so checking
+  `GetForegroundWindow` on the next line could say "not us" and skip the keystroke entirely. The
+  focus-and-type runs off the frame timer now and polls for up to 600ms.
+
+### Several downloads at once
+- `Scan` collected one winner through a priority chain and returned on the first hit, so a Steam
+  install hid a browser download and two browser downloads hid each other. It now gathers every
+  source into a list and projects one item onto the volatile fields the widget already reads — which
+  is why **no drawing code had to change** to become a list.
+- Order is arrival order, never progress: sorting by speed or percentage reshuffles the pill every
+  second. Oldest running download owns the pill, the next takes over when it finishes, and the
+  switcher's choice is sticky so it survives the bytes moving underneath.
+- `Roots()` yielded the Downloads folder **twice** — once as the default and once from the learned
+  downloader directories, where the browser was first seen writing — so every download was listed
+  twice. Verified live with three concurrent Chrome downloads: three rows, right names and
+  percentages, arrival order held while progress moved.
+- Panel hamburger opens a four-row list over a scrim; longer lists window around the selection. The
+  collapsed pill carries a count badge top-right (so it cannot collide with the pause badge), absent
+  at one download.
+
+### Rendering
+- **The pill-as-bar read as flat paint.** The track was `Shade(accent, 1)`, which is *more* saturated
+  as well as darker — on Chrome's yellow that is olive, so the whole pill was one dirty hue with a
+  brighter patch on it. Track now keeps the hue and drops most of the saturation; two glows instead
+  of one (wide + dim under the fill for body, tight on the wavefront); a vertical sheen; and the
+  wavefront falls off over ~2.5px instead of a quarter of a pixel. Extra track weight is spent only
+  where the effect is bold, so the agent pills at `strength 0.3` stay a whisper — verified by
+  rendering both strengths across three accents and three fractions.
+- **Notification summary** (idea taken from `codex/notif-readability`, reimplemented): the line people
+  read at a glance was `Dim` (alpha 150) at 13px, and a `FontScale` shrank every string *further* the
+  longer the toast got — so the toasts with the most to say were the hardest to read. Body now has its
+  own near-white tone at 14.5px and holds one size; one truncated line became two wrapped ones.
+  Gotcha found while verifying: `GenericTypographic` carries `LineLimit` and lays out only **whole**
+  lines, so two 14.5px lines (~38.6px) silently vanished to one in an exactly-38px box.
+
+### Browser download internals — measured, worth not rediscovering
+- **Edge writes its History row only when the download ENDS.** `max(id)` did not move through 22s of
+  active downloading with 85 MB on disk. Chrome writes the row up front, which is why Chrome gets a
+  percentage and Edge does not. Edge also never renames its partial away from
+  `Unconfirmed 12345.crdownload`, and leaves `current_path` empty even in the finished row, so neither
+  path can be matched by name. A folder-based heuristic was written and **reverted** — it twice named
+  a 1 GB transfer after a different row. Edge's live download *is* recorded, in `shared_proto_db`
+  (LevelDB log + protobuf); parsing that is the open option.
+- **Chrome is UIA-first, not MSAA.** `AccessibleObjectFromWindow` on the top-level window and on all
+  three `Chrome_RenderWidgetHostHWND` children returns **0 children**. Over UIA the same window
+  exposes 47 buttons including the `"1 download in progress"` bubble button, which invokes fine, and
+  download rows are `ControlType.DataItem` with `InvokePattern` whose Name is the row's concatenated
+  text (`"1Gb.dat Canceled Copy download link More actions Delete from history"`). All localized.
+
+### Still open
+- Auto-clicking Cancel via UIA (approved in principle; MSAA ruled out, so it is either ~400 lines of
+  hand-written `IUIAutomation` vtable interop or shelling out to Windows PowerShell 5.1, which ships
+  `UIAutomationClient` — decision pending).
+- Edge percentage via `shared_proto_db` (approved in principle, not started).
+- Media + download coexistence (badge on the icon, open to the right) — not started.
+- Reading the PR replies on `phoseinq/DynamicWin`; GitHub release for 3.1.0; stripped-mirror push.
+- Tests 102 → 112 for the download work (124 with Codex's uncommitted Codex-widget tests).
+
+## 2026-07-26: public V3 CI and security guardrails
+**Pushed to `phoseinq/DynamicWin` branch `V3` as `03abffe`; not deployed locally.**
+- **Root cause:** the public mirror had no test project or CI, so pull requests had no automated
+  compilation, regression, source-policy, dependency, or static-security feedback.
+- **Implementation:** added a pinned-action Windows .NET 9 Release pipeline with warnings-as-errors,
+  four initial `NotchVisibility` tests, a self-tested public-source policy gate (no shipped C# comment
+  lines, tab indentation, or new production NuGet packages), CODEOWNERS, CodeQL, and PR dependency
+  review at moderate severity.
+- **Verified:** local policy self-test and repository scan passed; Release build completed with
+  **0 warnings / 0 errors** and tests **4/4**. Manually dispatched GitHub runs completed successfully:
+  CI `30181768325` and Security/CodeQL `30181769235`. The two initial push runs were intentionally
+  cancelled by the workflows' concurrency setting when the manual verification runs started.
+- **Review state:** PRs #1 and #2 both have `CHANGES_REQUESTED` reviews authored by `phoseinq`;
+  remaining issues are documented in the review bodies. No standalone bot/account comments were added.
+
+## 2026-07-26: offline Codex hook integration in the installer
+**Deployed locally from the signed installer; implementation is not committed or pushed.**
+- **Root cause:** `DynamicWinSetup.exe` shipped `Halo.Hooks.exe` but never registered Codex lifecycle
+  hooks. The only registration path was a repository PowerShell script that could invoke `dotnet
+  publish`, so a normal installed/offline machine could not configure the integration itself.
+- **Implementation:** the self-contained `Halo.Hooks.exe` now owns
+  `install-codex-hooks <absolute-exe>` and `uninstall-codex-hooks`. It preserves unrelated handlers,
+  replaces stale Halo entries idempotently, writes `.halo-bak`, atomically replaces valid JSON, fails
+  setup commands on malformed JSON, and removes only Halo handlers during uninstall. Normal lifecycle
+  events retain their silent-failure behavior.
+- **Packaging:** Inno Setup has a default-enabled `codexhooks` task that invokes the installed helper
+  directly, with no internet, repository, `pwsh`, or `dotnet` dependency. Uninstall runs the surgical
+  removal command once. The developer PowerShell wrapper delegates to the same implementation.
+- **Verified:** command-level tests were observed red before implementation; focused hook tests
+  **14/14**, full Release tests **124/124**, Release build **0 warnings / 0 errors**, and the final
+  signed installer compiled without warnings. Silent install returned 0; the live config contains
+  exactly seven Halo handlers and all point to
+  `%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.exe`; backup exists; installed/published hook executable
+  hashes match; a real installed `codex prompt` probe returned 0 and wrote `working` / `cli`. Halo was
+  relaunched from the installed build as PID 31964.
+
+## 2026-07-26: Codex shell/live-bar/main-session/icon fixes
+**Deployed locally from the signed installer; not committed or pushed.**
+- **Shell activity:** current Codex rollouts emit `function_call` / `function_call_output` with
+  `shell_command`; the parser only understood the older `custom_tool_call`, so shell work stayed
+  unclassified. Both formats now drive the tool state, output returns the ring to thinking, and
+  `shell_command` renders as `running…`.
+- **Collapsed usage bar:** limits were copied from the active snapshot only at startup or when the
+  expanded panel opened. `DrawCollapsed` now observes the selected snapshot before drawing the pill
+  bar; identical observations no longer rewrite the cache or fake a newer freshness time.
+- **Main session wins:** Codex Desktop subagent rollouts carry `parent_thread_id`, but the broker used
+  the newest file regardless, so parallel agents displaced the parent task. Child rollouts are now
+  excluded from both full scans and incremental watcher updates.
+- **Small Codex circle:** grouped Codex rows used a numbered/badged session bitmap as the closed-row
+  icon; the badge changed its ink bounds and shifted the mark. The closed row now uses the plain,
+  centred OpenAI mark, matching grouped Claude rows; badges remain on the expanded session fan.
+  A live screenshot then showed the geometrically-centred OpenAI knot still reads optically right-heavy,
+  so `IWidget.IconOffsetX` now carries a Codex-only `-1.25px` correction into the supersampled strip;
+  the ring and every other widget stay at zero offset.
+- **CLI hook path:** `install-codex-hooks.ps1` now prefers the shipped
+  `%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.exe`; the old `%LOCALAPPDATA%\Halo\hooks` publish remains
+  only as a development fallback. Per project policy, the live user hook config was not rewritten
+  automatically.
+- **Verified:** regression tests were observed red before implementation; full Release tests
+  **120/120**, `dotnet build Halo.sln -c Release --nologo` **0 warnings / 0 errors**,
+  `--render-widget ... codex` produced `%TEMP%\halo-codex-after.png` with no clipping, and
+  `installer\build.ps1` produced signed installer/portable artifacts. Installed silently and
+  relaunched the final optical-offset build as PID 19592 from
+  `%LOCALAPPDATA%\Programs\Halo\Halo.App.exe`; installed and staged `Halo.App.dll` SHA-256 hashes
+  match (`AAE51477...4AE7`).
+
 ## 2026-07-26: v3.1.0 — download coverage (browsers/Steam/any app), pill-as-bar UI, ring fixes
 **Local only: installed and running as 3.1.0, but GitHub is still on v3.0.2 — no release cut for 3.0.3
 or 3.1.0.** Commits `471c244`..`b181906` on `master`; nothing pushed to the fork since `c1c3070`.
