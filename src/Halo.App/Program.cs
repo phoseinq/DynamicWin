@@ -25,6 +25,9 @@ internal static class Program
         // dev hook: `Halo.App --render-local <out.png>` — the banners Halo raises ITSELF, stacked. Every
         // other hook renders a mirrored toast, which always has a body; the body-less ones are our own.
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
+        // dev hook: `Halo.App --render-copy <out.png>` — the copy-code pill in both states, 4x, with a
+        // centre guide. Its glyph and label are 11-12px, so being 1px out is visible and unmeasurable by eye.
+        if (args.Length >= 2 && args[0] == "--render-copy") { RenderCopy(args[1]); return; }
         // dev hook: `Halo.App --probe-downloads <out.txt>` — every download each source can see, plus the
         // raw rows out of Chromium's in-progress store. Written to a file because this is a WinExe.
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
@@ -228,6 +231,61 @@ internal static class Program
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
         }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    // dev-only: the copy-code pill, magnified, in both of its states, with a line through the true centre of
+    // the pill. Drawn by rendering the WHOLE banner through the real path and cropping to CopyRect, so what
+    // is magnified is exactly what ships -- and at 11-12px a one-pixel error is what the eye actually reads
+    // as "the icon sits high", which no amount of squinting at a 1x screenshot can settle.
+    private static void RenderCopy(string outPath)
+    {
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH;
+        const int Zoom = 4, Pad = 6;
+
+        var states = new[] { false, true };   // fresh code, then after the click
+        var shots = new System.Drawing.Bitmap[states.Length];
+        var rects = new System.Drawing.RectangleF[states.Length];
+
+        for (int s = 0; s < states.Length; s++)
+        {
+            var n = new Halo.Notifications.NotifItem
+            {
+                App = "Aurora", Title = "Verify your sign-in",
+                Body = "Your verification code is 482913. It expires in 10 minutes.",
+                Code = "482913", Copied = states[s],
+            };
+            rects[s] = Halo.Widgets.NotifBanner.CopyRect(n, W);
+            var full = new System.Drawing.Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var g = System.Drawing.Graphics.FromImage(full))
+            {
+                g.Clear(System.Drawing.Color.FromArgb(255, 18, 18, 22));
+                Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
+            }
+            shots[s] = full;
+        }
+
+        int cw = (int)Math.Ceiling(rects[0].Width) + Pad * 2;
+        int ch = (int)Math.Ceiling(rects[0].Height) + Pad * 2;
+        using var bmp = new System.Drawing.Bitmap(cw * Zoom, ch * Zoom * states.Length);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            g.Clear(System.Drawing.Color.FromArgb(255, 12, 12, 14));
+            for (int s = 0; s < states.Length; s++)
+            {
+                var r = rects[s];
+                var src = new System.Drawing.Rectangle((int)r.X - Pad, (int)r.Y - Pad, cw, ch);
+                var dst = new System.Drawing.Rectangle(0, s * ch * Zoom, cw * Zoom, ch * Zoom);
+                g.DrawImage(shots[s], dst, src, System.Drawing.GraphicsUnit.Pixel);
+                // the pill's own vertical centre, in the magnified frame
+                float mid = dst.Y + (Pad + r.Height / 2f) * Zoom;
+                using var guide = new System.Drawing.Pen(System.Drawing.Color.FromArgb(150, 255, 70, 70), 1f);
+                g.DrawLine(guide, dst.X, mid, dst.Right, mid);
+            }
+        }
+        foreach (var s in shots) s.Dispose();
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 

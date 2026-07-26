@@ -37,8 +37,10 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     public string Icon => "\uE756"; // Segoe MDL2 CommandPrompt (fallback)
 
-    // session icon = Claude mark + session-number badge (stable for the session's lifetime,
-    // easier to find than a cwd initial — user's call)
+    // Session icon = Claude mark + session-number badge, stable for the session's lifetime (easier to find
+    // than a cwd initial — user's call). The number only earns its place once there is more than one
+    // session to tell apart: a single session wearing a "1" is noise, and it read as a notification count.
+    // Same rule as the download widget's counter, and the same rule the Codex twin already followed.
     private Bitmap? _badged;
 
     public Bitmap? IconImage
@@ -46,6 +48,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         get
         {
             if (ClaudeIcon is null) return null;
+            if (_store.LiveSessions() < 2) return ClaudeIcon;
             return _badged ??= Fx.Badge(ClaudeIcon, (char)('1' + _slot));
         }
     }

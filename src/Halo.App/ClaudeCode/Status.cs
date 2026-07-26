@@ -269,6 +269,16 @@ internal sealed class StatusStore
         }
     }
 
+    // How many slots hold a live session. Only used to decide whether a session icon is worth numbering:
+    // a lone session badged "1" says nothing, it just asks the user what the other ones are.
+    public int LiveSessions()
+    {
+        int n = 0;
+        for (int i = 0; i < MaxSessions; i++)
+            if (SessionLive(i) is not null) n++;
+        return n;
+    }
+
     // the slot's status when its session is live, else null — cached 1s (hit per frame per widget)
     public CcStatus? SessionLive(int slot)
     {

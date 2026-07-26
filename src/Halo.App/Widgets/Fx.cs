@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -238,6 +239,43 @@ internal static class Fx
         }
         catch { return 0f; }
     }
+
+    // CenterLift works off font metrics, which is right for a run of latin text but wrong for an icon font:
+    // the metrics describe the line box, and two glyphs of the SAME icon font can have completely different
+    // ink heights. Measured in the copy-code pill at 4x: the page icon read 1.4px high while the check
+    // beside it read spot on. So an icon is centred on its own ink instead, which is the same conclusion
+    // LocalBadge reached for Fluent glyphs ("metric-centred Fluent glyphs read visibly off").
+    //
+    // Returns the offset to ADD to a DrawString origin's y so the glyph's ink centres on that y. Cached:
+    // building a GraphicsPath per glyph per frame would be silly on the render path.
+    private static readonly Dictionary<string, float> _inkOffsets = new();
+
+    public static float InkCentreOffset(Font f, string s)
+    {
+        if (string.IsNullOrEmpty(s)) return 0f;
+        string key = f.FontFamily.Name + "|" + f.Style + "|" + f.Size.ToString("0.##") + "|" + s;
+        lock (_inkOffsets)
+        {
+            if (_inkOffsets.TryGetValue(key, out float v)) return v;
+            float off = 0f;
+            try
+            {
+                using var path = new GraphicsPath();
+                using var sf = new StringFormat(StringFormat.GenericTypographic);
+                path.AddString(s, f.FontFamily, (int)f.Style, f.Size, PointF.Empty, sf);
+                var b = path.GetBounds();
+                if (b.Height > 0) off = -(b.Top + b.Height / 2f);
+            }
+            catch { }
+            _inkOffsets[key] = off;
+            return off;
+        }
+    }
+
+    // Same trick for text, but measured on a CAP reference rather than on the string itself: centring a
+    // string on its own ink makes "Copied" (descender) and "482913" (none) sit at different heights, so the
+    // label would bob as the state flips. One reference glyph keeps every string on one line.
+    public static float CapCentreOffset(Font f) => InkCentreOffset(f, "H");
 
     public static Color Alpha(Color c, float a)
         => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);

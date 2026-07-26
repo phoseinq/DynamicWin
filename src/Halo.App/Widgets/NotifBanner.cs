@@ -71,15 +71,18 @@ internal static class NotifBanner
         using var gf = new Font("Segoe MDL2 Assets", 11f, GraphicsUnit.Pixel);
         using var cf = new Font("Segoe UI Semibold", 12.5f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, a * (0.9f + 0.1f * _hoverEase)));
-        // LineAlignment.Center centres the EM BOX, which reserves descender space, so strings with no
-        // descenders ("Copied", digits) sat visibly low inside the pill. Fx.CenterLift derives the
-        // correction from each font's own metrics, so it is right for both fonts used here.
+        // Centred on the pill's own middle: the glyph by its INK, the label by a cap reference.
+        // LineAlignment.Center centres the font's LINE BOX, which is not what the eye centres on — measured
+        // at 4x through --render-copy, the page icon sat 1.4px above the pill's centre while the check beside
+        // it sat right on it, because two glyphs of the same icon font differ in ink height. No metric
+        // correction can fix that; only the outline knows where its own middle is.
         using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        { Alignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+        float cy = r.Y + r.Height / 2f;
         string glyph = n.Copied ? "" : ""; // Accept (check) once copied, else Copy
         string label = n.Copied ? "Copied" : n.Code;
-        g.DrawString(glyph, gf, b, new RectangleF(r.X + 6, r.Y - Fx.CenterLift(gf), 18, r.Height), sf);
-        g.DrawString(label, cf, b, new RectangleF(r.X + 24, r.Y - Fx.CenterLift(cf), r.Width - 30, r.Height), sf);
+        g.DrawString(glyph, gf, b, new PointF(r.X + 15f, cy + Fx.InkCentreOffset(gf, glyph)), sf);
+        g.DrawString(label, cf, b, new PointF(r.X + 24f + (r.Width - 30f) / 2f, cy + Fx.CapCentreOffset(cf)), sf);
     }
 
     // There used to be a FontScale here that shrank every string as the toast got longer (1.0 → 0.86).
