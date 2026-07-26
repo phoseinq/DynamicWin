@@ -912,6 +912,9 @@ internal sealed class NotchController
         bool mouseMoved = WidgetInput.Over != overNow || (overNow && WidgetInput.Mouse != mouse);
         WidgetInput.Over = overNow;
         WidgetInput.Mouse = mouse;
+        // held state, so a widget can scrub while the button is down; the click dispatch below is
+        // edge-triggered and cannot express "still holding"
+        WidgetInput.Down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
 
         // swap-circle strip eases in when a second app appears (and out when it goes) — no pop
         float prevStrip = _stripT;
@@ -1698,6 +1701,24 @@ internal sealed class NotchController
 
     // press-and-hold ~3s on the pill → collapse + follow the cursor; release drops it; parked near the
     // centre it snaps back (magnet). Runs each tick from OnTick with the live cursor + button state.
+    // Is the cursor over a control of the currently expanded widget? Buttons() already describes every
+    // clickable rect a widget owns, sliders included, so the move gesture can simply stay out of their way.
+    private bool PressOnControl(Win32.POINT p)
+    {
+        if (_progress <= 0.9f || _primary < 0 || _primary >= _widgets.Length) return false;
+        try
+        {
+            foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
+            {
+                float bx = _el + r.X * S, by = _et + r.Y * S;
+                if (p.X >= bx - 6 * S && p.X < bx + (r.Width + 6) * S
+                    && p.Y >= by - 8 * S && p.Y < by + (r.Height + 8) * S) return true;
+            }
+        }
+        catch { }
+        return false;
+    }
+
     private void UpdateMove(Win32.POINT p, bool down, bool hovered)
     {
         int centre = _notch.WorkLeft + _notch.WorkWidth / 2;
@@ -1714,7 +1735,10 @@ internal sealed class NotchController
             return;
         }
 
-        bool holding = down && hovered && !_resizing && _notif == null;
+        // A press that landed on one of the widget's own controls is not a request to move the pill. Holding
+        // the seek bar to drag it used to start the move gesture instead and carry the whole pill off to the
+        // side — and the new offset is persisted, so it stayed there.
+        bool holding = down && hovered && !_resizing && _notif == null && !PressOnControl(p);
         bool still = Math.Abs(p.X - _holdAnchor.X) <= 8 && Math.Abs(p.Y - _holdAnchor.Y) <= 8;
         if (holding && _holdStart != DateTime.MaxValue && still)
         {

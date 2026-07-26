@@ -100,6 +100,7 @@ internal sealed class MediaWidget : IWidget
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
             _totalDelay = 0;
             if (_delays != null) foreach (var d in _delays) _totalDelay += d;
+            _animatedArt = _frames is { Length: > 1 } && _totalDelay > 0;
             _artKey = key;
             _accent = _art != null ? Fx.Accent(_art) : White;
             _palette = Palette(_accent);
@@ -475,9 +476,13 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
 
         EnsureArt();
+        float dt = Dt();   // once per frame: every ease below is a real time constant, not a per-frame step
 
         const float artX = 26, artY = 26, artSize = 132;
-        Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 0.85f, h * 1.2f, 38, _accent);
+        // Radii deliberately larger than the panel: the glow is clipped to the pill anyway, and sizing it to
+        // fit meant its falloff ended INSIDE the panel, leaving the far side unlit and a visible boundary
+        // where it stopped. Overshooting puts the vanishing point outside the glass entirely.
+        Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 1.35f, h * 1.9f, 38, _accent);
         DrawArt(g, artX, artY, artSize, fade);
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
@@ -485,7 +490,7 @@ internal sealed class MediaWidget : IWidget
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawLine(g, title, titleF, tb, tx, 34, tw);
+            DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, WidgetInput.Over, dt);
         if (!string.IsNullOrEmpty(artist))
             using (var ab = new SolidBrush(Mul(Dim, fade)))
                 DrawLine(g, artist, bodyF, ab, tx, 66, tw);
@@ -496,17 +501,45 @@ internal sealed class MediaWidget : IWidget
         float frac = end > TimeSpan.Zero ? (float)Math.Clamp(now / end, 0, 1) : 0f;
         int epoch; lock (_lock) epoch = _trackEpoch;
         if (epoch != _shownEpoch) { _shownEpoch = epoch; _fracShown = frac; } // new track: snap to 0:00
-        _fracShown = _fracShown < 0 ? frac : _fracShown + (frac - _fracShown) * 0.18f;
-        if (Math.Abs(frac - _fracShown) < 0.002f) _fracShown = frac;
-        float by = 116, bh = 5;
+        _fracShown = _fracShown < 0 ? frac : Ease(_fracShown, frac, dt, 0.10f);
+        if (Math.Abs(frac - _fracShown) < 0.0004f) _fracShown = frac;
+
+        // A 5px bar is a hard thing to drag, so it swells to three times that WHILE HELD — not on hover,
+        // which would make it twitch every time the pointer crossed it — growing about its own centre so
+        // the fill does not appear to jump, and the timestamps step down out of its way.
+        //
+        // While held, the fill follows the CURSOR instead of the player. That is what makes scrubbing
+        // smooth: asking the player to seek on every frame of a drag means waiting for it to report a new
+        // position each time, and the bar arrives in a series of jumps. The seek is committed once, on
+        // release, and until then what you see is your own hand.
+        var seek = SeekRect(w);
+        var seekHit = seek; seekHit.Inflate(6f, 10f);
+        bool onSeek = WidgetInput.Over && seekHit.Contains(WidgetInput.Mouse);
+        bool seekable; lock (_lock) seekable = _seekEnabled;
+        if (WidgetInput.Down && !_wasDown && onSeek && seekable) _scrubbing = true;
+        if (_scrubbing)
+        {
+            _scrubFrac = Math.Clamp((WidgetInput.Mouse.X - seek.X) / Math.Max(1f, seek.Width), 0f, 1f);
+            if (!WidgetInput.Down) { Seek(_scrubFrac); _scrubbing = false; _fracShown = _scrubFrac; }
+        }
+        _seekHover = Ease(_seekHover, _scrubbing ? 1f : 0f, dt, 0.07f);
+        float st = _seekHover;
+        if (_scrubbing) _fracShown = _scrubFrac;
+        const float barCy = 118.5f, bhRest = 5f;
+        float bh = bhRest * (1f + 2f * st);
+        float by = barCy - bh / 2f;
         Fill(g, tx, by, tw, bh, Mul(Track, fade));
         if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(White, fade));
         if (end > TimeSpan.Zero)
         {
             using var eb = new SolidBrush(Mul(Dim, fade));
-            g.DrawString(Fmt(now), timeF, eb, tx, by + 8);
+            float ty = barCy + bh / 2f + 3f;
+            // while scrubbing the label previews where you are about to land, not where the player still is:
+            // a bar dragged to 85% next to a stale "0:40" reads as a bug
+            var shown = _scrubbing ? end * _scrubFrac : now;
+            g.DrawString(Fmt(shown), timeF, eb, tx, ty);
             var ts = g.MeasureString(Fmt(end), timeF);
-            g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, by + 8);
+            g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, ty);
         }
 
         // volume (left column, under the art): soft glass mute chip + a bar that breathes on hover;
@@ -514,20 +547,32 @@ internal sealed class MediaWidget : IWidget
         var (vbar, mute) = VolLayout(w);
         bool muted = _meter.Muted();
         float volNow = muted ? 0f : _meter.Volume();
-        _volShown = _volShown < 0 ? volNow : _volShown + (volNow - _volShown) * 0.30f;
-        if (Math.Abs(volNow - _volShown) < 0.004f) _volShown = volNow;
-        float vol = _volShown;
+        _volShown = _volShown < 0 ? volNow : Ease(_volShown, volNow, dt, 0.06f);
+        if (Math.Abs(volNow - _volShown) < 0.002f) _volShown = volNow;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var volHit = RectangleF.Union(vbar, mute); volHit.Inflate(4f, 6f);
-        bool vHov = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
-        _volHover += ((vHov ? 1f : 0f) - _volHover) * 0.35f;
+        // same press-and-drag as the seek bar: held, it grows and tracks the cursor
+        var volHit = vbar; volHit.Inflate(8f, 10f);
+        bool onVol = WidgetInput.Over && volHit.Contains(WidgetInput.Mouse);
+        if (WidgetInput.Down && !_wasDown && onVol) _volScrubbing = true;
+        if (_volScrubbing)
+        {
+            float f = Math.Clamp((WidgetInput.Mouse.X - vbar.X) / Math.Max(1f, vbar.Width), 0f, 1f);
+            _volShown = f;
+            // the bar tracks the cursor every frame, but the mixer only hears about real changes —
+            // pushing an identical level 60 times a second is pure noise
+            if (Math.Abs(f - _volSent) > 0.004f) { SetVol(f); _volSent = f; }
+            if (!WidgetInput.Down) { SetVol(f); _volScrubbing = false; }
+        }
+        float vol = _volShown;
+        _volHover = Ease(_volHover, _volScrubbing ? 1f : 0f, dt, 0.07f);
         float vt = _volHover;
+        _wasDown = WidgetInput.Down;   // one edge per frame, shared by both bars
         using (var fb = new SolidBrush(Mul(Color.FromArgb((int)(13 + 16 * vt), 255, 255, 255), fade)))
             g.FillEllipse(fb, mute);
         using (var pen = new Pen(Mul(Color.FromArgb((int)(28 + 26 * vt), 255, 255, 255), fade), 1f))
             g.DrawEllipse(pen, mute);
         DrawGlyphSoft(g, mute, muted ? "\uE74F" : "\uE767", 16f, muted ? fade * 0.55f : fade * (0.8f + 0.2f * vt));
-        float vy = vbar.Y + vbar.Height / 2f, bh2 = 4f + 2f * vt;
+        float vy = vbar.Y + vbar.Height / 2f, bh2 = 4f * (1f + 2f * vt);
         Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width, bh2, Mul(Color.FromArgb(34, 255, 255, 255), fade));
         if (vol > 0)
             Fill(g, vbar.X, vy - bh2 / 2f, vbar.Width * vol, bh2,
@@ -583,9 +628,27 @@ internal sealed class MediaWidget : IWidget
     }
 
     private readonly float[] _btnHover = new float[8];
-    private float _volHover;
+    private float _volHover, _seekHover;
+    private bool _wasDown, _scrubbing, _volScrubbing;
+    private float _scrubFrac, _volSent = -1f;
     private float _volShown = -1f, _fracShown = -1f; // eased displayed values (smooth bars)
     private int _trackEpoch, _shownEpoch;            // bumped per track change → seek bar snaps, no glide
+
+    // Every ease here used to be a fixed fraction per FRAME, which makes the speed depend on the frame rate:
+    // the pill drops to a lower fps tier when little is happening, and at that tier a 0.18-per-frame lerp
+    // advances the seek bar in visible steps. Measured wall-clock dt turns them into real time constants.
+    private long _lastTick;
+    private float Dt()
+    {
+        long now = Environment.TickCount64;
+        float dt = _lastTick == 0 ? 1f / 60f : (now - _lastTick) / 1000f;
+        _lastTick = now;
+        return Math.Clamp(dt, 1f / 240f, 0.1f);
+    }
+
+    // frame-rate independent approach: converges with time constant tau regardless of fps
+    private static float Ease(float shown, float target, float dt, float tau)
+        => shown + (target - shown) * (1f - MathF.Exp(-dt / tau));
 
     private static readonly FontFamily FluentFamily = new("Segoe Fluent Icons");
 
@@ -652,7 +715,12 @@ internal sealed class MediaWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    public bool Animating { get { lock (_lock) { return _title != null && _playing; } } }
+    // An animated cover has to keep asking for frames even while the track is paused, or the GIF freezes and
+    // then jumps whenever something else happens to trigger a repaint. _animatedArt is set on the UI thread
+    // by EnsureArt and only read here, so a volatile bool is the whole synchronisation it needs.
+    private volatile bool _animatedArt;
+
+    public bool Animating { get { lock (_lock) { return _title != null && (_playing || _animatedArt); } } }
 
     // ring around the collapsed album-art circle = playback position (like the download %). Only when a
     // real duration exists (live streams have none → no ring). Extrapolated each frame so it glides.
@@ -791,6 +859,59 @@ internal sealed class MediaWidget : IWidget
         using var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter };
         if (IsRtl(text)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft; // Near => right edge, ellipsis on the left
         g.DrawString(text, f, b, new RectangleF(x, y, w, f.Height + 4), sf);
+    }
+
+    private float _marquee;          // scroll offset in px, 0 while parked
+    private float _marqueeHold;      // seconds paused at the start of each pass
+
+    internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 1.1f;   // px, px/s, seconds
+
+    // One step of the title scroll, kept pure so the motion is a test rather than an eyeball: it holds
+    // still for MarqueeHold at the start of each pass (so you can begin reading), then travels at a fixed
+    // px/sec — a rate, not a per-frame amount, or the speed would change with the pill's fps tier — and
+    // wraps by exactly one span so the second copy lands seamlessly where the first left.
+    internal static (float offset, float hold) MarqueeStep(float offset, float hold, float dt, float span)
+    {
+        if (span <= 0f) return (0f, 0f);
+        if (hold < MarqueeHold) return (offset, hold + dt);
+        offset += MarqueeSpeed * dt;
+        return offset >= span ? (offset - span, 0f) : (offset, hold);
+    }
+
+    // A title too long to fit is normally just clipped with an ellipsis, which is the right resting state --
+    // a permanently crawling title is the kind of thing that makes a status pill tiring to have on screen.
+    // While the pointer is on the panel it scrolls one full pass and loops, so the rest of the name is
+    // readable on demand. Gapped by a wide separator so the wrap point is obvious, and it holds still for a
+    // moment at each pass so you can start reading from the beginning.
+    private void DrawScrollingLine(Graphics g, string text, Font f, Brush b, float x, float y, float w,
+        bool hovered, float dt)
+    {
+        float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
+        if (textW <= w || !hovered)
+        {
+            // parked: reset so the next hover starts from the beginning rather than mid-word
+            if (!hovered) { _marquee = 0f; _marqueeHold = 0f; }
+            DrawLine(g, text, f, b, x, y, w);
+            return;
+        }
+
+        float span = textW + MarqueeGap;
+        (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span);
+
+        var state = g.Save();
+        g.SetClip(new RectangleF(x, y, w, f.Height + 4));   // hard clip is fine: the edges are axis-aligned
+        bool rtl = IsRtl(text);
+        using var sf = new StringFormat(StringFormatFlags.NoWrap);
+        if (rtl) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
+        float h2 = f.Height + 4;
+        for (int pass = 0; pass < 2; pass++)                 // second copy trails in so the loop is seamless
+        {
+            // LTR slides left off its start; RTL is the mirror, anchored on the rect's right edge
+            float ox = rtl ? x + w - textW + (_marquee - pass * span)
+                           : x - (_marquee - pass * span);
+            g.DrawString(text, f, b, new RectangleF(ox, y, textW + 2, h2), sf);
+        }
+        g.Restore(state);
     }
 
     private static bool IsRtl(string s)

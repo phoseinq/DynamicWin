@@ -68,7 +68,12 @@ internal static class Fx
             {
                 float dx = (x - n / 2f) / (n / 2f), dy = (y - n / 2f) / (n / 2f);
                 float t = MathF.Min(1f, MathF.Sqrt(dx * dx + dy * dy));
-                float a = MathF.Pow(1f - t, 1.8f) * 255f + rnd.Next(-5, 6);
+                // Noise SCALED BY the falloff, not added to it. Added noise left every pixel outside the
+                // inscribed circle sitting at alpha 1-5 instead of 0, so the texture's own square boundary
+                // stayed faintly lit and the "soft glow" read as a rectangle inside the expanded pill.
+                // Scaling keeps the de-banding where the gradient actually bands and lets the edge reach 0.
+                float f = MathF.Pow(1f - t, 1.8f);
+                float a = f * (255f + rnd.Next(-11, 12));
                 int i = y * data.Stride + x * 4;
                 byte av = (byte)Math.Clamp((int)a, 0, 255);
                 bytes[i] = bytes[i + 1] = bytes[i + 2] = av;
@@ -103,7 +108,9 @@ internal static class Fx
             Matrix22 = accent.B / 255f,
             Matrix33 = alpha * fade / 255f,
         });
-        ia.SetWrapMode(WrapMode.TileFlipXY);
+        // Clamp, not TileFlipXY: mirrored tiling samples the texture's far edge back in along the seams,
+        // which is another way to put a straight line where the glow is supposed to have vanished.
+        ia.SetWrapMode(WrapMode.Clamp);
         g.DrawImage(GlowTex, new Rectangle((int)(cx - rx), (int)(cy - ry), (int)(rx * 2), (int)(ry * 2)),
             0, 0, GlowTex.Width, GlowTex.Height, GraphicsUnit.Pixel, ia);
         g.InterpolationMode = oldInterp;
