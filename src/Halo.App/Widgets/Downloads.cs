@@ -298,8 +298,98 @@ internal static class Downloads
     {
         bool browser = OwnerIsBrowser();
         CancelLog($"cancel clicked: name='{Name}' file='{FilePath}' browser={browser}");
-        if (browser) { OpenDownloadsList(); return; }
+        if (browser) { CancelInBrowser(); return; }
         StopOwner();
+    }
+
+    // Open the browser's downloads list, then try to press its Cancel for the user. Ctrl+J first is not
+    // just a fallback: the control has to exist before it can be found, and opening the list is also what
+    // turns on the renderer's accessibility tree.
+    private static void CancelInBrowser()
+    {
+        var h = OwnerWindow();
+        CancelLog($"cancelInBrowser owner={OwnerPid} exe='{ExePath}' hwnd={h}");
+        if (h == IntPtr.Zero) { Reveal(); return; }
+        string? target = null, partial = FilePath;
+        try
+        {
+            if (partial is { Length: > 0 } fp && PartialFiles.IsPartial(fp, out string clean) && clean.Length > 0)
+                target = clean;
+        }
+        catch { }
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                if (!FocusAndConfirm(h)) return;
+                SendCtrlJ();
+                System.Threading.Thread.Sleep(900);   // the list has to render before its controls exist
+                int rc = UiaCancel(h, target);
+                CancelLog($"  uia rc={rc} target='{target}' stopped={StoppedGrowing(partial)}");
+                // rc 2 = no control we could name, in this locale or this Chrome layout. Either way the
+                // downloads list is already in front of the user, which is the honest fallback.
+            }
+            catch (Exception ex) { CancelLog("  threw " + ex.Message); }
+        });
+    }
+
+    // Did it actually stop? The browser's own UI cannot answer this — a cancelled row keeps its menu, so
+    // reading the row reported failure on a cancel that had worked. The file is the same answer in every
+    // language and every Chrome layout: gone, or no longer growing.
+    private static bool StoppedGrowing(string? partial)
+    {
+        if (string.IsNullOrEmpty(partial)) return false;
+        try
+        {
+            if (!System.IO.File.Exists(partial)) return true;
+            long a = new System.IO.FileInfo(partial!).Length;
+            Thread.Sleep(1500);
+            if (!System.IO.File.Exists(partial)) return true;
+            return new System.IO.FileInfo(partial!).Length == a;
+        }
+        catch { return true; }   // vanished mid-check is the good outcome
+    }
+
+    // Drive UIA from Windows PowerShell 5.1 instead of in-process. Chrome is UIA-first — MSAA returns zero
+    // children on the frame window and on every Chrome_RenderWidgetHostHWND — so this needs an
+    // IUIAutomation client, and hand-writing that COM vtable is ~400 lines in which one wrong slot is an
+    // access violation inside the pill. 5.1 has UIAutomationClient in the GAC on every Windows install, so
+    // the cost is a process boundary that also contains any crash or hang. Returns the script's exit code,
+    // or -1 when PowerShell itself could not be used.
+    private static int UiaCancel(IntPtr hwnd, string? target)
+    {
+        try
+        {
+            string script;
+            using (var s = typeof(Downloads).Assembly.GetManifestResourceStream("Halo.Assets.uia-cancel.ps1"))
+            {
+                if (s == null) return -1;
+                using var r = new System.IO.StreamReader(s);
+                script = r.ReadToEnd();
+            }
+            script = script.Replace("__HWND__", ((long)hwnd).ToString())
+                           .Replace("__TARGET__", (target ?? "").Replace("'", "''"));
+            // -EncodedCommand sidesteps every layer of quoting between here and the script
+            string enc = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+                                                  @"WindowsPowerShell\v1.0\powershell.exe"),
+                Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + enc,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return -1;
+            string outp = p.StandardOutput.ReadToEnd();
+            if (!p.WaitForExit(12000)) { try { p.Kill(true); } catch { } return -1; }
+            if (outp.Length > 0) CancelLog("  uia: " + outp.Replace("\r\n", " | ").Trim());
+            return p.ExitCode;
+        }
+        catch { return -1; }
     }
 
     // Named browsers, plus anything running a browser-sized fleet of processes: a Chromium fork we have
@@ -340,22 +430,30 @@ internal static class Downloads
         if (h == IntPtr.Zero) { Reveal(); return; }
         System.Threading.Tasks.Task.Run(() =>
         {
-            try
-            {
-                Focus(h);
-                for (int i = 0; i < 24 && Win32.GetForegroundWindow() != h; i++) Thread.Sleep(25);
-                bool got = Win32.GetForegroundWindow() == h;
-                CancelLog($"  focused={got} fore={Win32.GetForegroundWindow()}");
-                if (!got) return;
-                const byte VkJ = 0x4A; const uint KeyUp = 2;
-                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, UIntPtr.Zero);
-                Win32.keybd_event(VkJ, 0, 0, UIntPtr.Zero);
-                Win32.keybd_event(VkJ, 0, KeyUp, UIntPtr.Zero);
-                Win32.keybd_event((byte)Win32.VK_CONTROL, 0, KeyUp, UIntPtr.Zero);
-                CancelLog("  sent ctrl+J");
-            }
+            try { if (FocusAndConfirm(h)) SendCtrlJ(); }
             catch (Exception ex) { CancelLog("  threw " + ex.Message); }
         });
+    }
+
+    // SetForegroundWindow returns before the foreground has actually changed, so an immediate check said
+    // "not us" and the keystroke was skipped — a button that did nothing at all. Never type unless the
+    // window really came forward: a stray Ctrl+J belongs to whoever else held the foreground.
+    private static bool FocusAndConfirm(IntPtr h)
+    {
+        Focus(h);
+        for (int i = 0; i < 24 && Win32.GetForegroundWindow() != h; i++) Thread.Sleep(25);
+        bool got = Win32.GetForegroundWindow() == h;
+        CancelLog($"  focused={got}");
+        return got;
+    }
+
+    private static void SendCtrlJ()
+    {
+        const byte VkJ = 0x4A; const uint KeyUp = 2;
+        Win32.keybd_event((byte)Win32.VK_CONTROL, 0, 0, UIntPtr.Zero);
+        Win32.keybd_event(VkJ, 0, 0, UIntPtr.Zero);
+        Win32.keybd_event(VkJ, 0, KeyUp, UIntPtr.Zero);
+        Win32.keybd_event((byte)Win32.VK_CONTROL, 0, KeyUp, UIntPtr.Zero);
     }
 
     // temp diag while the cancel path is being pinned down — one line per click, so a dead button can be
