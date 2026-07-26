@@ -191,7 +191,10 @@ internal sealed class DownloadWidget : IWidget
         string state = Downloads.Waiting ? "Waiting…" : Downloads.Installing ? "Installing…"
             : paused ? "Paused" : "Downloading";
         string meta = state;
-        if (done > 1_048_576 && tot > 1_048_576) meta += $"   ·   {Bytes(done)} / {Bytes(tot)}   ·   {pct}%";
+        // NoBytes: nothing tied the file on disk to this download, so its length is not progress and
+        // must not appear here either — the collapsed pill already suppresses it.
+        if (Downloads.NoBytes) { }
+        else if (done > 1_048_576 && tot > 1_048_576) meta += $"   ·   {Bytes(done)} / {Bytes(tot)}   ·   {pct}%";
         else if (done > 1_048_576) meta += $"   ·   {Bytes(done)}";
         using (var mb = new SolidBrush(Mul(Dim, fade)))
             DrawEllipsized(g, meta, metaF, mb, tx, y, tw, 20);

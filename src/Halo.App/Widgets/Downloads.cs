@@ -269,6 +269,19 @@ internal static class Downloads
                     : BrowserDownloads.NameFor(part.Path) ?? learned ?? "Downloading";
                 // nothing named this download, so the file on disk cannot be attributed to it
                 bool noName = part.Name.Length == 0 && label == "Downloading";
+                // Edge tells us nothing through its file name or its History, but its in-progress store
+                // keeps the name, the total AND the received count current — see ChromiumProgress. When it
+                // can explain a partial of this size, it is strictly better than the file: the numbers are
+                // the download's own rather than whatever that reused Unconfirmed blob happens to hold.
+                if (noName && ChromiumProgress.For(part.Bytes) is { } live)
+                {
+                    found.Add(new DlItem("file:" + part.Path, live.Name,
+                                         (int)Math.Clamp(live.Received * 100 / Math.Max(live.Total, 1), 0, 99),
+                                         live.Received, live.Total, false, false, part.Stalled, false, false,
+                                         false, false, part.OwnerPid != 0 ? ExeOfPid(part.OwnerPid) : null,
+                                         null, part.Path, part.OwnerPid, IntPtr.Zero));
+                    continue;
+                }
                 bool noPct = pTotal <= part.Bytes;  // unknown or already passed → don't pretend
                 found.Add(new DlItem("file:" + part.Path, label,
                                      noPct ? 0 : (int)Math.Clamp(part.Bytes * 100 / pTotal, 0, 99),
