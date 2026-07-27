@@ -1,5 +1,27 @@
 # Halo — progress
 
+## 2026-07-27 (night): the README hero, tried as a vector and then dropped
+Three commits on `master`, all published to `V3` (`603dcac` → `6170dc2` → `8a87c1a`).
+
+Replaced the 4.6 MB `preview.gif` hero with a 6.9 KB animated SVG of the media panel, user rejected
+it on sight, reverted it, and then dropped the hero clip from the top of both READMEs entirely. The
+top of the page is now the badges and the "try it in your browser" link. `ReadmeFiles/preview.gif`
+stays: the repo-root README still points at it, and removing a file already in history reclaims
+nothing.
+
+Worth keeping from the attempt, since it will come up again:
+- **CSS keyframes on SVG geometry properties (`width`, `y`) are silently ignored when the SVG is
+  rendered as an image** — which is exactly how a README embeds one. Measured: the seek bar filled
+  0 px at every sampled timestamp. SMIL `<animate>` works in that context; re-measured 0/24/49/74%
+  at t=0/6/12/18s.
+- **Headless Chrome does not advance SMIL time**, with or without `--virtual-time-budget`, so a
+  screenshot pair "proving" an animation is worthless. Drive it with `svg.setCurrentTime()` on an
+  inlined copy instead.
+- A README's raw HTML can be checked against GitHub's sanitiser before pushing, via
+  `gh api markdown -X POST` with `{"text": ..., "mode": "gfm"}`.
+- `raw.githubusercontent.com` serves a stale branch ref for a while after a push; verify against the
+  commit SHA, or `gh api repos/.../contents/<dir>?ref=<sha>`, not the branch name.
+
 ## 2026-07-27 (night): the suppression was correct and the service had never read it
 Build 0/0, **186 tests** (1 new). Hot-deployed and verified live; **not released** (still 3.1.3).
 
