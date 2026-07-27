@@ -22,7 +22,7 @@
 
 <div align="center">
 
-<img src="ReadmeFiles/banner.svg" alt="Halo — a glass notch for Windows, the Dynamic Island your desktop never got" width="900">
+<img src="ReadmeFiles/banner-2.svg" alt="Halo — a glass notch for Windows, the Dynamic Island your desktop never got" width="900">
 
 <br /><br />
 
