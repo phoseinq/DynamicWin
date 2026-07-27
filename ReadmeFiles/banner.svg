@@ -2,19 +2,19 @@
      font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif">
 <defs>
   <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0"    stop-color="#17100f"/>
-    <stop offset="0.55" stop-color="#0d0908"/>
-    <stop offset="1"    stop-color="#0a0606"/>
+    <stop offset="0"    stop-color="#0c1a19"/>
+    <stop offset="0.55" stop-color="#071211"/>
+    <stop offset="1"    stop-color="#050e0d"/>
   </linearGradient>
   <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-    <stop offset="0"    stop-color="#ff8a8a"/>
-    <stop offset="0.5"  stop-color="#ef4444"/>
-    <stop offset="1"    stop-color="#a01722"/>
+    <stop offset="0"    stop-color="#99f6e4"/>
+    <stop offset="0.5"  stop-color="#2dd4bf"/>
+    <stop offset="1"    stop-color="#0d5d55"/>
   </linearGradient>
   <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0"    stop-color="#7f1d1d" stop-opacity="0"/>
-    <stop offset="0.5"  stop-color="#ef4444"/>
-    <stop offset="1"    stop-color="#7f1d1d" stop-opacity="0"/>
+    <stop offset="0"    stop-color="#115e59" stop-opacity="0"/>
+    <stop offset="0.5"  stop-color="#2dd4bf"/>
+    <stop offset="1"    stop-color="#115e59" stop-opacity="0"/>
   </linearGradient>
   <filter id="wide" x="-70%" y="-70%" width="240%" height="240%">
     <feGaussianBlur stdDeviation="58"/>
@@ -29,22 +29,22 @@
   <rect width="1200" height="340" fill="url(#bg)"/>
 
   <!-- one ember behind the mark, clipped so it never bleeds past a rounded corner -->
-  <ellipse cx="600" cy="120" rx="330" ry="140" fill="#ef4444" opacity=".17" filter="url(#wide)"/>
-  <ellipse cx="600" cy="150" rx="150" ry="60"  fill="#f87171" opacity=".10" filter="url(#wide)"/>
+  <ellipse cx="600" cy="120" rx="330" ry="140" fill="#2dd4bf" opacity=".17" filter="url(#wide)"/>
+  <ellipse cx="600" cy="150" rx="150" ry="60"  fill="#5eead4" opacity=".10" filter="url(#wide)"/>
 
   <!-- ring and wordmark, centred on a measured width rather than a guessed one -->
   <circle cx="517" cy="118" r="25" fill="none" stroke="url(#ring)" stroke-width="7"/>
-  <circle cx="517" cy="118" r="25" fill="none" stroke="#ef4444" stroke-width="11" opacity=".30" filter="url(#near)"/>
-  <text x="564" y="138" fill="#fdf6f5" font-size="64" font-weight="800" letter-spacing="-1">Halo</text>
+  <circle cx="517" cy="118" r="25" fill="none" stroke="#2dd4bf" stroke-width="11" opacity=".30" filter="url(#near)"/>
+  <text x="564" y="138" fill="#f2fbfa" font-size="64" font-weight="800" letter-spacing="-1">Halo</text>
 
-  <text x="600" y="188" fill="#e3c9c7" font-size="21" font-weight="600" text-anchor="middle">A glass notch for Windows — the Dynamic Island your desktop never got</text>
+  <text x="600" y="188" fill="#c9e9e4" font-size="21" font-weight="600" text-anchor="middle">A glass notch for Windows — the Dynamic Island your desktop never got</text>
 
-  <text x="600" y="222" fill="#b08d8b" font-size="16" text-anchor="middle">it shows what's playing, lifts the 2FA code out of a toast, and carries your files between windows</text>
+  <text x="600" y="222" fill="#8bb8b2" font-size="16" text-anchor="middle">it shows what's playing, lifts the 2FA code out of a toast, and carries your files between windows</text>
 
   <rect x="420" y="246" width="360" height="2" rx="1" fill="url(#rule)"/>
 
-  <text x="600" y="280" fill="#c96a6a" font-size="14" font-weight="700" letter-spacing="2" text-anchor="middle">MEDIA · NOTIFICATIONS · FILE TRAY · DOWNLOADS · CLAUDE &amp; CODEX</text>
+  <text x="600" y="280" fill="#3fd0bd" font-size="14" font-weight="700" letter-spacing="2" text-anchor="middle">MEDIA · NOTIFICATIONS · FILE TRAY · DOWNLOADS · CLAUDE &amp; CODEX</text>
 
-  <text x="600" y="308" fill="#7a5f5e" font-size="13" letter-spacing="1.2" text-anchor="middle">WINDOWS 11 · X64 · MIT · NO ACCOUNT, NO SERVER, NO TELEMETRY</text>
+  <text x="600" y="308" fill="#5d817d" font-size="13" letter-spacing="1.2" text-anchor="middle">WINDOWS 11 · X64 · MIT · NO ACCOUNT, NO SERVER, NO TELEMETRY</text>
 </g>
 </svg>

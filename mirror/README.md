@@ -34,21 +34,22 @@
 
 <br />
 
-A single pill of glass sits at the top of your screen. It comes forward when something is worth
-saying and folds away when nothing is — what's playing, the notification that just arrived, a file
-you want to carry from one window to another. No app to open, nothing covering your work.
+A pill of glass at the top of your screen. It comes forward when there is something to say and
+folds away when there is not. No app to open, nothing covering your work.
 
 <br />
 
 <h2 align="center">⬇️ Install</h2>
 
-| Download | What it is |
-| :-- | :-- |
-| **[DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)** | Installer. Per-user, no admin prompt. Offers to start with Windows and to hook into Codex. |
-| **[DynamicWinPortable.zip](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinPortable.zip)** | No install — unzip and run `Halo\Halo.App.exe`. |
+<div align="center">
 
-**Windows 11 · x64.** It opens at the top-centre of your main monitor. Press and hold to drag it
-anywhere; it stays where you put it. Once installed it updates itself quietly in the background.
+### [⬇️ DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)
+
+<sub>Windows 11 · x64 · per-user, no admin prompt · updates itself quietly</sub>
+
+<sub>A portable zip is on the [releases page](https://github.com/phoseinq/DynamicWin/releases/latest).</sub>
+
+</div>
 
 <br />
 
@@ -58,11 +59,9 @@ anywhere; it stays where you put it. Once installed it updates itself quietly in
 <img src="ReadmeFiles/media.gif" alt="The pill opening into the media panel" width="880">
 </div>
 
-Collapsed, it is a waveform driven by the actual system output. Open, it is the whole player: album
-art, the track, a seek bar that thickens under your cursor and follows your hand instead of waiting
-on the player to answer, volume, and transport. Video also gets ±10s, playback speed and subtitles.
-
-It reads Windows' own media session, so it works with whatever you already have open.
+Collapsed, a waveform off the real system output. Open, the whole player — art, track, seek,
+volume, transport, plus ±10s, speed and subtitles for video. It reads Windows' own media session,
+so it works with whatever is already playing.
 
 <br />
 
@@ -72,12 +71,9 @@ It reads Windows' own media session, so it works with whatever you already have 
 <img src="ReadmeFiles/copy-code.gif" alt="A verification code copied straight from the banner" width="880">
 </div>
 
-Every toast lands in the pill with the *real* app icon, and the native Windows banner goes quiet so
-you are not told the same thing twice.
-
-The clip is the part I use most: the notification carries a **verification code**, so the pill lifts
-it out and puts it on a button. One click and it says *Copied* — no opening the app, no dragging a
-cursor across six digits.
+Every toast lands in the pill with the real app icon, and the native banner goes quiet so nothing
+is said twice. If it carries a **verification code**, the pill lifts it onto a button — one click
+to copy.
 
 <br />
 
@@ -87,9 +83,8 @@ cursor across six digits.
 <img src="ReadmeFiles/tray.gif" alt="A file dragged onto the pill and back out again" width="880">
 </div>
 
-Drag a file out of a folder and onto the pill: it opens, counts what it is holding, and keeps it.
-Drag it back out into any window later — a different app, a different desktop, twenty minutes on.
-It is the "hold this for a second" move Windows never had.
+Drop files onto the pill and it holds them. Drag them back out into any window later — a different
+app, a different desktop, twenty minutes on.
 
 <br />
 
@@ -99,9 +94,9 @@ It is the "hold this for a second" move Windows never had.
 <img src="ReadmeFiles/agents.png" alt="The Claude Code panel" width="900">
 </div>
 
-A live panel per **Claude Code** and **Codex** session: what it is doing right now, context left,
-your 5-hour and weekly limits as a ring, and a Cancel that stops the running prompt. Any other tool
-can join by writing a small JSON file.
+A live panel per **Claude Code** and **Codex** session: what it is doing, context left, your 5-hour
+and weekly limits, and a Cancel that stops the running prompt. Any tool can join by writing a small
+JSON file.
 
 <br />
 
@@ -112,14 +107,6 @@ can join by writing a small JSON file.
 - ⚠️ **Alerts** — battery, CPU, RAM and internet, each fired once when it happens rather than nagged.
 - 📌 **Pin** — keep it above fullscreen apps. Hold the pushpin to make it visible in screen recordings too.
 - 🔄 **Silent updates** — no prompt, no window.
-
-<br />
-
-<h2 align="center">🔒 Privacy</h2>
-
-No account, no server, no telemetry. Everything the pill shows you stays on your machine.
-[**PRIVACY.md**](PRIVACY.md) lists every file Halo writes and every network request it can make —
-there are nine, and each one says what it discloses.
 
 <br />
 
