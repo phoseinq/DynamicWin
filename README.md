@@ -49,36 +49,41 @@ anywhere; it stays where you put it. Once installed it updates itself quietly in
 <h2 align="center">🎵 Media</h2>
 
 <div align="center">
-<img src="ReadmeFiles/media.gif" alt="The media panel" width="760">
+<img src="ReadmeFiles/media.gif" alt="The pill opening into the media panel" width="880">
 </div>
 
-Album art — animated if the cover is a GIF — a waveform driven by the actual system output, and
-controls that behave like controls: grab the bar and it thickens under your cursor and follows your
-hand instead of waiting on the player. Video also gets ±10s, playback speed and subtitles. It reads
-Windows' own media session, so it works with whatever you already have open.
+Collapsed, it is a waveform driven by the actual system output. Open, it is the whole player: album
+art, the track, a seek bar that thickens under your cursor and follows your hand instead of waiting
+on the player to answer, volume, and transport. Video also gets ±10s, playback speed and subtitles.
+
+It reads Windows' own media session, so it works with whatever you already have open.
 
 <br />
 
 <h2 align="center">🔔 Notifications</h2>
 
 <div align="center">
-<img src="ReadmeFiles/copy-code.gif" alt="One-click copy for a verification code" width="600">
+<img src="ReadmeFiles/copy-code.gif" alt="A verification code copied straight from the banner" width="880">
 </div>
 
 Every toast lands in the pill with the *real* app icon, and the native Windows banner goes quiet so
-you are not told the same thing twice. When one carries a **verification code**, the pill puts a Copy
-button next to it — no opening the app, no dragging a cursor across six digits.
+you are not told the same thing twice.
+
+The clip is the part I use most: the notification carries a **verification code**, so the pill lifts
+it out and puts it on a button. One click and it says *Copied* — no opening the app, no dragging a
+cursor across six digits.
 
 <br />
 
 <h2 align="center">📁 File tray</h2>
 
 <div align="center">
-<img src="ReadmeFiles/tray.gif" alt="The file tray" width="760">
+<img src="ReadmeFiles/tray.gif" alt="A file dragged onto the pill and back out again" width="880">
 </div>
 
-Drag a file onto the pill and it holds on to it. Drag it back out into any window later — a
-different app, a different desktop, twenty minutes on.
+Drag a file out of a folder and onto the pill: it opens, counts what it is holding, and keeps it.
+Drag it back out into any window later — a different app, a different desktop, twenty minutes on.
+It is the "hold this for a second" move Windows never had.
 
 <br />
 
