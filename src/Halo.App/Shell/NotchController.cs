@@ -184,6 +184,7 @@ internal sealed class NotchController
 
     private readonly Halo.Notifications.NotifSource _notifSrc = new();
     private Halo.Notifications.BtBattery? _bt;
+    private Halo.Notifications.NetWatch? _netWatch;
     private readonly Widgets.BtWidget _btWidget = new();
     private System.Threading.Timer? _testTrigger;
     private Halo.Notifications.NotifItem? _notif;
@@ -282,6 +283,17 @@ internal sealed class NotchController
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
         _bt = new Halo.Notifications.BtBattery((name, pct) => _btWidget.Show(name, pct));
+        _netWatch = new Halo.Notifications.NetWatch((title, body, lost) =>
+        {
+            // Same Kind for every network notice, so a roam that produces several transitions
+            // in a row shows the one that ended up being true rather than a queue of stale ones.
+            _notifSrc.DropPending("network");
+            _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+            {
+                App = Loc.T("Network"), Title = title, Body = body,
+                Kind = "network", Duration = 6, Icon = lost ? NetBadge() : WifiBadge(),
+            });
+        });
         _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
 
         Dispatcher.Ensure();
@@ -1469,12 +1481,14 @@ internal sealed class NotchController
 
     private static Bitmap BatteryBadge() => LocalBadge(0xE996, 12);
     private static Bitmap NetBadge()     => LocalBadge(0xEB5E, 5, 34f);
+    // Blue for joining a network, against the red NetBadge for losing one.
+    private static Bitmap WifiBadge()    => LocalBadge(0xE701, 205, 34f);
     private static Bitmap BtBadge()      => LocalBadge(0xE702, 215);
     private static Bitmap LimitBadge()   => LocalBadge(0xE9D9, 285);
     private static Bitmap ClockBadge()   => LocalBadge(0xE917, 205);
     private static Bitmap CpuBadge()     => LocalBadge(0xE950, 28);
 
-    internal static Bitmap[] AllLocalBadges() => new[] { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge() };
+    internal static Bitmap[] AllLocalBadges() => new[] { BatteryBadge(), NetBadge(), WifiBadge(), LimitBadge(), ClockBadge(), CpuBadge() };
 
     private int NotifLeft() => _notch.WorkLeft + (_notch.WorkWidth - Sc(_curW)) / 2 + (int)_offsetX;
 

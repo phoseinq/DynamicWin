@@ -25,6 +25,19 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--probe-tree") { ProbeTree(int.Parse(args[1])); return; }
 
+        if (args.Length >= 1 && args[0] == "--probe-net")
+        {
+            Console.WriteLine("watching for network changes — toggle Wi-Fi to see a transition. Ctrl+C to stop.");
+            using var w = new Halo.Notifications.NetWatch((title, body, lost) =>
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {(lost ? "LOST" : "OK  ")}  {title}"
+                    + (body.Length > 0 ? $"  —  {body}" : "")));
+            var seed = w.Current;
+            Console.WriteLine($"  seeded silently: online={seed.Online} wifi={seed.Wifi} "
+                + $"constrained={seed.Constrained} name='{seed.Name}'");
+            System.Threading.Thread.Sleep(int.TryParse(args.Length > 1 ? args[1] : "", out var s) ? s * 1000 : 60000);
+            return;
+        }
+
         if (args.Length >= 1 && args[0] == "--probe-spectrum")
         {
             for (int i = 0; i < 20; i++)

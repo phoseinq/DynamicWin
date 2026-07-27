@@ -112,6 +112,17 @@ internal static class PtBr
         ["Memory is running low."] = "A memória está acabando.",
         ["{0} is using the most."] = "{0} é quem mais está consumindo.",
         ["Tap to turn on Power Saver."] = "Toque para ligar a Economia de Energia.",
+
+        // ── network notices ───────────────────────────────────────────────
+        ["Wi-Fi disconnected"] = "Wi-Fi desconectado",
+        ["Network disconnected"] = "Rede desconectada",
+        ["Connected to {0}"] = "Conectado a {0}",
+        ["Switched to {0}"] = "Trocou para {0}",
+        ["Was on {0}"] = "Estava em {0}",
+        ["No internet"] = "Sem internet",
+        ["this network"] = "esta rede",
+        ["{0} needs you to sign in"] = "{0} exige login",
+        ["Connected, but not online yet"] = "Conectado, mas ainda sem internet",
         ["Store app"] = "App da Store",
         ["Xbox game"] = "Jogo do Xbox",
 

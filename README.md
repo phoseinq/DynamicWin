@@ -38,6 +38,7 @@ A single glass pill sits at the top of your screen and quietly handles the thing
 - 🔔 **Notifications** — every toast is mirrored into the pill with the real app icon. Click to open it, or pull the grabber down to read a long message in full. A 2FA / verification code (6 or 8 digits) gets a one-click **Copy** button.
 - 📁 **File Tray** — drag files onto the pill to stash them, then drag them back out into any window, whenever.
 - 🔋 **Bluetooth** — connect headphones, a controller, or your phone and the pill shows a battery ring and percentage for a few seconds.
+- 📶 **Network** — the pill says so the moment Wi-Fi drops, comes back, or quietly moves to another network, naming the one you're on. A hotspot that still wants you to sign in gets called out instead of pretending to work.
 - 🤖 **Claude Code & Codex** — a live panel per session: token usage, 5-hour and weekly limits, connection health, and a Cancel that really stops the running prompt.
 - ⬇️ **Downloads** — progress right in the pill, with a stop button.
 - 📌 **Pin** — keep the pill above fullscreen apps, and visible in screen recordings, whenever you want it there.
