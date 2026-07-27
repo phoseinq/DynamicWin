@@ -452,7 +452,7 @@ internal static class Program
             // still empty and the connection graph renders its "sampling…" state every time — so the one
             // part of the panel that is a chart could never actually be eyeballed as a chart.
             if (which is "claude" or "claude-demo" or "claude-idle" or "codex")
-                System.Threading.Thread.Sleep(3500);
+                System.Threading.Thread.Sleep(8000); // Poke opens an 8s fast-sample window; use all of it
             // Demo figures go in LAST, after that wait: the refetch the warm draw kicked off is asynchronous,
             // and setting them before the sleep let the real answer land on top — the saved frame then showed
             // the author's actual usage and dollar spend, which is the exact thing this mode exists to avoid.

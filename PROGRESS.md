@@ -1,6 +1,34 @@
 # Halo — progress
 
-## 2026-07-27 (night): the ring panel, made legible
+## 2026-07-28: the panel gets a real grid, a mirrored graph, and an exit that talks
+Build 0/0, **197 tests**. Hot-deployed.
+
+### Alignment was the actual complaint, and it was real
+Everything was positioned from a top-left corner. Put 13px and 18px text in one row with the same `y`
+and their baselines land ~4px apart — invisible until you look for it, and it is exactly why the panel
+kept reading as "nothing lines up". Every string is now placed from a **baseline**, converted to GDI+'s
+top-left via the font's own ascent (`TextTop`). Fixed columns too: key captions at x=178, their figures
+at x=268, the whole right column between x=356 and x=538.
+
+### The graph is mirrored, not overlaid
+Two series on one axis fight each other however they are drawn — as lines they crossed, as filled areas
+they hid each other. Your internet now grows *up* from a centre rule and the path to Anthropic grows
+*down*, one bar per sample. Nothing overlaps, the shared scale keeps them comparable, and a lost sample
+is a full-height red bar on whichever side dropped it, which is the question the graph exists to answer.
+
+**Scale is 3× the median, not the max.** A cold TLS handshake costs ~1450ms against a steady ~85, and
+scaling to the max — or even p90, which the spikes drag up with them — flattened every honest sample to
+a 3px stub while the legend advertised "peak 1450". Measured both ways before settling on the median.
+
+### The flag became an exit report
+It was a country and nothing else. `IpCountry` already fetched the IP and threw it away, and ipwho.is
+returns the ISP for free, so the block now reads `TR · G-Core Labs S.A.` over the address. And because
+the API probe goes through `HTTPS_PROXY` while everything else goes direct, it asks the same question
+down **both** paths: when the two exits differ, an amber line says where the API is actually leaving
+from. Only when they differ — it is silent otherwise. `NetMon.ProxyUrl` is now the single source for
+that proxy so the two probes cannot drift apart.
+
+## 2026-07-27 (night, earlier): the ring panel, made legible
 Build 0/0, **197 tests**. Hot-deployed. Four changes on top of the ring cluster below.
 
 - **Type up a step throughout** — key captions and sub-lines were 11px and reported as unreadable;

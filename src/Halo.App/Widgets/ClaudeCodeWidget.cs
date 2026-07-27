@@ -232,18 +232,31 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    // Bars and then tiles both treated the three figures as a list to be read one at a time. They are not
-    // a list -- they are three budgets draining at once -- so they are one object now: concentric arcs
-    // around the Claude mark, outer to inner, with a key beside them carrying the exact numbers. It is the
-    // ring language the collapsed pill already speaks (RingProgress draws exactly this arc), so opening the
-    // panel enlarges what you were already looking at instead of switching notation halfway.
+    // Everything on this panel is positioned from a BASELINE, not from a top-left corner. Mixing 13px and
+    // 18px text in one row and giving both the same y puts their baselines ~4px apart, which is exactly
+    // the "nothing lines up" the layout kept being accused of - and it is invisible until you look for it.
+    // TextTop() converts a baseline into the top-left GDI+ actually wants, using the font's own ascent.
     private const int Pad = 22;
-    private const float RingCx = 96f, RingCy = 130f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
+    private const float ColR = 356f, RightEdge = 538f;   // right column: graph, exit, freshness
+    private const float RingCx = 96f, RingCy = 132f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
+    private const float KeyX = 178f, KeyValX = 268f;     // key captions and their figures, both fixed
+    private const float Row0 = 96f, RowPitch = 42f;      // baselines of the three key rows
+
+    private static float TextTop(Font f, float baseline)
+        => baseline - f.FontFamily.GetCellAscent(f.Style) / (float)f.FontFamily.GetEmHeight(f.Style) * f.Size;
+
+    private static void Text(Graphics g, string t, Font f, Brush b, float x, float baseline)
+        => g.DrawString(t, f, b, x, TextTop(f, baseline), StringFormat.GenericTypographic);
+
+    private static void TextClipped(Graphics g, string t, Font f, Brush b, float x, float baseline, float w)
+    {
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+        g.DrawString(t, f, b, new RectangleF(x, TextTop(f, baseline), w, f.Size * 1.6f), sf);
+    }
 
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
-        // everything moved up a step: at 11px the key captions and the sub-lines were being reported as
-        // unreadable on a panel that is only ever glanced at
         using var title = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
         using var line = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using var keyCap = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -251,20 +264,17 @@ internal sealed class ClaudeCodeWidget : IWidget
         using var keySub = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var dot = RingColor(st); // yellow while thinking, green on a tool - same as the collapsed ring
+        var state = RingColor(st); // yellow while thinking, green on a tool - same as the collapsed ring
 
-        // ---- header. The stop button used to live in the far corner, as far from the name of the thing
-        // it stops as the panel allows. It is the same circle as the status lamp, so they are now one
-        // element in front of the title: a lamp in the state colour when there is nothing to interrupt,
-        // the red stop when there is. Same slot either way, so the title never shifts.
-        DrawCancel(g, w, h, a, dot);
+        // ---- header. The stop button is the status lamp: same circle, same slot, so the title never
+        // shifts between them - red stop while a prompt can be interrupted, plain lamp otherwise.
+        DrawCancel(g, w, h, a, state);
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, Pad + 44, 16);
+            Text(g, "Claude Code", title, tb, Pad + 44, 40);
         string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-        using (var af = Ellipsis())
-            g.DrawString(act, line, ab, new RectangleF(Pad + 44, 45, 296, 20), af);
+            TextClipped(g, act, line, ab, Pad + 44, 62, ColR - Pad - 52);
 
         // ---- the object: three arcs, outer to inner - 5-hour, weekly, context
         double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
@@ -286,28 +296,24 @@ internal sealed class ClaudeCodeWidget : IWidget
             using var arc = new Pen(Mul(rings[i].col, a), RingBand) { StartCap = LineCap.Round, EndCap = LineCap.Round };
             g.DrawArc(arc, RingCx - r, RingCy - r, r * 2, r * 2, -90f, sweep);
         }
-        // The centre is left alone. The Claude mark went in there at 26px and came out an orange splat -
-        // it is a detailed glyph and the innermost ring only leaves about 18px of clear radius.
 
-        // ---- the key: arc order, exact numbers, hover swaps a countdown for its absolute reset
-        float kx = RingCx + RingOuter + 34, ky = 80, pitch = 40;
+        // ---- the key. Caption and figure share a baseline; the sub-line sits on the next one down.
         bool KeyHover(int i) => WidgetInput.Over
-            && WidgetInput.Mouse.X >= kx - 16 && WidgetInput.Mouse.X < kx + 200
-            && WidgetInput.Mouse.Y >= ky + i * pitch - 8 && WidgetInput.Mouse.Y < ky + i * pitch + pitch - 8;
+            && WidgetInput.Mouse.X >= KeyX - 20 && WidgetInput.Mouse.X < ColR - 8
+            && WidgetInput.Mouse.Y >= Row0 + i * RowPitch - 16 && WidgetInput.Mouse.Y < Row0 + i * RowPitch + 20;
 
         void Key(int i, Color swatch, string cap, string value, string sub)
         {
-            float y = ky + i * pitch;
+            float b1 = Row0 + i * RowPitch, b2 = b1 + 17;
             using (var sb = new SolidBrush(Mul(swatch, a)))
-                g.FillEllipse(sb, kx - 18, y + 5, 9, 9);
+                g.FillEllipse(sb, KeyX - 20, b1 - 9, 9, 9);
             using (var cb = new SolidBrush(Mul(Dim, a * 0.85f)))
-                g.DrawString(cap, keyCap, cb, kx, y);
+                Text(g, cap, keyCap, cb, KeyX, b1);
             using (var vb = new SolidBrush(Mul(White, a)))
-                g.DrawString(value, keyVal, vb, kx + 84, y - 4);
+                Text(g, value, keyVal, vb, KeyValX, b1);
             if (sub.Length > 0)
-                using (var ub = new SolidBrush(Mul(Dim, a * 0.85f)))
-                using (var uf = Ellipsis())
-                    g.DrawString(sub, keySub, ub, new RectangleF(kx, y + 18, 168, 17), uf);
+                using (var ub = new SolidBrush(Mul(Dim, a * 0.8f)))
+                    TextClipped(g, sub, keySub, ub, KeyX, b2, ColR - KeyX - 12);
         }
 
         if (Limits.FiveHour >= 0)
@@ -342,9 +348,9 @@ internal sealed class ClaudeCodeWidget : IWidget
         }
         else Key(2, Dim, "context", "\u2014", "no active session");
 
-        // ---- right edge: the graph, the exit flag under it, the freshness line below that
-        DrawNet(g, w - Pad - 176, 86, 176, 30, a);
-        Fx.DrawFlagGhost(g, IpCountry.Flag, FlagRect(w), a);
+        // ---- right column, all three blocks on the same left edge and the same right edge
+        DrawNet(g, ColR, 74, RightEdge - ColR, 46, a);
+        DrawExit(g, a, keySub, keyCap);
 
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
@@ -352,16 +358,52 @@ internal sealed class ClaudeCodeWidget : IWidget
             : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}";
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
+        { Alignment = StringAlignment.Far, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString($"{age}  ·  \u27f3 refresh", keySub, rb, rr, rsf);
     }
 
-    private static StringFormat Ellipsis() => new(StringFormat.GenericTypographic)
-    { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+    // The flag used to be the whole story: a country and nothing else. What you actually want to know
+    // about an exit is whose network it is, and - when the API is routed through a proxy - whether the
+    // tool is leaving by the same door as everything else. Both are measured; the second line only
+    // appears when the two exits genuinely differ, so it stays quiet the rest of the time.
+    private static void DrawExit(Graphics g, float a, Font body, Font cap)
+    {
+        const float y = 148f, fw = 26f, fh = 17f;
+        var flag = IpCountry.Flag;
+        if (flag != null)
+        {
+            var old = g.InterpolationMode;
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            using var ia = new ImageAttributes();
+            ia.SetColorMatrix(new ColorMatrix { Matrix33 = 0.85f * a });
+            g.DrawImage(flag, Rectangle.Round(new RectangleF(ColR, y - fh + 3, fw, fh)),
+                        0, 0, flag.Width, flag.Height, GraphicsUnit.Pixel, ia);
+            g.InterpolationMode = old;
+            using var bd = new Pen(Mul(Track, a), 1f);
+            g.DrawRectangle(bd, ColR, y - fh + 3, fw, fh);
+        }
 
-    // centred under the graph it belongs to. Small, but not so small the ripple eats it: at 46px the
-    // crescent and star washed into a red smudge.
-    private static RectangleF FlagRect(int w) => new(w - Pad - 176 + (176 - 74) / 2f, 138, 74, 49);
+        string who = IpCountry.Cc is { Length: > 0 } cc
+            ? (IpCountry.Isp is { Length: > 0 } isp ? $"{cc}  ·  {isp}" : cc)
+            : "locating…";
+        using (var wb = new SolidBrush(Mul(White, a * 0.9f)))
+        {
+            using var sf = new StringFormat(StringFormat.GenericTypographic)
+            { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+            g.DrawString(who, body, wb, new RectangleF(ColR + fw + 9, TextTop(body, y),
+                RightEdge - ColR - fw - 9, body.Size * 1.6f), sf);
+        }
+
+        string second = IpCountry.Split
+            ? $"api exits {IpCountry.ApiCc ?? "?"}  ·  {IpCountry.ApiIp}"
+            : IpCountry.Ip ?? "";
+        if (second.Length == 0) return;
+        using var sb2 = new SolidBrush(Mul(IpCountry.Split ? Amber : Dim, a * 0.85f));
+        using var sf2 = new StringFormat(StringFormat.GenericTypographic)
+        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+        g.DrawString(second, cap, sb2, new RectangleF(ColR, TextTop(cap, y + 20),
+            RightEdge - ColR, cap.Size * 1.6f), sf2);
+    }
 
     // One element doing two jobs, in one slot so the title never shifts: while a prompt can be
     // interrupted it is the red stop button, and the rest of the time it is the status lamp in whatever
@@ -392,102 +434,141 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     // connection-to-Anthropic graph: green = your internet (GET google.com/generate_204), blue = path to
     // api.anthropic.com. Lost stretches turn red on that line — so you can tell whose fault it is.
-    // x0/topY/width rather than a hardcoded corner: the graph moved out of the header into its own
-    // column, and it is the width it gets that decides whether the two series are readable at all.
+    // Two series stacked on one axis fight each other however they are drawn - as lines they crossed, as
+    // filled areas they hid each other. So they are mirrored instead: your internet grows upward from a
+    // centre rule, the path to Anthropic grows downward, one bar per sample. Nothing ever overlaps, the
+    // shared scale keeps them comparable, and a dropped sample is a full-height bar in red on whichever
+    // side lost it - which is the question this graph exists to answer: whose fault is it.
     private static void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
     {
         var (net, api) = NetMon.Snapshot();
         int n = net.Length;
-        const float axisGutter = 26f;
-        float gh = colH, gw = colW - axisGutter;
-        float stepX = gw / (n - 1), x0 = colX + axisGutter, top = topY, barsY = top + 14;
 
-        // dynamic scale (api TCP latency is usually way above ping)
-        int cap = 150;
-        foreach (var v in net) if (v > cap) cap = v;
-        foreach (var v in api) if (v > cap) cap = v;
-        cap = (cap + 49) / 50 * 50;
-
-        // an empty ring buffer used to draw a bare L-shaped axis labelled with a default cap, which reads
-        // as a broken frame for the first second after the panel opens. Say what is happening instead.
         bool hasData = false;
         foreach (var v in net) if (v != NetMon.Empty) { hasData = true; break; }
         if (!hasData) foreach (var v in api) if (v != NetMon.Empty) { hasData = true; break; }
 
+        float mid = topY + colH / 2f, half = colH / 2f - 1f;
+        float slot = colW / n, barW = Math.Max(2.5f, slot - 2f);
+
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        float ax = x0 - 5;
-        // baseline only. The old L put a full-height Y axis in the same weight as the series, which in a
-        // 30px strip is another line competing with the two that carry the data.
-        using (var axis = new Pen(Mul(Dim, a * (hasData ? 0.35f : 0.2f)), 1f))
-            g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh);
+        using (var rule = new Pen(Mul(Dim, a * (hasData ? 0.32f : 0.18f)), 1f))
+            g.DrawLine(rule, colX, mid, colX + colW, mid);
+
         if (!hasData)
         {
             using var wf = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
             using var wb = new SolidBrush(Mul(Dim, a * 0.7f));
             using var wsf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("sampling…", wf, wb, new RectangleF(x0, barsY, gw, gh), wsf);
-            return; // no axis numbers: the cap would be a default rather than a measurement
+            g.DrawString("sampling…", wf, wb, new RectangleF(colX, topY, colW, colH), wsf);
+            return;
         }
-        using (var tf = new Font("Segoe UI", 10.5f, GraphicsUnit.Pixel))
-        using (var tb = new SolidBrush(Mul(Dim, a * 0.8f)))
+
+        // Scale off three times the MEDIAN, not the maximum and not a high percentile. A cold TLS handshake
+        // costs ~1450ms against a steady ~85, and scaling to either the max or p90 let that handful of
+        // spikes flatten every honest sample into a stub - measured: scale 550, steady bars 3px. The median
+        // ignores them, so typical latency sits around a third of the height and a spike clips at full
+        // height, which is what a spike should look like anyway.
+        var seen = new List<int>();
+        foreach (var v in net) if (v >= 0) seen.Add(v);
+        foreach (var v in api) if (v >= 0) seen.Add(v);
+        int cap = 150;
+        if (seen.Count > 0)
         {
-            var sz = g.MeasureString(cap.ToString(), tf);
-            g.DrawString(cap.ToString(), tf, tb, ax - sz.Width - 1, barsY - 5);
-            sz = g.MeasureString("0", tf);
-            g.DrawString("0", tf, tb, ax - sz.Width - 1, barsY + gh - 9);
+            seen.Sort();
+            cap = Math.Max(cap, seen[seen.Count / 2] * 3);
         }
+        cap = (cap + 49) / 50 * 50;
 
-        float Y(int ms) => barsY + gh * (1 - Math.Clamp((float)ms / cap, 0.04f, 1f));
-
-        // Two 1.6px lines crossing each other in a 30px strip was a diagram you had to squint at. Each
-        // series is a filled area now, fading out downwards, with the line kept on top so the exact
-        // value is still legible where the two overlap - shape first, precision second.
-        void Series(int[] s, Color col)
+        void Side(int[] series, Color col, bool up)
         {
-            var pts = new List<(PointF p, bool lost)>();
-            for (int i = 0; i < s.Length; i++)
+            for (int i = 0; i < series.Length; i++)
             {
-                if (s[i] == NetMon.Empty) continue;
-                bool lost = s[i] == NetMon.Lost;
-                pts.Add((new PointF(x0 + i * stepX, lost ? barsY : Y(s[i])), lost));
+                int v = series[i];
+                if (v == NetMon.Empty) continue;
+                bool lost = v == NetMon.Lost;
+                float mag = lost ? half : Math.Max(2f, half * Math.Clamp(v / (float)cap, 0.03f, 1f));
+                float x = colX + i * slot + (slot - barW) / 2f;
+                var rect = up ? new RectangleF(x, mid - mag, barW, mag)
+                              : new RectangleF(x, mid + 1, barW, mag);
+                using var b = new SolidBrush(Mul(lost ? Red : col, a * (lost ? 0.95f : 0.8f)));
+                using var path = Rounded(rect, barW / 2f);
+                g.FillPath(b, path);
             }
-            if (pts.Count == 0) return;
-            float floorY = barsY + gh;
-            if (pts.Count > 1)
-            {
-                var poly = new List<PointF> { new(pts[0].p.X, floorY) };
-                foreach (var (pt, _) in pts) poly.Add(pt);
-                poly.Add(new PointF(pts[^1].p.X, floorY));
-                using var area = new LinearGradientBrush(
-                    new RectangleF(x0, barsY - 1, Math.Max(gw, 1f), gh + 2),
-                    Color.FromArgb((int)(78 * a), col), Color.FromArgb(0, col), 90f);
-                g.FillPolygon(area, poly.ToArray());
-            }
-            using var ok = new Pen(Mul(col, a), 1.8f) { LineJoin = LineJoin.Round };
-            using var bad = new Pen(Mul(Red, a), 2.2f) { LineJoin = LineJoin.Round };
-            for (int i = 1; i < pts.Count; i++)
-                g.DrawLine(pts[i - 1].lost || pts[i].lost ? bad : ok, pts[i - 1].p, pts[i].p);
-            using (var db = new SolidBrush(Mul(pts[^1].lost ? Red : col, a)))
-                g.FillEllipse(db, pts[^1].p.X - 2.6f, pts[^1].p.Y - 2.6f, 5.6f, 5.6f);
         }
-        Series(net, Green);
-        Series(api, Blue);
+        Side(net, Green, up: true);
+        Side(api, Blue, up: false);
 
-        // colour-coded legend/label: "net 15 · api 210 ms" (a lost side shows ":(")
+        // legend carries the scale, since a mirrored profile has no axis to hang numbers off
         int lastN = LastSample(net), lastA = LastSample(api);
         string tn = Fx.NetLabel + " " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
-        string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
+        string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA.ToString());
         using (var f = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel))
         {
-            float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
-            float lx = x0 + gw - (wN + wS + wA);
-            using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a))) g.DrawString(tn, f, b, lx, top - 2);
-            using (var b = new SolidBrush(Mul(Dim, a))) g.DrawString(" · ", f, b, lx + wN, top - 2);
-            using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a))) g.DrawString(ta, f, b, lx + wN + wS, top - 2);
+            float bl = topY - 8;
+            using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a)))
+                Text(g, tn, f, b, colX, bl);
+            float wN = g.MeasureString(tn, f, PointF.Empty, StringFormat.GenericTypographic).Width;
+            using (var b = new SolidBrush(Mul(Dim, a * 0.7f)))
+                Text(g, "·", f, b, colX + wN + 6, bl);
+            using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a)))
+                Text(g, ta, f, b, colX + wN + 18, bl);
+            using (var b = new SolidBrush(Mul(Dim, a * 0.7f)))
+            using (var sf = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far })
+                g.DrawString($"ms · scale {cap}", f, b,
+                    new RectangleF(colX, TextTop(f, bl), colW, f.Size * 1.6f), sf);
         }
 
-        DrawNetHover(g, a, net, api, x0, stepX, barsY, gh, x0 + gw, Y);
+        DrawNetHover(g, a, net, api, colX, slot, mid, half, colX + colW, cap);
+    }
+
+    // the tooltip is the precise read: both values, how many samples each side lost, and whose fault a
+    // drop was - the one thing the shape alone cannot say
+    private static void DrawNetHover(Graphics g, float a, int[] net, int[] api,
+        float x0, float slot, float mid, float half, float right, int cap)
+    {
+        var m = WidgetInput.Mouse;
+        if (!WidgetInput.Over || m.X < x0 || m.X > right || m.Y < mid - half - 10 || m.Y > mid + half + 10)
+            return;
+        int idx = Math.Clamp((int)((m.X - x0) / slot), 0, net.Length - 1);
+        int vN = net[idx], vA = api[idx];
+        if (vN == NetMon.Empty && vA == NetMon.Empty) return;
+
+        float gx = x0 + idx * slot + slot / 2f;
+        using (var guide = new Pen(Mul(White, a * 0.30f), 1f) { DashStyle = DashStyle.Dot })
+            g.DrawLine(guide, gx, mid - half, gx, mid + half);
+
+        int lostN = 0, cntN = 0, lostA = 0, cntA = 0;
+        for (int i = 0; i < net.Length; i++)
+        {
+            if (net[i] != NetMon.Empty) { cntN++; if (net[i] == NetMon.Lost) lostN++; }
+            if (api[i] != NetMon.Empty) { cntA++; if (api[i] == NetMon.Lost) lostA++; }
+        }
+        string F(int v) => v == NetMon.Lost ? ":(" : v == NetMon.Empty ? "–" : $"{v} ms";
+        var lines = new List<(string t, Color c)>
+        {
+            ($"{Fx.NetLabel} {F(vN)}   {Fx.ApiLabel} {F(vA)}", White),
+            ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
+            ("google.com  ·  api.anthropic.com", Dim),
+        };
+        if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
+        else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));
+
+        using var f2 = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+        float bw2 = 0;
+        foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
+        bw2 += 16;
+        float bh2 = lines.Count * 15 + 10;
+        float bx = Math.Min(gx + 8, right - bw2), by = mid + half + 6;
+        using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
+        {
+            using (var bg = new SolidBrush(Mul(Color.FromArgb(236, 18, 18, 20), a))) g.FillPath(bg, path);
+            using (var pen = new Pen(Mul(Track, a), 1f)) g.DrawPath(pen, path);
+        }
+        for (int i = 0; i < lines.Count; i++)
+            using (var b = new SolidBrush(Mul(lines[i].c, a)))
+                g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 15);
     }
 
     private static int LastSample(int[] s)
@@ -551,10 +632,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     }
 
     // in front of the title, where the lamp used to be
-    private static RectangleF CancelRect(int w, int h) => new(Pad - 3, 14, 34, 34);
+    private static RectangleF CancelRect(int w, int h) => new(Pad - 3, 16, 34, 34);
 
     // bottom-right of the band, right-aligned to the panel's padding
-    private static RectangleF RefreshRect(int w, int h) => new(w - Pad - 176, h - 26, 176, 18);
+    private static RectangleF RefreshRect(int w, int h) => new(ColR, 190, RightEdge - ColR, 18);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"

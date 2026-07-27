@@ -148,15 +148,20 @@ internal static class NetMon
         new System.Net.Http.SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5), UseProxy = false })
     { Timeout = TimeSpan.FromSeconds(2.5) };
 
+    // ONLY route through a proxy if one is explicitly configured (most users have none). Process env first;
+    // fall back to the User-scope var (the logon task may not have inherited it). No proxy set → probe
+    // direct, exactly like everyone else — we never silently pull in the system/WinInet proxy. Exposed so
+    // the exit-IP probe uses the SAME proxy the API probe does; two copies of this lookup could drift and
+    // the whole point of comparing the two exits is that one of them is the API's.
+    internal static string? ProxyUrl =>
+        Environment.GetEnvironmentVariable("HTTPS_PROXY") ?? Environment.GetEnvironmentVariable("HTTP_PROXY")
+        ?? Environment.GetEnvironmentVariable("HTTPS_PROXY", EnvironmentVariableTarget.User)
+        ?? Environment.GetEnvironmentVariable("HTTP_PROXY", EnvironmentVariableTarget.User);
+
     private static System.Net.Http.SocketsHttpHandler ProxiedHandler()
     {
         var h = new System.Net.Http.SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) };
-        // ONLY route through a proxy if one is explicitly configured (most users have none). process env
-        // first; fall back to the User-scope var (the logon task may not have inherited it). No proxy set
-        // → probe direct, exactly like everyone else — we never silently pull in the system/WinInet proxy.
-        var proxy = Environment.GetEnvironmentVariable("HTTPS_PROXY") ?? Environment.GetEnvironmentVariable("HTTP_PROXY")
-            ?? Environment.GetEnvironmentVariable("HTTPS_PROXY", EnvironmentVariableTarget.User)
-            ?? Environment.GetEnvironmentVariable("HTTP_PROXY", EnvironmentVariableTarget.User);
+        var proxy = ProxyUrl;
         if (!string.IsNullOrEmpty(proxy))
             try { h.Proxy = new System.Net.WebProxy(proxy); h.UseProxy = true; } catch { h.UseProxy = false; }
         else
@@ -191,9 +196,21 @@ internal static class NetMon
 internal static class IpCountry
 {
     public static volatile System.Drawing.Bitmap? Flag;
-    private static string? _ip;
+    // who the exit actually is, not just which flag to draw: the panel says "TR · G-Core Labs" because a
+    // flag alone answers "which country" and none of "whose network", which is the part that tells you
+    // whether the route is the one you set up.
+    public static volatile string? Ip, Cc, Isp;
+    // the same question asked THROUGH the proxy the API probe uses. If the two answers differ, the tool's
+    // traffic and everything else are leaving by different doors — measured, not guessed, and only ever
+    // asked when a proxy is actually configured.
+    public static volatile string? ApiIp, ApiCc;
+
+    public static bool Split => Ip is { Length: > 0 } a && ApiIp is { Length: > 0 } b
+        && !string.Equals(a, b, StringComparison.Ordinal);
+
     private static Timer? _timer;
     private static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
+    private static System.Net.Http.HttpClient? _viaProxy;
 
     public static void Poke() => _timer ??= new Timer(_ => Refresh(), null, 0, 300_000);
 
@@ -203,21 +220,60 @@ internal static class IpCountry
     // first Poke() has armed the timer (the flag isn't shown before then anyway).
     public static void Invalidate() => _timer?.Change(3_000, 300_000);
 
-    private static void Refresh()
+    private const string Fields = "https://ipwho.is/?fields=ip,country_code,connection";
+
+    private static (string ip, string cc, string isp)? Ask(System.Net.Http.HttpClient http)
     {
         try
         {
-            var json = Http.GetStringAsync("https://ipwho.is/?fields=ip,country_code").Result;
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            using var doc = System.Text.Json.JsonDocument.Parse(http.GetStringAsync(Fields).Result);
             var ip = doc.RootElement.GetProperty("ip").GetString();
-            if (ip == _ip) return;
-            var cc = doc.RootElement.GetProperty("country_code").GetString()?.ToLowerInvariant();
-            if (string.IsNullOrEmpty(cc)) return;
-            var png = Http.GetByteArrayAsync($"https://flagcdn.com/w80/{cc}.png").Result;
-            Flag = new System.Drawing.Bitmap(new System.IO.MemoryStream(png));
-            _ip = ip;
-            Interlocked.Increment(ref NetMon.Version); // repaint the open panel once
+            var cc = doc.RootElement.GetProperty("country_code").GetString();
+            if (string.IsNullOrEmpty(ip) || string.IsNullOrEmpty(cc)) return null;
+            string isp = "";
+            if (doc.RootElement.TryGetProperty("connection", out var conn))
+                isp = (conn.TryGetProperty("isp", out var i) ? i.GetString() : null)
+                      ?? (conn.TryGetProperty("org", out var o) ? o.GetString() : null) ?? "";
+            return (ip, cc, isp);
         }
-        catch { }
+        catch { return null; }
+    }
+
+    private static void Refresh()
+    {
+        var direct = Ask(Http);
+        if (direct is not { } d) return;
+        bool changed = d.ip != Ip;
+        Ip = d.ip;
+        Cc = d.cc.ToUpperInvariant();
+        Isp = d.isp;
+
+        // only worth asking twice when the API path is actually routed somewhere else
+        var proxy = NetMon.ProxyUrl;
+        if (!string.IsNullOrEmpty(proxy))
+        {
+            try
+            {
+                _viaProxy ??= new System.Net.Http.HttpClient(new System.Net.Http.SocketsHttpHandler
+                { Proxy = new System.Net.WebProxy(proxy), UseProxy = true })
+                { Timeout = TimeSpan.FromSeconds(8) };
+                var via = Ask(_viaProxy);
+                ApiIp = via?.ip;
+                ApiCc = via?.cc.ToUpperInvariant();
+            }
+            catch { ApiIp = null; ApiCc = null; }
+        }
+        else { ApiIp = null; ApiCc = null; }
+
+        if (changed || Flag is null)
+        {
+            try
+            {
+                var png = Http.GetByteArrayAsync($"https://flagcdn.com/w80/{d.cc.ToLowerInvariant()}.png").Result;
+                Flag = new System.Drawing.Bitmap(new System.IO.MemoryStream(png));
+            }
+            catch { }
+        }
+        Interlocked.Increment(ref NetMon.Version); // repaint the open panel once
     }
 }
