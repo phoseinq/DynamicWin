@@ -1,9 +1,57 @@
 # Halo — progress
 
-## 2026-07-27 (latest): installer task defaults, and the header demo on a phone
-Built 0/0 and signed, **installed here from the signed setup** (3.1.1.0, autostart shortcut present,
-`~/.codex/hooks.json` written by the install task). Blog changes are **deployed to both vhosts**;
-`installer/Halo.iss` and this entry are **not committed yet**.
+## 2026-07-27 (evening): the notification sound was being cut in half — **3.1.3**
+Build 0/0 with `-warnaserror`, **166 tests** (6 new).
+
+### Root cause, from the log rather than from theory
+`notif-debug.txt` has **23 `applying → WpnUserService restart` lines, every one of them ~3s after the
+toast that triggered it**. Windows starts a toast's sound the moment the toast fires; Halo only learns a
+new app's AUMID *from* that toast, writes `Sound=0` after the fact, and then restarts WpnUserService to
+make it take effect this session. The restart landed inside the sound. So the chime was neither on nor
+off — it started at full volume and was guillotined partway, which is exactly what was reported.
+
+`SeedKnownApps` already claims every AUMID the registry lists, so this only bites genuinely new ids —
+but tray apps mint one per launch (`NotifyIconGeneratedAumid_17586711155421024048`, and a second one
+hours later), so it kept happening.
+
+### Fix
+The restart now waits for the notifications to go **quiet**: `ApplyDelayMs` is a pure function of
+`now`, `lastRestart` and `lastToast` that returns the larger of "12s since the last toast" and "60s
+since the last restart", and `DoApply` re-checks it rather than trusting the delay it armed. Every
+mirrored toast stamps `_lastToast` — `SuppressApp` is already called per toast, so a burst pushes a
+pending restart out on its own. The old code checked the cooldown in `DoApply` and the debounce in
+`ScheduleApply`, which is why the two rules could not see each other.
+
+Consequence worth stating plainly: a sound Windows has already started **cannot** be muted — the
+per-app setting only takes effect on service restart, and restarting is what was cutting it. So the
+first toast from an app Windows has never listed now plays *whole*, and every one after it is silent.
+
+### Also this session
+- **Installer icon.** `make_icon.py` handed the .ico to Pillow, which writes every frame PNG-compressed.
+  Rewritten to emit BMP/DIB for 16..128 and PNG only for 256, each resized from the 512 supersample.
+  **This was not the reported bug** — the old build extracts and draws fine at every size, verified
+  side by side. Chrome showing a generic icon in its download list is code signing: the cert is
+  `CN=phoseinq` issued by `CN=phoseinq`, so the publisher is unverified everywhere but this machine.
+  There is no way around it; SignPath.io issues free certs to OSS projects.
+- **`WizardSmallImageFile`** puts the mark in the corner of every wizard page. Verified by screenshotting
+  the live wizard, which also caught both task checkboxes ticked **on an upgrade** — the case that used
+  to clear them.
+- **READMEs rewritten** in both languages: install first, then each feature as the clip from the blog
+  post (copied into `ReadmeFiles/`), and nothing about how it is built. The Persian licence badge said
+  CC BY-SA next to an MIT LICENSE.
+- **`PRIVACY.md` + `PRIVACY.fa.md`**, written from `grep -rn "https\?://" src/` rather than from intent.
+  Nine endpoints; `ipwho.is` is the only one that discloses anything about the user and is called out
+  rather than buried. `notif-debug.txt` logs app name and text *length*, never text — stated with a
+  sample line.
+- Pillow's `split`/`flip`/pixel access all segfault on the CPython here (3.14.0a4), so the DIB is built
+  from one `tobytes()` and slicing.
+
+## 2026-07-27 (latest): installer task defaults, and the header demo on a phone — **3.1.2 RELEASED**
+`origin/V3` = `0ecc99a` (mirror), local master `09ee224`, tag **v3.1.2** with both assets, and
+`releases/latest` resolves to it, so the in-app updater will carry it. Build 0/0 with `-warnaserror`,
+**160 tests** locally / 157 on the stripped tree. Installed here from the signed setup (3.1.1.0 at the
+time of testing, autostart shortcut present, `~/.codex/hooks.json` written by the install task). Blog
+changes deployed to both vhosts.
 
 ### Both installer checkboxes were only default-on for a first install
 `AppVersion` still read 3.1.0 — the released build was 3.1.1 — and neither tick survived an upgrade:

@@ -33,6 +33,23 @@ internal static class BannerGate
 
     private static Timer? _applyTimer;
     private static long _lastRestart = -60_000;
+    private static long _lastToast = -QuietGapMs;
+    private static bool _applyPending;
+
+    // Windows starts a toast's sound the moment the toast fires; the suppression for an app we have not
+    // seen before is written afterwards, and the service restart that applies it was killing whatever was
+    // still playing. Measured in notif-debug.txt: 23 restarts, every one of them ~3s after a toast, which
+    // is inside most notification sounds. So the sound was neither on nor off — it started at full volume
+    // and was guillotined mid-chime. Waiting for the notifications to go quiet is what makes it one or the
+    // other, and 12s clears even the long ringtones (Phone Link, Teams).
+    private const int QuietGapMs = 12_000;
+    private const int CooldownMs = 60_000;
+
+    // pure, so the two rules that were fighting each other can be tested without a registry or a service:
+    // never restart inside a sound, and never restart more than once a minute. Both must have elapsed.
+    internal static int ApplyDelayMs(long now, long lastRestart, long lastToast,
+                                     int quietGap = QuietGapMs, int cooldown = CooldownMs)
+        => (int)Math.Max(quietGap - (now - lastToast), Math.Max(cooldown - (now - lastRestart), 0));
 
     public static void Enable()
     {
@@ -104,6 +121,9 @@ internal static class BannerGate
         bool changed;
         lock (_lock)
         {
+            // called for every mirrored toast, so this is also the freshest "a sound may be playing"
+            // signal there is — a burst of notifications keeps pushing a pending restart out
+            _lastToast = Environment.TickCount64;
             if (!_orig.ContainsKey(aumid))
             {
                 try { using var k = Registry.CurrentUser.OpenSubKey(SettingsPath + "\\" + aumid); _orig[aumid] = k?.GetValue("ShowBanner") as int?; }
@@ -112,7 +132,17 @@ internal static class BannerGate
             }
             changed = WriteZero(aumid);
         }
-        if (changed) ScheduleApply();
+        if (changed) ScheduleApply(); else Defer();
+    }
+
+    // nothing new to write, but a toast just landed: if a restart is already queued, hold it off so it
+    // cannot land inside this one's sound
+    private static void Defer()
+    {
+        lock (_lock)
+            if (_applyPending)
+                _applyTimer?.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+                                    Timeout.Infinite);
     }
 
     // silence the banner, the sound, AND urgent break-through — Windows treats these as independent per-app
@@ -136,14 +166,16 @@ internal static class BannerGate
         catch (Exception ex) { Log($"suppress {aumid} failed: {ex.Message}"); return false; }
     }
 
-    // WpnUserService only re-reads per-app settings on restart, so coalesce a burst of new suppressions into a
-    // single restart ~3s after the last one, and never restart more than once per 60s.
+    // WpnUserService only re-reads per-app settings on restart, so coalesce a burst of new suppressions
+    // into a single restart once the notifications have gone quiet.
     private static void ScheduleApply()
     {
         lock (_lock)
         {
             _applyTimer ??= new Timer(_ => DoApply(), null, Timeout.Infinite, Timeout.Infinite);
-            _applyTimer.Change(3_000, Timeout.Infinite);
+            _applyPending = true;
+            _applyTimer.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+                               Timeout.Infinite);
         }
     }
 
@@ -151,9 +183,12 @@ internal static class BannerGate
     {
         lock (_lock)
         {
-            long since = Environment.TickCount64 - _lastRestart;
-            if (since < 60_000) { _applyTimer?.Change(60_000 - since, Timeout.Infinite); return; } // cooldown → defer
+            // a toast may have landed while we waited — re-check both rules rather than assume the
+            // delay we armed is still the right one
+            int wait = ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast);
+            if (wait > 0) { _applyTimer?.Change(wait, Timeout.Infinite); return; }
             _lastRestart = Environment.TickCount64;
+            _applyPending = false;
         }
         Log("applying → WpnUserService restart (listener self-heals)");
         RestartService();
