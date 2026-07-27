@@ -34,7 +34,7 @@ you want to carry from one window to another. No app to open, nothing covering y
 
 <br />
 
-## ⬇️ Install
+<h2 align="center">⬇️ Install</h2>
 
 | Download | What it is |
 | :-- | :-- |
@@ -46,51 +46,47 @@ anywhere; it stays where you put it. Once installed it updates itself quietly in
 
 <br />
 
-## 🎵 Media
+<h2 align="center">🎵 Media</h2>
 
+<div align="center">
 <img src="ReadmeFiles/media.gif" alt="The media panel" width="760">
+</div>
 
 Album art — animated if the cover is a GIF — a waveform driven by the actual system output, and
 controls that behave like controls: grab the bar and it thickens under your cursor and follows your
-hand instead of waiting on the player. Video also gets ±10s, playback speed and subtitles.
-
-It reads Windows' own media session, so it works with whatever you already have open.
+hand instead of waiting on the player. Video also gets ±10s, playback speed and subtitles. It reads
+Windows' own media session, so it works with whatever you already have open.
 
 <br />
 
-## 🔔 Notifications
+<h2 align="center">🔔 Notifications</h2>
 
+<div align="center">
 <img src="ReadmeFiles/copy-code.gif" alt="One-click copy for a verification code" width="600">
+</div>
 
 Every toast lands in the pill with the *real* app icon, and the native Windows banner goes quiet so
-you are not told the same thing twice. Click one to open the exact message it came from.
-
-When a notification carries a **verification code**, the pill puts a Copy button next to it. No
-opening the app, no dragging a cursor across six digits.
+you are not told the same thing twice. When one carries a **verification code**, the pill puts a Copy
+button next to it — no opening the app, no dragging a cursor across six digits.
 
 <br />
 
-## 📁 File tray
+<h2 align="center">📁 File tray</h2>
 
+<div align="center">
 <img src="ReadmeFiles/tray.gif" alt="The file tray" width="760">
+</div>
 
 Drag a file onto the pill and it holds on to it. Drag it back out into any window later — a
 different app, a different desktop, twenty minutes on.
 
 <br />
 
-## ⬇️ Downloads
+<h2 align="center">🤖 Coding sessions</h2>
 
-<img src="ReadmeFiles/downloads.png" alt="The download panel" width="900">
-
-Real progress, Chrome and Edge alike. And Cancel actually cancels — including in Edge, where the
-button does not exist until the row has keyboard focus.
-
-<br />
-
-## 🤖 Coding sessions
-
+<div align="center">
 <img src="ReadmeFiles/agents.png" alt="The Claude Code panel" width="900">
+</div>
 
 A live panel per **Claude Code** and **Codex** session: what it is doing right now, context left,
 your 5-hour and weekly limits as a ring, and a Cancel that stops the running prompt. Any other tool
@@ -98,8 +94,9 @@ can join by writing a small JSON file.
 
 <br />
 
-## …and the quiet ones
+<h2 align="center">…and the quiet ones</h2>
 
+- ⬇️ **Downloads** — real progress in Chrome and Edge, and a Cancel that actually cancels.
 - 🔋 **Bluetooth battery** — connect headphones, a controller or your phone and the pill shows the level.
 - ⚠️ **Alerts** — battery, CPU, RAM and internet, each fired once when it happens rather than nagged.
 - 📌 **Pin** — keep it above fullscreen apps. Hold the pushpin to make it visible in screen recordings too.
@@ -107,7 +104,7 @@ can join by writing a small JSON file.
 
 <br />
 
-## 🔒 Privacy
+<h2 align="center">🔒 Privacy</h2>
 
 No account, no server, no telemetry. Everything the pill shows you stays on your machine.
 [**PRIVACY.md**](PRIVACY.md) lists every file Halo writes and every network request it can make —
