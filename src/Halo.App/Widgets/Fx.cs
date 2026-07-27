@@ -464,12 +464,23 @@ internal static class Fx
         var ghost = FlagGhost(flag);
         const int gw = 210;
         int gh = ghost.Height * gw / ghost.Width;
-        var dest = new Rectangle((w - gw) / 2, (h - gh) / 2 + 4, gw, gh);
+        DrawFlagGhost(g, flag, new RectangleF((w - gw) / 2f, (h - gh) / 2f + 4, gw, gh), a);
+    }
+
+    // Same ripple, placed where the caller wants it and at whatever size. A 210px watermark across the
+    // middle of a panel competes with the text sitting on top of it; a small one parked in dead space
+    // still says which exit the route is taking without being the first thing the eye lands on. Alpha
+    // rises as it shrinks, because the ghost is faint enough to vanish entirely at a small size.
+    public static void DrawFlagGhost(Graphics g, System.Drawing.Bitmap? flag, RectangleF dest, float a)
+    {
+        if (flag is null) return;
+        var ghost = FlagGhost(flag);
+        float strength = dest.Width >= 160 ? 0.16f : dest.Width >= 90 ? 0.22f : 0.30f;
         using var ia = new ImageAttributes();
-        ia.SetColorMatrix(new ColorMatrix { Matrix33 = 0.16f * a });
+        ia.SetColorMatrix(new ColorMatrix { Matrix33 = strength * a });
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        g.DrawImage(ghost, dest, 0, 0, ghost.Width, ghost.Height, GraphicsUnit.Pixel, ia);
+        g.DrawImage(ghost, Rectangle.Round(dest), 0, 0, ghost.Width, ghost.Height, GraphicsUnit.Pixel, ia);
         g.InterpolationMode = oldInterp;
     }
 

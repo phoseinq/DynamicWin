@@ -232,94 +232,100 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    // Two columns: the left one is the numbers you read, the right one is state and diagnostics. The
-    // graph used to be squeezed between the title and the stop button, which left it about 135px and put
-    // a moving chart right next to the one line you actually read first; it now owns the right column and
-    // is wider for it. The activity line is ellipsised to the left column because "waiting_input" prints
-    // Claude's real question there, which ran under the graph at any decent length.
-    private const int Pad = 24, ColGap = 24;
-    private static float LeftColW(int w) => (w - Pad * 2) * 0.575f;
-    private static float RightColX(int w) => Pad + LeftColW(w) + ColGap;
+    // 560x220 is a wide, short panel, and three full-width bars stacked down it spent the width on
+    // nothing while crowding the height. The three numbers are peers, so they sit side by side as tiles:
+    // each one is a caption, the figure at a size you can read at a glance, a bar, and the detail under
+    // it. That frees a whole band at the bottom for the connection graph, which is the only thing here
+    // that is actually a chart. The exit-IP flag stops being a 210px watermark under the text and becomes
+    // a small mark beside the graph, which is the part of the panel it is about.
+    private const int Pad = 22, TileGap = 14;
 
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
-        using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
-        using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
-        using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+        using var title = new Font("Segoe UI Semibold", 20f, GraphicsUnit.Pixel);
+        using var figure = new Font("Segoe UI Semibold", 19f, GraphicsUnit.Pixel);
+        using var caption = new Font("Segoe UI", 10.5f, GraphicsUnit.Pixel);
+        using var small = new Font("Segoe UI", 11.5f, GraphicsUnit.Pixel);
+        using var line = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
-        float lw = LeftColW(w), rx = RightColX(w), rw = w - Pad - rx;
-        var dot = RingColor(st); // yellow while thinking, green on a tool — same as the collapsed ring
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        Fx.DrawFlagGhost(g, IpCountry.Flag, w, h, a); // wind-blown exit-IP flag, centred watermark
+        var dot = RingColor(st); // yellow while thinking, green on a tool — same as the collapsed ring
 
+        // ---- header
         using (var db = new SolidBrush(Mul(dot, a)))
-            g.FillEllipse(db, Pad, Pad + 7, 11, 11); // centred on the title's cap height
+            g.FillEllipse(db, Pad, 27, 10, 10);
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, Pad + 20, Pad - 3);
+            g.DrawString("Claude Code", title, tb, Pad + 18, 18);
 
-        string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
+        string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-        using (var af = new StringFormat(StringFormat.GenericTypographic)
-        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter })
-            g.DrawString(line, small, ab, new RectangleF(Pad + 20, Pad + 23, lw - 20, 18), af);
+        using (var af = Ellipsis())
+            g.DrawString(act, line, ab, new RectangleF(Pad + 18, 41, w - Pad - 60 - (Pad + 18), 18), af);
 
-        // ---- left column: the meters. Limits stay up even with no session; only context needs a transcript.
-        float y = 78, pitch = 38;
+        // ---- three tiles: context, 5-hour, weekly
+        float tileW = (w - Pad * 2 - TileGap * 2) / 3f, ty = 74;
+        bool TileHover(int i) => WidgetInput.Over
+            && WidgetInput.Mouse.X >= Pad + i * (tileW + TileGap)
+            && WidgetInput.Mouse.X < Pad + i * (tileW + TileGap) + tileW
+            && WidgetInput.Mouse.Y >= ty - 6 && WidgetInput.Mouse.Y < ty + 62;
+
+        void Tile(int i, string cap, string value, string detail, double frac, Color fill, bool known)
+        {
+            float x = Pad + i * (tileW + TileGap);
+            using (var cb = new SolidBrush(Mul(Dim, a * 0.75f)))
+                g.DrawString(cap, caption, cb, x, ty);
+            using (var vb = new SolidBrush(Mul(known ? White : Dim, a)))
+                g.DrawString(value, figure, vb, x - 1, ty + 14);
+            Fill(g, x, ty + 44, tileW, 5, Mul(Track, a));
+            if (known && frac > 0) Fill(g, x, ty + 44, (float)(tileW * Math.Clamp(frac, 0, 1)), 5, Mul(fill, a));
+            if (detail.Length > 0)
+                using (var sb = new SolidBrush(Mul(Dim, a * 0.85f)))
+                using (var sf = Ellipsis())
+                    g.DrawString(detail, small, sb, new RectangleF(x, ty + 54, tileW, 16), sf);
+        }
+
         if (st?.Session is { } sess)
         {
             double ctx = ContextFrac(st);
             long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
             string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            DrawBar(g, Pad, y, lw, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+            Tile(0, "CONTEXT", $"{usedK}K", $"of {maxLabel}  ·  {ctx * 100:0}%", ctx, Blue, true);
         }
-        else
-        {
-            using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active session", body, nb, Pad, y + 4);
-        }
+        else Tile(0, "CONTEXT", "—", "no active session", 0, Blue, false);
 
-        // hovering a limit row swaps its value for the precise one (exact % + absolute reset time)
-        bool RowHover(float rowY) => WidgetInput.Over
-            && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + pitch
-            && WidgetInput.Mouse.X >= Pad && WidgetInput.Mouse.X <= Pad + lw;
-        string LimitValue(float f, DateTimeOffset reset, float rowY)
-            => RowHover(rowY) ? $"{f * 100:0.#}%  ·  {reset.ToLocalTime():ddd HH:mm}"
-                              : $"{Pct(f)}  ·  {ResetIn(reset)}";
-
-        // credits sit on the 5-hour row when the account has spent any: normally the spend, on hover the
-        // remaining IF the API exposes it (prepaid balance or a monthly cap). Note: promotional-credit
-        // balance shown on claude.ai is NOT returned to the Claude Code token, so hover falls back to spend.
+        // credits ride the 5-hour tile when the account has spent any: the spend normally, the remaining on
+        // hover IF the API exposes it. Promotional balance shown on claude.ai is NOT returned to the Claude
+        // Code token, so hover falls back to the spend.
         if (Limits.FiveHour >= 0)
         {
-            string credits = Limits.CreditsUsed <= 0 ? ""
-                : RowHover(y + pitch)
+            string detail = TileHover(1)
+                ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
+                : $"{ResetIn(Limits.FiveHourReset)} left";
+            if (Limits.CreditsUsed > 0)
+                detail += TileHover(1)
                     ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
-                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} left of ${Limits.CreditsLimit:0}"
+                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} of ${Limits.CreditsLimit:0}"
                        : $"  ·  ${Limits.CreditsUsed:0.00} used")
                     : $"  ·  ${Limits.CreditsUsed:0.00}";
-            DrawBar(g, Pad, y + pitch, lw, "5-hour limit",
-                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + pitch) + credits,
-                Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
+            Tile(1, "5-HOUR", TileHover(1) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour),
+                 detail, Limits.FiveHour, UsageColor(Limits.FiveHour), true);
         }
+        else Tile(1, "5-HOUR", "—", "not fetched yet", 0, Blue, false);
+
         if (Limits.Week >= 0)
-            DrawBar(g, Pad, y + pitch * 2, lw, "Weekly limit",
-                LimitValue(Limits.Week, Limits.WeekReset, y + pitch * 2), Limits.Week,
-                UsageColor(Limits.Week), a, body, small);
+            Tile(2, "WEEKLY", TileHover(2) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
+                 TileHover(2) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
+                              : $"{ResetIn(Limits.WeekReset)} left",
+                 Limits.Week, UsageColor(Limits.Week), true);
+        else Tile(2, "WEEKLY", "—", "not fetched yet", 0, Blue, false);
 
-        // hairline between the columns, faded at both ends so it reads as a seam and not a box edge
-        using (var seam = new LinearGradientBrush(
-            new RectangleF(rx - ColGap / 2f - 1, 70, 2, 108), Color.Transparent, Color.Transparent, 90f))
-        {
-            seam.InterpolationColors = new ColorBlend
-            {
-                Colors = new[] { Color.Transparent, Mul(Track, a), Mul(Track, a), Color.Transparent },
-                Positions = new[] { 0f, 0.22f, 0.78f, 1f },
-            };
-            g.FillRectangle(seam, rx - ColGap / 2f - 1, 70, 1.4f, 108);
-        }
+        // ---- bottom band: the connection graph, the exit flag, and the usage freshness
+        DrawNet(g, Pad, 158, 246, 30, a);
 
-        // ---- right column: stop, freshness, and the connection graph with room to breathe
+        var fr = FlagRect();
+        Fx.DrawFlagGhost(g, IpCountry.Flag, fr, a);
+
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
         string age = Limits.LastSuccess == DateTime.MinValue ? "usage never fetched"
@@ -329,9 +335,16 @@ internal sealed class ClaudeCodeWidget : IWidget
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString($"{age}  ·  ⟳ refresh", small, rb, rr, rsf);
 
-        DrawNet(g, rx, 88, rw, a);
         DrawCancel(g, w, h, a);
     }
+
+    private static StringFormat Ellipsis() => new(StringFormat.GenericTypographic)
+    { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+
+    // Parked at the end of the graph band: dead space, and beside the part of the panel the exit IP
+    // actually concerns. 46px was too small to survive the ripple -- the crescent and star washed into a
+    // red smudge -- so it sits at 76, which still reads as a mark rather than as an image.
+    private static RectangleF FlagRect() => new(280, 150, 76, 51);
 
     // small circular stop button (square glyph = stop), red when a prompt can be interrupted
     private void DrawCancel(Graphics g, int w, int h, float a)
@@ -355,12 +368,12 @@ internal sealed class ClaudeCodeWidget : IWidget
     // api.anthropic.com. Lost stretches turn red on that line — so you can tell whose fault it is.
     // x0/topY/width rather than a hardcoded corner: the graph moved out of the header into its own
     // column, and it is the width it gets that decides whether the two series are readable at all.
-    private static void DrawNet(Graphics g, float colX, float topY, float colW, float a)
+    private static void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
     {
         var (net, api) = NetMon.Snapshot();
         int n = net.Length;
-        const float axisGutter = 26f, gh = 46f;
-        float gw = colW - axisGutter;
+        const float axisGutter = 26f;
+        float gh = colH, gw = colW - axisGutter;
         float stepX = gw / (n - 1), x0 = colX + axisGutter, top = topY, barsY = top + 14;
 
         // dynamic scale (api TCP latency is usually way above ping)
@@ -501,11 +514,11 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static RectangleF CancelRect(int w, int h)
     {
         const float d = 34, margin = 22;
-        return new RectangleF(w - margin - d, 20, d, d);
+        return new RectangleF(w - margin - d, 18, d, d);
     }
 
-    // sits under the graph in the right column, right-aligned to the panel's padding
-    private static RectangleF RefreshRect(int w, int h) => new(RightColX(w), h - 42, w - Pad - RightColX(w), 20);
+    // bottom-right of the band, right-aligned to the panel's padding
+    private static RectangleF RefreshRect(int w, int h) => new(w - Pad - 176, h - 40, 176, 20);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"

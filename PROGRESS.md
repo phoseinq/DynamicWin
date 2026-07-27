@@ -1,6 +1,25 @@
 # Halo — progress
 
-## 2026-07-27 (night): the Claude Code panel redrawn in two columns
+## 2026-07-27 (night): the Claude Code panel rebuilt as tiles
+Build 0/0, **196 tests**. Hot-deployed. Same information as ever; the two-column pass below was a
+rearrangement, this replaces the structure.
+
+560x220 is wide and short, and three full-width bars stacked down it spent the width on nothing while
+crowding the height. The three figures are peers, so they now sit side by side as tiles — caption, the
+number at a size you read at a glance, a bar, and the detail underneath ("of 1M · 34%", "2h 47m left").
+That frees a whole band at the bottom for the connection graph, which is the only thing on this panel
+that is actually a chart, and it gets 246x30 there instead of being wedged beside the title.
+
+**The flag stopped being a watermark.** `Fx.DrawFlagGhost` hardcoded a 210px ghost across the middle of
+the panel, under the text — it competed with everything drawn on top of it. It gained a rect overload
+(the old signature delegates to it, so the Codex twin is untouched) and the exit flag now sits at 76x51
+at the end of the graph band, which is the part of the panel it is actually about. First attempt put it
+at 46px and the ripple ate it: the crescent and star washed into a red smudge, so alpha now rises as the
+rect shrinks and 76 is the floor at which it still reads as a flag.
+
+Hit targets were checked as geometry rather than by eye — all seven in bounds, no overlaps.
+
+## 2026-07-27 (night, earlier): the Claude Code panel redrawn in two columns
 Build 0/0, **196 tests** (10 new). Hot-deployed; **not committed to the mirror** (app source, not docs).
 Same information as before — nothing added, nothing dropped.
 
