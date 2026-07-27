@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340"
+     font-family="Vazirmatn, 'Segoe UI', Tahoma, system-ui, sans-serif">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0"    stop-color="#0b1020"/>
+    <stop offset="0.45" stop-color="#111832"/>
+    <stop offset="1"    stop-color="#1e1338"/>
+  </linearGradient>
+  <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0"    stop-color="#6366f1"/>
+    <stop offset="0.35" stop-color="#22d3ee"/>
+    <stop offset="0.7"  stop-color="#f59e0b"/>
+    <stop offset="1"    stop-color="#f472b6"/>
+  </linearGradient>
+  <linearGradient id="pill" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#232c46"/>
+    <stop offset="1" stop-color="#0c1120"/>
+  </linearGradient>
+  <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#e8edff"/>
+    <stop offset="1" stop-color="#8ea2ff"/>
+  </linearGradient>
+  <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0"   stop-color="#fbbf24"/>
+    <stop offset="0.5" stop-color="#fb7185"/>
+    <stop offset="1"   stop-color="#f472b6"/>
+  </linearGradient>
+  <filter id="blur" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="46"/>
+  </filter>
+  <filter id="blur2" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="16"/>
+  </filter>
+  <clipPath id="card"><rect width="1200" height="340" rx="30"/></clipPath>
+</defs>
+
+<g clip-path="url(#card)">
+  <rect width="1200" height="340" fill="url(#bg)"/>
+
+  <!-- light behind the glass, kept inside the clip so it never bleeds past the rounded corner -->
+  <circle cx="960" cy="120" r="200" fill="#6366f1" opacity=".32" filter="url(#blur)"/>
+  <circle cx="1010" cy="215" r="150" fill="#f472b6" opacity=".24" filter="url(#blur)"/>
+  <circle cx="140"  cy="300" r="150" fill="#22d3ee" opacity=".12" filter="url(#blur)"/>
+
+  <!-- the product's own shape: flush to the top edge, square shoulders, rounded underside -->
+  <g>
+    <ellipse cx="960" cy="132" rx="150" ry="26" fill="#8b5cf6" opacity=".30" filter="url(#blur2)"/>
+    <path d="M820 0h280v54a50 50 0 0 1-50 50H870a50 50 0 0 1-50-50z" fill="url(#pill)"/>
+    <path d="M820 0h280v54a50 50 0 0 1-50 50H870a50 50 0 0 1-50-50z" fill="none"
+          stroke="#6274b4" stroke-width="1.5" opacity=".8"/>
+    <path d="M842 12h236" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" opacity=".13"/>
+    <!-- a hint of what it carries, not a fake screenshot of it -->
+    <g fill="url(#wave)">
+      <rect x="878"  y="47" width="6" height="12" rx="3"/>
+      <rect x="891"  y="39" width="6" height="28" rx="3"/>
+      <rect x="904"  y="32" width="6" height="42" rx="3"/>
+      <rect x="917"  y="42" width="6" height="22" rx="3"/>
+      <rect x="930"  y="36" width="6" height="34" rx="3"/>
+      <rect x="943"  y="45" width="6" height="16" rx="3"/>
+    </g>
+    <rect x="975" y="46" width="72" height="14" rx="7" fill="#3d4870"/>
+    <rect x="975" y="46" width="44" height="14" rx="7" fill="#8ea2ff" opacity=".85"/>
+    <circle cx="1068" cy="53" r="15" fill="#2f3a63"/>
+    <path d="M1068 46v12M1063 53l5 5 5-5" stroke="#9fb4ff" stroke-width="2.2"
+          stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+
+  <!-- wordmark -->
+  <g transform="translate(84,120)">
+    <circle cx="27" cy="0" r="26" fill="none" stroke="url(#ring)" stroke-width="7"/>
+    <circle cx="27" cy="0" r="26" fill="none" stroke="#8ea2ff" stroke-width="12" opacity=".28" filter="url(#blur2)"/>
+    <text x="76" y="19" fill="#f4f7ff" font-size="62" font-weight="800" letter-spacing="-1">Halo</text>
+  </g>
+
+  <text x="84" y="196" fill="#c3cbe6" font-size="25" font-weight="600">⁧یک قرصِ شیشه‌ای برای ویندوز⁩</text>
+  <text x="84" y="232" fill="#8d97b8" font-size="20">⁧همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت⁩</text>
+
+  <rect x="84" y="262" width="132" height="4" rx="2" fill="url(#accent)"/>
+
+  <text x="84" y="300" fill="#6f7a9e" font-size="15">⁧ویندوز ۱۱ · x64 · MIT · بدونِ تله‌متری⁩</text>
+</g>
+</svg>

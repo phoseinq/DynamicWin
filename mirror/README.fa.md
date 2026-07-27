@@ -1,6 +1,6 @@
 <div align="center">
 
-**یک قرصِ شیشه‌ای برای ویندوز — همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت.**
+<img src="ReadmeFiles/banner-fa.svg" alt="Halo — یک قرصِ شیشه‌ای برای ویندوز، همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت" width="900">
 
 <br />
 

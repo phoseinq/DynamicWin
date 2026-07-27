@@ -1,6 +1,6 @@
 <div align="center">
 
-**A glass notch for Windows — the Dynamic Island your desktop never got.**
+<img src="ReadmeFiles/banner.svg" alt="Halo — a glass notch for Windows, the Dynamic Island your desktop never got" width="900">
 
 <br />
 
