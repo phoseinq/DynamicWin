@@ -1,5 +1,54 @@
 # Halo — progress
 
+## 2026-07-27 (later): glass latency, the pin's second setting, and two gesture collisions
+Built 0/0, **160 tests** green, deployed here (hot-swapped exe). **Not pushed yet at time of writing.**
+
+### The glass was ~6 frames behind the screen
+Three separate causes, and only fixing all three helped:
+- **Capture path.** `DoCapture` read the window DC, which comes back black for anything GPU-composited —
+  every browser, every video player — so it fell through to `CaptureViaPrintWindow`, which re-renders the
+  *whole* window. **Measured ~30ms per capture over a maximised window.** It now reads the **screen DC**,
+  which is what DWM already composited, and PrintWindow is the third fallback rather than the usual path.
+- **The blackness test was wrong for the new path.** `IsMostlyBlack` exists to catch a *failed* window-DC
+  BitBlt. Applied to the screen grab it fired on any genuinely dark backdrop — **113 of 113 captures over
+  a dark editor** went the slow way for nothing. The screen DC has no failure mode; the test is gone.
+- **Blur expanded twice.** `Blur(Blur(raw,8),5)` did two full-size bicubic upscales, and the upscale is
+  nearly the whole cost. `BlurPyramid` keeps the chain at thumbnail size and expands once.
+- **Cadence.** `CaptureSlow` was 12 frames — a fresh backdrop every ~200ms collapsed. Now 2 (and
+  `CaptureFast` 1), affordable because a capture went **57ms → 6.1ms**. Trace with `HALO_GLASS_DEBUG=1`
+  (`%LOCALAPPDATA%\Halo\glass-debug.txt`): **234/234 captures on the screen path, avg 6.1ms, 32ms apart.**
+
+### Pin no longer decides whether the pill is capturable
+A pill visible to screen capture is visible to *its own* capture, so pinning silently forced the slow
+path. The two are now separate settings (`capturable` beside `pinned`), and the pushpin carries both:
+**tap = pin, press-and-hold 0.55s = show in captures.** Three readable states — dim, fully lit, lit head
+only — plus a muted-amber needle for pinned+capture, or unpinning appears to do nothing. `--render-pin`
+draws all five cells. The hold gesture is deliberately unlabelled.
+
+### Two gestures that were stealing the press-to-move
+`UpdateMove` starts on "button held over the pill and not travelling", which is also what a pushpin hold,
+a file drop and a tray reorder look like. `PressOnControl` now covers the pushpin, and `holding` stands
+down while `FileTray.DragActive`, `_trayPressPath` or an in-flight `_trayMode` says something is held.
+
+### Chrome download cancel, with a long list
+`uia-cancel.ps1` strategy 1 walks keyboard focus — up to 60 Tab presses at 150ms, stepping visibly down
+the list one row at a time, and any pointer movement re-homes Chromium's focus and lands the cancel on the
+wrong row. Chrome's bubble exposes **one Invoke button per row and no Cancel at all** (re-measured today:
+`Button | zeta.bin ↓ 0.0/4.0 GB • 5 hours left`, no children), so the walk could never succeed there — it
+is skipped for chrome/brave/vivaldi/opera, which also stops the bubble being opened for nothing. Edge
+still needs it and now aborts if focus leaves the browser or the cursor moves. **Verified end to end with
+four concurrent downloads off a local slow server: `partial is gone -> stopped`.**
+
+### Blog (pvboy.dev/blog/halo-glass-notch)
+Rewritten shorter, features named rather than explained. `<video class="md-img">` matched **nothing** —
+the rule was `img.md-img`, which is why the clips never fitted the column; `video.md-img` and
+`iframe.md-img` rules added to `post.html` on **both** vhosts. The tray clip is cropped 1400→1080 wide.
+Header is now a **live embed**: `post.html` upgrades the featured image to an iframe when a `.live.html`
+sits beside it (same convention the file already had for `.gif`), and the list thumbnail is a headless
+screenshot **of that same page**, so the two cannot drift. Trap worth remembering: the renderer's
+"bold numbers with units" pass rewrote `100%` **inside a style attribute** into `<strong>100%</strong>` —
+nothing carrying a number and a unit survives in post content, so sizing has to live in the stylesheet.
+
 ## 2026-07-27: UI polish round — **3.1.1 RELEASED**
 `origin/V3` = `31fa557`, tag **v3.1.1**, CI green, installed here from the signed setup (3.1.1.0,
 autostart shortcut present). Build 0/0 with `-warnaserror`, **160 tests**.

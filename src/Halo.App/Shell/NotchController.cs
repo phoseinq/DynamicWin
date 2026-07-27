@@ -121,7 +121,12 @@ internal sealed class NotchController
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f; // open snappier than close. slowed after
     // the _dt fix made these hit their real wall-clock duration (old timer cadence ran them ~2x slower).
     private const float HoldSeconds = 0.75f; // press-and-hold on the pill this long → drag-to-move engages
-    private const int CaptureFast = 2, CaptureSlow = 12; // glass capture cadence: ~60fps expanded, ~10fps collapsed
+    // Glass capture cadence, in frames between captures. These used to be 2 and 12 — at 60fps that is a
+    // fresh backdrop every 33ms open and every 200ms collapsed, and 200ms is long enough to watch the glass
+    // trail behind a playing video. The old numbers were sized for a capture that cost ~57ms on
+    // GPU-composited content; reading the screen DC and expanding the blur only once brought that under
+    // 4ms, so the budget now allows every frame open and ~20fps collapsed. _heavy still multiplies by 3.
+    private const int CaptureFast = 1, CaptureSlow = 2;
     private const int EmptyCatchAlpha = 1; // empty pill fades to this alpha: invisible, but ≥1 so it still catches OLE file drags
 
     private readonly LayeredNotch _notch;
@@ -278,7 +283,8 @@ internal sealed class NotchController
 
         var active = ActiveIndices();
         LoadOffset(); // restore where the user last parked the pill
-        _notch.SetCapturable(_pinned); // pinned pill shows up in screenshots/recordings; unpinned stays hidden
+        LoadRecordable();
+        _notch.SetCapturable(_recordable);
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f; // boot straight into the right size, no opening animation
         if (!_empty) _primary = active[0];
@@ -1036,6 +1042,7 @@ internal sealed class NotchController
     {
         bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
         if (_moving) { _lastMouseDown = down; return; } // dragging the pill — swallow clicks
+        if (UpdatePinGesture(p, down)) { _lastMouseDown = down; return; }
         if (down && !_lastMouseDown && !_resizing && _notif != null)
         {
             // no close button by design: a click outside dismisses (softly); the grabber strip
@@ -1068,11 +1075,10 @@ internal sealed class NotchController
         {
             if (_progress > 0.9f)
             {
-                var pr = PinRect(ExpandedW, ExpandedH);
-                if (p.X >= _el + pr.X * S && p.X < _el + (pr.X + pr.Width) * S
-                    && p.Y >= _et + pr.Y * S && p.Y < _et + (pr.Y + pr.Height) * S)
-                    { _pinned = !_pinned; SavePin(); _notch.SetCapturable(_pinned); }
-                else
+                // no pin branch here: UpdatePinGesture runs first and returns before this point for any
+                // press that landed on the pushpin, because a tap and a hold there mean different things
+                // and neither can be decided on the press edge
+
                 // widget rects are logical; the cursor is physical — compare scaled, hand back logical
                 foreach (var (r, onClick) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
                 {
@@ -1398,6 +1404,58 @@ internal sealed class NotchController
     // shows a tiny English label to the right.
     private static RectangleF PinRect(int w, int h) => new(9, 4, 24, 24);
 
+    private bool OverPin(Win32.POINT p)
+    {
+        var r = PinRect(ExpandedW, ExpandedH);
+        return p.X >= _el + r.X * S && p.X < _el + (r.X + r.Width) * S
+            && p.Y >= _et + r.Y * S && p.Y < _et + (r.Y + r.Height) * S;
+    }
+
+    // Two gestures on one control, so neither can be settled on the press edge the way a plain button is:
+    // a tap pins, a hold decides whether the pill appears in screenshots and recordings. The hold fires the
+    // instant the threshold passes rather than on release, so the head lighting up under a finger that is
+    // still down IS the confirmation — waiting for release would leave the user holding and guessing. The
+    // release that follows is then swallowed, or it would pin as well as toggle capture.
+    private DateTime _pinPressAt = DateTime.MaxValue;
+    private bool _pinHoldFired;
+    private const double PinHoldSeconds = 0.55;
+
+    private bool UpdatePinGesture(Win32.POINT p, bool down)
+    {
+        bool over = _progress > 0.9f && _notif == null && OverPin(p);
+        if (down && !_lastMouseDown)
+        {
+            if (!over) return false;
+            _pinPressAt = DateTime.UtcNow;
+            _pinHoldFired = false;
+            return true;
+        }
+        if (_pinPressAt == DateTime.MaxValue) return false;
+
+        if (down)
+        {
+            if (!_pinHoldFired && (DateTime.UtcNow - _pinPressAt).TotalSeconds >= PinHoldSeconds)
+            {
+                _pinHoldFired = true;
+                _recordable = !_recordable;
+                SaveRecordable();
+                _notch.SetCapturable(_recordable);
+            }
+            return true;
+        }
+
+        // released: a tap that never reached the hold threshold is the pin toggle. Still has to be over the
+        // pin — pressing it and sliding off is how a user takes an accidental press back.
+        if (!_pinHoldFired && over) { _pinned = !_pinned; SavePin(); }
+        _pinPressAt = DateTime.MaxValue;
+        return true;
+    }
+
+    // How far into the hold we are, for the art to grow the head with the gesture instead of snapping.
+    private float PinHoldProgress()
+        => _pinPressAt == DateTime.MaxValue || _pinHoldFired ? 0f
+         : Math.Clamp((float)((DateTime.UtcNow - _pinPressAt).TotalSeconds / PinHoldSeconds), 0f, 1f);
+
     private void DrawPin(Graphics g, int w, int h, float a)
     {
         if (a <= 0.01f) return;
@@ -1405,19 +1463,28 @@ internal sealed class NotchController
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
         _pinHov = Toward(_pinHov, hov ? 1f : 0f, _dt / 0.10f);
         float hv = _pinHov * _pinHov * (3f - 2f * _pinHov);
-        DrawPushpin(g, r, _pinned, hv, a);
-        if (hv > 0.02f) // hover: tiny English label to the right saying what a click does
+        DrawPushpin(g, r, _pinned, hv, a, _recordable, PinHoldProgress());
+        if (hv > 0.02f) // hover: tiny English label to the right saying what each gesture does
         {
             using var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
             using var b = new SolidBrush(Color.FromArgb((int)(200 * hv * a), 235, 235, 235));
             using var sf = new StringFormat { LineAlignment = StringAlignment.Center };
+            // only the tap is advertised. The hold gesture is deliberately unlabelled.
             g.DrawString(_pinned ? "unpin" : "pin on top", f, b,
                 new RectangleF(r.Right + 6, r.Y, 120, r.Height), sf);
         }
     }
 
-    // the pin art itself — static so the `--render-pin` dev hook can draw it in isolation.
-    internal static void DrawPushpin(Graphics g, RectangleF r, bool pinned, float hover, float a)
+    // The pin art, and the whole state readout: the pill has no menu, so these three shapes are the only
+    // place the two settings are visible.
+    //   dim outline      nothing on
+    //   fully lit        pinned
+    //   lit head only    shows up in screenshots and recordings
+    // holdT grows the head while a hold is in progress, so the gesture is visibly doing something well
+    // before it fires — a hold with no feedback reads as a click that did not register.
+    // static so the `--render-pin` dev hook can draw it in isolation.
+    internal static void DrawPushpin(Graphics g, RectangleF r, bool pinned, float hover, float a,
+        bool recordable = false, float holdT = 0f)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var st = g.Save();
@@ -1428,7 +1495,48 @@ internal sealed class NotchController
         var head = new RectangleF(-hr, -3f * u - hr, hr * 2, hr * 2);
         using var needle = new GraphicsPath();
         needle.AddPolygon(new[] { new PointF(-2.3f * u, 2.5f * u), new PointF(2.3f * u, 2.5f * u), new PointF(0, 12f * u) });
-        if (pinned)
+        // a hold nudges the head bigger as it goes; at rest this is exactly 1
+        float grow = 1f + 0.18f * holdT;
+        if (grow > 1.001f)
+        {
+            float gh = hr * grow;
+            head = new RectangleF(-gh, -3f * u - gh, gh * 2, gh * 2);
+            hr = gh;
+        }
+
+        if (recordable)
+        {
+            // head lit, needle left as outline: "in captures", and distinguishable from plain pinned at a
+            // glance rather than by remembering which colour meant what.
+            // When it is ALSO pinned the needle goes a muted amber instead of white, or the two settings
+            // collapse into one picture and tapping to unpin appears to do nothing at all.
+            var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
+            if (pinned)
+            {
+                using var nb = new SolidBrush(Color.FromArgb((int)(150 * a), 255, 200, 92));
+                g.FillPath(nb, needle);
+            }
+            else
+            {
+                using var pen = new Pen(Color.FromArgb((int)((122 + 78 * hover) * a), 255, 255, 255), 1.7f * u)
+                { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+                g.DrawPath(pen, needle);
+            }
+            using (var hp = new GraphicsPath())
+            {
+                hp.AddEllipse(head);
+                using var pgb = new PathGradientBrush(hp)
+                {
+                    CenterPoint = new PointF(head.X + hr * 0.62f, head.Y + hr * 0.62f),
+                    CenterColor = Color.FromArgb((int)(255 * a), 255, 236, 182),
+                    SurroundColors = new[] { amber },
+                };
+                g.FillPath(pgb, hp);
+            }
+            using var gloss = new SolidBrush(Color.FromArgb((int)(115 * a), 255, 255, 255));
+            g.FillEllipse(gloss, head.X + hr * 0.28f, head.Y + hr * 0.26f, hr * 0.8f, hr * 0.8f);
+        }
+        else if (pinned)
         {
             var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
             using (var nb = new SolidBrush(amber)) g.FillPath(nb, needle);
@@ -1711,6 +1819,22 @@ internal sealed class NotchController
         try { System.IO.File.WriteAllText(PinPath, _pinned ? "1" : "0"); } catch { }
     }
 
+    // Off by default, which is the whole point: the common case keeps the cheap screen-DC glass. Turn it on
+    // with Ctrl+click on the pushpin when you actually want the pill in a recording (HALO_CAPTURABLE=1 still
+    // forces it on for the README gif).
+    private static readonly string RecordablePath = System.IO.Path.Combine(HaloDir, "capturable");
+    private bool _recordable;
+
+    private void LoadRecordable()
+    {
+        try { _recordable = System.IO.File.ReadAllText(RecordablePath).Trim() == "1"; } catch { }
+    }
+
+    private void SaveRecordable()
+    {
+        try { System.IO.File.WriteAllText(RecordablePath, _recordable ? "1" : "0"); } catch { }
+    }
+
     // press-and-hold ~3s on the pill → collapse + follow the cursor; release drops it; parked near the
     // centre it snaps back (magnet). Runs each tick from OnTick with the live cursor + button state.
     // Is the cursor over a control of the currently expanded widget? Buttons() already describes every
@@ -1718,6 +1842,9 @@ internal sealed class NotchController
     private bool PressOnControl(Win32.POINT p)
     {
         if (_progress <= 0.9f || _primary < 0 || _primary >= _widgets.Length) return false;
+        // the pushpin has a hold gesture of its own; without this, holding it for the capture toggle also
+        // ran the pill's press-to-move and carried the pill off sideways mid-gesture
+        if (OverPin(p)) return true;
         try
         {
             foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
@@ -1750,7 +1877,15 @@ internal sealed class NotchController
         // A press that landed on one of the widget's own controls is not a request to move the pill. Holding
         // the seek bar to drag it used to start the move gesture instead and carry the whole pill off to the
         // side — and the new offset is persisted, so it stayed there.
-        bool holding = down && hovered && !_resizing && _notif == null && !PressOnControl(p);
+        // Everything the File Tray does looks like the move gesture from here — a button held down over the
+        // pill that is not travelling far. Dropping a file in filled the hold timer and the pill wandered
+        // off mid-drop; so did holding an item to reorder it. The rule is that the pill only offers to move
+        // while nothing in the tray is being held: an incoming drag (DragActive), an item under the press
+        // (_trayPressPath), or a reorder/drag-out already running (_trayMode) all stand it down. Pressing
+        // empty space in the panel still moves the pill, which is the one case that is unambiguous.
+        bool holding = down && hovered && !_resizing && _notif == null
+                    && !FileTray.DragActive && _trayPressPath == null && _trayMode < 1
+                    && !PressOnControl(p);
         bool still = Math.Abs(p.X - _holdAnchor.X) <= 8 && Math.Abs(p.Y - _holdAnchor.Y) <= 8;
         if (holding && _holdStart != DateTime.MaxValue && still)
         {

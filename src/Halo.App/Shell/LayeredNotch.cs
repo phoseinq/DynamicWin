@@ -147,8 +147,14 @@ internal sealed class LayeredNotch
     public void SetCapturable(bool on)
     {
         if (Environment.GetEnvironmentVariable("HALO_CAPTURABLE") == "1") on = true;
+        _capturable = on;
         Win32.SetWindowDisplayAffinity(Hwnd, on ? 0u : Win32.WDA_EXCLUDEFROMCAPTURE);
     }
+
+    // Whether the pill currently shows up in screen captures. It matters to the glass: the fast capture
+    // path reads the SCREEN, and a pill that is not excluded would photograph itself — glass of glass of
+    // glass. Excluded (the default) it is simply not in the pixels, which is what makes that path usable.
+    private volatile bool _capturable;
 
     public void SetVisible(bool visible)
         => Win32.ShowWindow(Hwnd, visible ? Win32.SW_SHOWNOACTIVATE : Win32.SW_HIDE);
@@ -205,29 +211,95 @@ internal sealed class LayeredNotch
         if (!Win32.GetWindowRect(behind, out var wr)) return;
         int nx = _workLeft + (_workWidth - CaptureW) / 2, ny = _workTop;
         int sx = nx - wr.left, sy = ny - wr.top;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        string how;
 
-        var raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
-        IntPtr src = Win32.GetWindowDC(behind);
-        using (var g = Graphics.FromImage(raw))
+        // Fast path: read the notch strip straight off the SCREEN DC. The window DC below returns black for
+        // GPU-composited content — which is every browser and every video player — and the only rescue was
+        // PrintWindow, which re-renders the WHOLE window. Over a maximised video that is tens of ms per
+        // capture against a ~16ms request cadence, so the glass ran ~15fps and always showed a frame from
+        // ~60ms ago; the faster the video moved, the more obviously stale it looked. The screen DC is what
+        // DWM already composited, so it costs the same as the window BitBlt and has the video in it.
+        //
+        // Only safe while the pill is excluded from capture, which is the default: otherwise it reads its
+        // own glass back in and feeds it forward, and each frame gets murkier than the last.
+        // No IsMostlyBlack test on this one, deliberately. That check exists to catch a window-DC BitBlt that
+        // FAILED — a GPU-composited window's DC holds nothing, so it comes back all zeros. The screen DC has
+        // no such failure mode: it is the composited desktop, and black there means the backdrop really is
+        // black. Screening it the same way sent every capture over a dark window down the 29ms PrintWindow
+        // path for no reason (measured: 113 of 113 captures, against a dark editor), which is most of the lag
+        // this was meant to remove — dark title bars and dark themes are exactly what sits under the notch.
+        Bitmap? raw = _capturable ? null : GrabScreen(nx, ny);
+        how = raw != null ? "screen" : "";
+
+        if (raw == null)
         {
-            g.Clear(Color.FromArgb(24, 24, 24));
-            IntPtr dhdc = g.GetHdc();
-            Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, src, sx, sy, Win32.SRCCOPY);
-            g.ReleaseHdc(dhdc);
-        }
-        Win32.ReleaseDC(behind, src);
+            raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
+            IntPtr src = Win32.GetWindowDC(behind);
+            using (var g = Graphics.FromImage(raw))
+            {
+                g.Clear(Color.FromArgb(24, 24, 24));
+                IntPtr dhdc = g.GetHdc();
+                Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, src, sx, sy, Win32.SRCCOPY);
+                g.ReleaseHdc(dhdc);
+            }
+            Win32.ReleaseDC(behind, src);
+            how = "window";
 
-        // BitBlt returns black for GPU-composited windows (browsers/video) → fall back to PrintWindow
-        if (IsMostlyBlack(raw))
-        {
-            var pw = CaptureViaPrintWindow(behind, wr, sx, sy);
-            if (pw != null) { raw.Dispose(); raw = pw; }
+            // BitBlt returns black for GPU-composited windows (browsers/video) → fall back to PrintWindow
+            if (IsMostlyBlack(raw))
+            {
+                var pw = CaptureViaPrintWindow(behind, wr, sx, sy);
+                if (pw != null) { raw.Dispose(); raw = pw; how = "printwindow"; }
+            }
         }
 
-        var blurred = Blur(Blur(raw, 8), 5);
+        var blurred = BlurPyramid(raw);
         raw.Dispose();
         lock (_bgLock) { var old = _bg; _bg = blurred; old?.Dispose(); }
         System.Threading.Interlocked.Increment(ref _captureVersion);
+        GlassTrace(how, (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    private static Bitmap? GrabScreen(int x, int y)
+    {
+        IntPtr screen = IntPtr.Zero;
+        try
+        {
+            screen = Win32.GetDC(IntPtr.Zero);
+            if (screen == IntPtr.Zero) return null;
+            var bmp = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.FromArgb(24, 24, 24));
+                IntPtr dhdc = g.GetHdc();
+                bool ok = Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, screen, x, y, Win32.SRCCOPY);
+                g.ReleaseHdc(dhdc);
+                if (!ok) { bmp.Dispose(); return null; }
+            }
+            return bmp;
+        }
+        catch { return null; }
+        finally { if (screen != IntPtr.Zero) Win32.ReleaseDC(IntPtr.Zero, screen); }
+    }
+
+    // HALO_GLASS_DEBUG=1 → one line per capture with the path taken and its cost, so "is the glass keeping
+    // up" is a number instead of an impression. Off by default; this runs on the capture thread.
+    private static readonly bool GlassDebug =
+        Environment.GetEnvironmentVariable("HALO_GLASS_DEBUG") == "1";
+    private static int _traceCount;
+
+    private static void GlassTrace(string how, double ms)
+    {
+        if (!GlassDebug) return;
+        try
+        {
+            if (++_traceCount > 600) return;   // a few seconds' worth is plenty; never grow without bound
+            string path = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "glass-debug.txt");
+            System.IO.File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {how} {ms:0.0}ms\n");
+        }
+        catch { }
     }
 
     private static bool IsMostlyBlack(Bitmap bmp)
@@ -750,6 +822,37 @@ internal sealed class LayeredNotch
             return shifted;
         }
         catch { return src; }
+    }
+
+    // Two chained Blur() calls used to cost two full-size bicubic UPSCALES — and the upscale is nearly the
+    // whole bill: writing 560x220 bicubic pixels dwarfs everything happening at thumbnail size. The look
+    // came from the double smoothing, not from passing through full size in between, so the chain runs
+    // entirely small and expands exactly once at the end. Same result, roughly half the time, which is what
+    // buys the higher capture rate that actually removes the visible lag.
+    private static Bitmap BlurPyramid(Bitmap src)
+    {
+        int w = src.Width, h = src.Height;
+        using var s1 = new Bitmap(Math.Max(1, w / 8), Math.Max(1, h / 8), PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(s1))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(src, new Rectangle(0, 0, s1.Width, s1.Height), new Rectangle(0, 0, w, h), GraphicsUnit.Pixel);
+        }
+        // the old second pass resampled through 1/5 scale; keeping that step at thumbnail size preserves the
+        // extra smoothing (it is what takes the edge off the first upscale's ringing) for almost nothing
+        using var s2 = new Bitmap(Math.Max(1, w / 5), Math.Max(1, h / 5), PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(s2))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(s1, new Rectangle(0, 0, s2.Width, s2.Height), new Rectangle(0, 0, s1.Width, s1.Height), GraphicsUnit.Pixel);
+        }
+        var big = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(big))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(s2, new Rectangle(0, 0, w, h), new Rectangle(0, 0, s2.Width, s2.Height), GraphicsUnit.Pixel);
+        }
+        return big;
     }
 
     private static Bitmap Blur(Bitmap src, int factor)

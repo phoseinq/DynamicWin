@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Halo.Interop;
 using Halo.Shell;
 using Halo.Widgets;
@@ -13,8 +14,15 @@ internal static class Program
         // uninstall/disable hook: restore every app's native banner that Halo silenced, apply it live, and
         // forget the learned set. Run this from the uninstaller (or by hand) to leave the machine as found.
         if (args.Length >= 1 && args[0] == "--restore-notifications") { Halo.Notifications.BannerGate.Uninstall(); return; }
-        // dev hook: `Halo.App --render-widget <out.png> [media|claude|codex]`
-        if (args.Length >= 2 && args[0] == "--render-widget") { RenderWidget(args[1], args.Length > 2 ? args[2] : "media"); return; }
+        // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|codex|download] [scale]`
+        // claude-demo renders a synthetic session instead of the live one — for docs and blog images, where
+        // the author's real context and real spend have no business appearing.
+        if (args.Length >= 2 && args[0] == "--render-widget")
+        {
+            RenderWidget(args[1], args.Length > 2 ? args[2] : "media",
+                args.Length > 3 && int.TryParse(args[3], out int sc) ? sc : 1);
+            return;
+        }
         // dev hook: `Halo.App --render-pin <out.png>` — the pushpin states in isolation
         if (args.Length >= 2 && args[0] == "--render-pin") { RenderPin(args[1]); return; }
         // dev hook: `Halo.App --render-notif <out.png>` — the notification banner (real shape path) on a
@@ -160,22 +168,31 @@ internal static class Program
     // dev-only: draw the pushpin (pinned / unpinned / unpinned-hover) big on a dark bg to eyeball it
     private static void RenderPin(string outPath)
     {
-        using var bmp = new System.Drawing.Bitmap(360, 130);
+        // Five cells now, because the pushpin carries two settings and the only way a user can tell them
+        // apart is by shape. Whether "lit head, outline needle" actually reads as different from "all lit"
+        // at 24px is exactly the kind of thing that cannot be judged from the code.
+        using var bmp = new System.Drawing.Bitmap(620, 150);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(System.Drawing.Color.FromArgb(28, 28, 32));
-            void Cell(float ox, bool pinned, float hover)
+            using var lf = new System.Drawing.Font("Segoe UI", 11f);
+            using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(170, 235, 235, 235));
+            void Cell(float ox, bool pinned, float hover, string label, bool rec = false, float hold = 0f)
             {
                 var st = g.Save();
-                g.TranslateTransform(ox, 18);
+                g.TranslateTransform(ox, 14);
                 g.ScaleTransform(3.2f, 3.2f);
-                Halo.Shell.NotchController.DrawPushpin(g, new System.Drawing.RectangleF(0, 0, 24, 24), pinned, hover, 1f);
+                Halo.Shell.NotchController.DrawPushpin(
+                    g, new System.Drawing.RectangleF(0, 0, 24, 24), pinned, hover, 1f, rec, hold);
                 g.Restore(st);
+                g.DrawString(label, lf, lb, ox - 4, 108);
             }
-            Cell(20, true, 0f);   // pinned
-            Cell(140, false, 0f); // unpinned
-            Cell(260, false, 1f); // unpinned + hover
+            Cell(20, false, 0f, "off");
+            Cell(140, true, 0f, "pinned");
+            Cell(260, false, 0f, "in capture", rec: true);
+            Cell(380, true, 0f, "pinned+cap", rec: true);
+            Cell(500, false, 1f, "mid-hold", hold: 1f);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
@@ -350,7 +367,10 @@ internal static class Program
     }
 
     // dev-only: draw a widget's expanded content to a PNG (MTA so WinRT async completes without an STA pump)
-    private static void RenderWidget(string outPath, string which)
+    // scale renders the panel through the SAME draw code at N x the logical size — a real high-resolution
+    // render, not an upscale of a 560x220 one. Everything here is vector or re-decoded art, so the only
+    // thing that changes is how many pixels it lands on.
+    private static void RenderWidget(string outPath, string which, int scale = 1)
     {
         var t = new System.Threading.Thread(() =>
         {
@@ -358,7 +378,13 @@ internal static class Program
             {
                 Halo.Widgets.Downloads.Name = "Source.Code.2011.1080p.BluRay.10bit.x265.Farsi.Dubbed.mkv";
                 Halo.Widgets.Downloads.Percent = 36;
-                Halo.Widgets.Downloads.ExePath = @"C:\Windows\explorer.exe";
+                // a browser, because that is where downloads come from and the icon is the first thing read;
+                // explorer.exe rendered a generic folder that said nothing about what the widget is for
+                Halo.Widgets.Downloads.ExePath = new[]
+                {
+                    @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                }.FirstOrDefault(System.IO.File.Exists) ?? @"C:\Windows\explorer.exe";
                 Halo.Widgets.Downloads.Hwnd = new IntPtr(1); // non-zero → the Stop button renders
             }
             if (which == "download-install") // Store install (indeterminate) sample
@@ -369,8 +395,38 @@ internal static class Program
                 Halo.Widgets.Downloads.Installing = true;
                 which = "download";
             }
+            // claude-demo: a SYNTHETIC session in a temp directory, for docs and blog images. The plain
+            // "claude" variant reads the live store, which on this machine means the author's real context
+            // and real dollars — fine for eyeballing a layout, not for a public page. Credits are left
+            // unset so the money line does not render at all, rather than rendering an invented figure.
+            string demoRoot = "";
+            if (which == "claude-demo")
+            {
+                demoRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-claude-demo");
+                System.IO.Directory.CreateDirectory(demoRoot);
+                var now = DateTimeOffset.UtcNow;
+                System.IO.File.WriteAllText(System.IO.Path.Combine(demoRoot, "status.json"), $$"""
+                {
+                  "pid": {{System.Environment.ProcessId}},
+                  "sessionId": "demo",
+                  "cwd": "C:\\Projects\\halo",
+                  "state": "working",
+                  "consolePid": {{System.Environment.ProcessId}},
+                  "updatedAt": "{{now:o}}",
+                  "startedAt": "{{now.AddMinutes(-12):o}}",
+                  "currentTool": "Edit",
+                  "session": { "contextUsed": 341000, "contextMax": 1000000, "promptTokens": 48200 }
+                }
+                """);
+                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHourReset = now.AddHours(2).AddMinutes(48);
+            }
+
             IWidget w = which switch
             {
+                "claude-demo" => new ClaudeCodeWidget(
+                    new Halo.ClaudeCode.StatusStore(System.IO.Path.Combine(demoRoot, "status.json"),
+                        _ => DateTimeOffset.UtcNow.AddMinutes(-12), watchFiles: false), 0, () => { }),
                 "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), 0, () => { }),
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 "download" => new DownloadWidget(),
@@ -378,13 +434,28 @@ internal static class Program
             };
             for (int i = 0; i < 100 && !w.IsActive; i++)
                 System.Threading.Thread.Sleep(100);
-            using var bmp = new System.Drawing.Bitmap(560, 220);
+            scale = Math.Clamp(scale, 1, 6);
+            if (which == "claude-demo")
+            {
+                // Drawing the panel is what calls Limits.OnPanelOpen(), which goes and refetches — and the
+                // synthetic figures set above are gone by the time the real draw happens, leaving a blank
+                // gap where the usage row belongs. Burn one throwaway draw to get that out of the way, then
+                // put the demo numbers back for the frame that gets saved.
+                using (var warm = new System.Drawing.Bitmap(560, 220))
+                using (var wg = System.Drawing.Graphics.FromImage(warm))
+                    w.DrawContent(wg, 560, 220, 1f);
+                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2).AddMinutes(48);
+            }
+            using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
                 g.Clear(System.Drawing.Color.FromArgb(20, 20, 22));
+                g.ScaleTransform(scale, scale);
                 w.DrawContent(g, 560, 220, 1f);
             }
             bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
