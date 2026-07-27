@@ -55,12 +55,25 @@ internal static class BannerGate
     {
         Log("enable (per-app banner suppression)");
         LoadState();                     // apps we've learned to silence across past sessions
-        bool changed = false;
         lock (_lock)
+        {
+            // treat launch as "a sound may be in flight": the first apply then waits out the quiet gap
+            // instead of firing instantly into whatever was playing when Halo started
+            _lastToast = Environment.TickCount64;
             foreach (var aumid in new List<string>(_orig.Keys))
-                changed |= WriteZero(aumid); // re-assert (usually already 0 → no-op → no restart)
-        changed |= SeedKnownApps();          // and pre-empt everything Windows already knows about
-        if (changed) ScheduleApply();        // only if something actually needed writing
+                WriteZero(aumid);        // re-assert (usually already 0)
+        }
+        SeedKnownApps();                 // and pre-empt everything Windows already knows about
+
+        // Unconditionally, not just when a value changed. WpnUserService reads these settings once, when
+        // IT starts, and it is started by the logon before Halo gets to write anything — so a session
+        // routinely runs with a service that has never seen the zeros sitting in the registry. Measured:
+        // service pid started 20:40:08, com.nvidia.nvapp's key written 20:41:15, Chrome's at 20:42:28 —
+        // every write landed after the reader had already cached. The old "only if something changed"
+        // test asked the wrong question (the registry was already correct; the SERVICE was stale), so no
+        // restart was ever queued and the sound played all session. One restart per launch, taken during
+        // the first quiet window, is what makes the suppression actually hold.
+        ScheduleApply();
     }
 
     // Learning one app per first toast means every app banners exactly once before we can silence it, and

@@ -1,5 +1,38 @@
 # Halo — progress
 
+## 2026-07-27 (night): the suppression was correct and the service had never read it
+Build 0/0, **186 tests** (1 new). Hot-deployed and verified live; **not released** (still 3.1.3).
+
+### The report
+"Either let the sound play in full or block it completely — stop cutting it in half." The 3.1.3 fix
+earlier the same day stopped the mid-chime cut, but the sound was still audible: neither on nor off,
+just the other half of the same complaint.
+
+### Root cause — the "only if something changed" test asked the wrong question
+`Enable()` re-asserted every learned AUMID and then `if (changed) ScheduleApply()`. For a returning
+session nothing *changes*: the zeros are already in the registry from previous runs, so `WriteZero`
+reports false and **no restart is ever queued**. But WpnUserService reads per-app settings exactly
+once, when *it* starts — and it is started by the logon, before Halo writes anything. Measured live:
+
+```
+service pid 24984 started        20:40:08
+com.nvidia.nvapp key written     20:41:15   <- after
+Chrome key written               20:42:28   <- after
+Logi.GHUB.Systray key written    20:40:34   <- after
+```
+
+Registry said `ShowBanner=0 Sound=0 AllowUrgentNotifications=0` for all three; the running service had
+never seen any of it. The condition was guarding on the registry being stale when the thing that was
+actually stale was the *reader*.
+
+### Fix
+`Enable()` now schedules the apply unconditionally — one service restart per Halo launch — and stamps
+`_lastToast` at startup so that restart still waits out the 12s quiet gap and cannot fire into a sound
+that was already playing when Halo came up. Verified live: service pid 24984 → 18364, log reads
+`20:51:25 enable` → `20:51:37 applying → WpnUserService restart` (12s later, in quiet) →
+`20:51:38 listener re-acquired`, and all three AUMIDs' key-write times now predate the running
+service. Sounds are blocked for the whole session, and nothing is cut.
+
 ## 2026-07-27 (night): an outage during a closed panel left no trace in the graph
 Build 0/0, **185 tests** (19 new). Hot-deployed here (`Halo.App.dll` only); **not committed/released
 yet** at time of writing.
