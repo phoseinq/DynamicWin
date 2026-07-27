@@ -199,7 +199,7 @@ internal static class IpCountry
     // who the exit actually is, not just which flag to draw: the panel says "TR · G-Core Labs" because a
     // flag alone answers "which country" and none of "whose network", which is the part that tells you
     // whether the route is the one you set up.
-    public static volatile string? Ip, Cc, Isp;
+    public static volatile string? Ip, Cc, Isp, Asn;
     // the same question asked THROUGH the proxy the API probe uses. If the two answers differ, the tool's
     // traffic and everything else are leaving by different doors — measured, not guessed, and only ever
     // asked when a proxy is actually configured.
@@ -222,7 +222,7 @@ internal static class IpCountry
 
     private const string Fields = "https://ipwho.is/?fields=ip,country_code,connection";
 
-    private static (string ip, string cc, string isp)? Ask(System.Net.Http.HttpClient http)
+    private static (string ip, string cc, string isp, string asn)? Ask(System.Net.Http.HttpClient http)
     {
         try
         {
@@ -230,11 +230,15 @@ internal static class IpCountry
             var ip = doc.RootElement.GetProperty("ip").GetString();
             var cc = doc.RootElement.GetProperty("country_code").GetString();
             if (string.IsNullOrEmpty(ip) || string.IsNullOrEmpty(cc)) return null;
-            string isp = "";
+            string isp = "", asn = "";
             if (doc.RootElement.TryGetProperty("connection", out var conn))
+            {
                 isp = (conn.TryGetProperty("isp", out var i) ? i.GetString() : null)
                       ?? (conn.TryGetProperty("org", out var o) ? o.GetString() : null) ?? "";
-            return (ip, cc, isp);
+                if (conn.TryGetProperty("asn", out var an) && an.TryGetInt32(out int asnNum) && asnNum > 0)
+                    asn = "AS" + asnNum;
+            }
+            return (ip, cc, isp, asn);
         }
         catch { return null; }
     }
@@ -247,6 +251,7 @@ internal static class IpCountry
         Ip = d.ip;
         Cc = d.cc.ToUpperInvariant();
         Isp = d.isp;
+        Asn = d.asn;
 
         // only worth asking twice when the API path is actually routed somewhere else
         var proxy = NetMon.ProxyUrl;

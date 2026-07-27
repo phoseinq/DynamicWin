@@ -238,7 +238,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     // TextTop() converts a baseline into the top-left GDI+ actually wants, using the font's own ascent.
     private const int Pad = 22;
     private const float ColR = 356f, RightEdge = 538f;   // right column: graph, exit, freshness
-    private const float RingCx = 96f, RingCy = 132f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
+    private const float RingCx = 84f, RingCy = 132f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
     private const float KeyX = 178f, KeyValX = 268f;     // key captions and their figures, both fixed
     private const float Row0 = 96f, RowPitch = 42f;      // baselines of the three key rows
 
@@ -270,11 +270,11 @@ internal sealed class ClaudeCodeWidget : IWidget
         // shifts between them - red stop while a prompt can be interrupted, plain lamp otherwise.
         DrawCancel(g, w, h, a, state);
         using (var tb = new SolidBrush(Mul(White, a)))
-            Text(g, "Claude Code", title, tb, Pad + 44, 40);
+            Text(g, "Claude Code", title, tb, Pad + 38, 40);
         string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-            TextClipped(g, act, line, ab, Pad + 44, 62, ColR - Pad - 52);
+            TextClipped(g, act, line, ab, Pad + 38, 62, ColR - Pad - 46);
 
         // ---- the object: three arcs, outer to inner - 5-hour, weekly, context
         double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
@@ -360,15 +360,20 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString($"{age}  ·  \u27f3 refresh", keySub, rb, rr, rsf);
+
+        DrawNetHover(g, a); // last: the exit block used to be painted over the top of it
     }
 
     // The flag used to be the whole story: a country and nothing else. What you actually want to know
     // about an exit is whose network it is, and - when the API is routed through a proxy - whether the
     // tool is leaving by the same door as everything else. Both are measured; the second line only
     // appears when the two exits genuinely differ, so it stays quiet the rest of the time.
+    internal static RectangleF ExitRect() => new(ColR, 132, RightEdge - ColR, 56);
+
     private static void DrawExit(Graphics g, float a, Font body, Font cap)
     {
-        const float y = 148f, fw = 26f, fh = 17f;
+        const float y = 152f, fw = 26f, fh = 17f;
+        bool hov = WidgetInput.Over && ExitRect().Contains(WidgetInput.Mouse);
         var flag = IpCountry.Flag;
         if (flag != null)
         {
@@ -394,15 +399,47 @@ internal sealed class ClaudeCodeWidget : IWidget
                 RightEdge - ColR - fw - 9, body.Size * 1.6f), sf);
         }
 
-        string second = IpCountry.Split
-            ? $"api exits {IpCountry.ApiCc ?? "?"}  ·  {IpCountry.ApiIp}"
-            : IpCountry.Ip ?? "";
-        if (second.Length == 0) return;
-        using var sb2 = new SolidBrush(Mul(IpCountry.Split ? Amber : Dim, a * 0.85f));
+        // Resting: the address. Hovering: what is actually known about the route — its ASN, and whether
+        // Claude's own traffic leaves by this exit or another one, with the loss this route is measuring.
+        // No score: ipwho.is does not sell one on the free tier and inventing a number is not on.
+        string second, third = "";
+        Color secondCol = Dim;
+        if (IpCountry.Split)
+        {
+            second = $"api exits {IpCountry.ApiCc ?? "?"}  ·  {IpCountry.ApiIp}";
+            secondCol = Amber;
+            if (hov) third = IpCountry.Ip is { Length: > 0 } mine ? $"everything else: {mine}" : "";
+        }
+        else if (hov)
+        {
+            second = IpCountry.Asn is { Length: > 0 } asn
+                ? $"{asn}  ·  {RouteQuality()}" : RouteQuality();
+            third = NetMon.ProxyUrl is { Length: > 0 }
+                ? "api takes the same exit" : "no proxy set · direct";
+        }
+        else second = IpCountry.Ip ?? "";
+
         using var sf2 = new StringFormat(StringFormat.GenericTypographic)
         { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-        g.DrawString(second, cap, sb2, new RectangleF(ColR, TextTop(cap, y + 20),
-            RightEdge - ColR, cap.Size * 1.6f), sf2);
+        if (second.Length > 0)
+            using (var sb2 = new SolidBrush(Mul(secondCol, a * 0.85f)))
+                g.DrawString(second, cap, sb2, new RectangleF(ColR, TextTop(cap, y + 19),
+                    RightEdge - ColR, cap.Size * 1.6f), sf2);
+        if (third.Length > 0)
+            using (var sb3 = new SolidBrush(Mul(Dim, a * 0.7f)))
+                g.DrawString(third, cap, sb3, new RectangleF(ColR, TextTop(cap, y + 36),
+                    RightEdge - ColR, cap.Size * 1.6f), sf2);
+    }
+
+    // the only honest quality figure available: what this route is measuring right now
+    private static string RouteQuality()
+    {
+        var (net, api) = NetMon.Snapshot();
+        int lost = 0, seen = 0;
+        foreach (var v in api) { if (v == NetMon.Empty) continue; seen++; if (v == NetMon.Lost) lost++; }
+        int last = LastSample(api);
+        string ms = last == NetMon.Empty ? "…" : last == NetMon.Lost ? "dropped" : $"{last} ms";
+        return seen == 0 ? ms : $"{ms}  ·  {lost}/{seen} lost";
     }
 
     // One element doing two jobs, in one slot so the title never shifts: while a prompt can be
@@ -439,7 +476,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     // centre rule, the path to Anthropic grows downward, one bar per sample. Nothing ever overlaps, the
     // shared scale keeps them comparable, and a dropped sample is a full-height bar in red on whichever
     // side lost it - which is the question this graph exists to answer: whose fault is it.
-    private static void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
+    // what the hover needs, stashed by DrawNet so the tooltip can be painted after everything else
+    private (int[] net, int[] api, float x0, float slot, float mid, float half, float right, int cap)? _hover;
+
+    private void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
     {
         var (net, api) = NetMon.Snapshot();
         int n = net.Length;
@@ -455,6 +495,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var rule = new Pen(Mul(Dim, a * (hasData ? 0.32f : 0.18f)), 1f))
             g.DrawLine(rule, colX, mid, colX + colW, mid);
 
+        _hover = null;
         if (!hasData)
         {
             using var wf = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
@@ -520,14 +561,15 @@ internal sealed class ClaudeCodeWidget : IWidget
                     new RectangleF(colX, TextTop(f, bl), colW, f.Size * 1.6f), sf);
         }
 
-        DrawNetHover(g, a, net, api, colX, slot, mid, half, colX + colW, cap);
+        _hover = (net, api, colX, slot, mid, half, colX + colW, cap);
     }
 
     // the tooltip is the precise read: both values, how many samples each side lost, and whose fault a
     // drop was - the one thing the shape alone cannot say
-    private static void DrawNetHover(Graphics g, float a, int[] net, int[] api,
-        float x0, float slot, float mid, float half, float right, int cap)
+    private void DrawNetHover(Graphics g, float a)
     {
+        if (_hover is not { } hv) return;
+        var (net, api, x0, slot, mid, half, right, cap) = hv;
         var m = WidgetInput.Mouse;
         if (!WidgetInput.Over || m.X < x0 || m.X > right || m.Y < mid - half - 10 || m.Y > mid + half + 10)
             return;
@@ -560,10 +602,12 @@ internal sealed class ClaudeCodeWidget : IWidget
         foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
         bw2 += 16;
         float bh2 = lines.Count * 15 + 10;
-        float bx = Math.Min(gx + 8, right - bw2), by = mid + half + 6;
+        float bx = Math.Clamp(gx - bw2 / 2f, Pad, right - bw2);
+        float by = mid + half + 8;
+        if (by + bh2 > 214) by = mid - half - bh2 - 8;   // no room below: hang it above the profile
         using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
         {
-            using (var bg = new SolidBrush(Mul(Color.FromArgb(236, 18, 18, 20), a))) g.FillPath(bg, path);
+            using (var bg = new SolidBrush(Mul(Color.FromArgb(255, 16, 16, 18), a))) g.FillPath(bg, path);
             using (var pen = new Pen(Mul(Track, a), 1f)) g.DrawPath(pen, path);
         }
         for (int i = 0; i < lines.Count; i++)
@@ -632,10 +676,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     }
 
     // in front of the title, where the lamp used to be
-    private static RectangleF CancelRect(int w, int h) => new(Pad - 3, 16, 34, 34);
+    private static RectangleF CancelRect(int w, int h) => new(Pad - 4, 16, 34, 34);
 
     // bottom-right of the band, right-aligned to the panel's padding
-    private static RectangleF RefreshRect(int w, int h) => new(ColR, 190, RightEdge - ColR, 18);
+    private static RectangleF RefreshRect(int w, int h) => new(RightEdge - 210, 22, 210, 20);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"

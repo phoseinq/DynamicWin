@@ -1,5 +1,24 @@
 # Halo — progress
 
+## 2026-07-28 (later): tooltip draw order, and the exit answers for the route
+Build 0/0, **197 tests**. Hot-deployed.
+
+- **The tooltip was not transparent — it was underneath.** Reported as "the background is colourless and
+  it mixes with the block below". `DrawNet` painted its own hover panel and `DrawExit` was called
+  afterwards, straight over the top of it. The hover geometry is stashed and the tooltip is now drawn
+  last, after everything; its fill went to fully opaque, and it flips above the profile when there is no
+  room below instead of running off the panel.
+- **The freshness line moved to the top-right**, into the corner the stop button vacated. It had been at
+  the very bottom, under the exit block — about as far from the numbers it dates as the panel allows.
+- Stop button tightened against the title (13px gap → 6), ring cluster shifted left (cx 96 → 84).
+- **Hovering the exit reports the route** instead of an invented score. ipwho.is sells no score on the
+  free tier, so it shows what is actually measured: the ASN, the API path's current latency and its loss
+  count out of the samples taken, and whether Claude's traffic leaves by this exit or another one.
+
+`--render-widget` takes an optional `x,y` now, which parks the cursor. Hover is half this panel's
+behaviour — the tooltip, the exact-reset swap, this new route readout — and none of it could be rendered
+before, so all of it was being changed blind.
+
 ## 2026-07-28: the panel gets a real grid, a mirrored graph, and an exit that talks
 Build 0/0, **197 tests**. Hot-deployed.
 

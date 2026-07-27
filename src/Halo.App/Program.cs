@@ -14,13 +14,14 @@ internal static class Program
         // uninstall/disable hook: restore every app's native banner that Halo silenced, apply it live, and
         // forget the learned set. Run this from the uninstaller (or by hand) to leave the machine as found.
         if (args.Length >= 1 && args[0] == "--restore-notifications") { Halo.Notifications.BannerGate.Uninstall(); return; }
-        // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|codex|download] [scale]`
+        // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|claude-idle|codex|download] [scale] [x,y]`
+        // the optional x,y parks the cursor there, so hover states can be rendered too
         // claude-demo / claude-idle render a synthetic session instead of the live one — for docs and blog images, where
         // the author's real context and real spend have no business appearing.
         if (args.Length >= 2 && args[0] == "--render-widget")
         {
             RenderWidget(args[1], args.Length > 2 ? args[2] : "media",
-                args.Length > 3 && int.TryParse(args[3], out int sc) ? sc : 1);
+                args.Length > 3 && int.TryParse(args[3], out int sc) ? sc : 1, args);
             return;
         }
         // dev hook: `Halo.App --render-pin <out.png>` — the pushpin states in isolation
@@ -370,7 +371,7 @@ internal static class Program
     // scale renders the panel through the SAME draw code at N x the logical size — a real high-resolution
     // render, not an upscale of a 560x220 one. Everything here is vector or re-decoded art, so the only
     // thing that changes is how many pixels it lands on.
-    private static void RenderWidget(string outPath, string which, int scale = 1)
+    private static void RenderWidget(string outPath, string which, int scale = 1, string[]? args = null)
     {
         var t = new System.Threading.Thread(() =>
         {
@@ -464,6 +465,17 @@ internal static class Program
                 Halo.ClaudeCode.Limits.WeekReset = DateTimeOffset.UtcNow.AddDays(3).AddHours(5);
                 Halo.ClaudeCode.Limits.CreditsUsed = 0;   // no invented dollars on a public image
                 Halo.ClaudeCode.Limits.LastSuccess = DateTime.UtcNow.AddMinutes(-2);
+            }
+            // hover states are half the panel's behaviour (the graph tooltip, the exact-reset swap, the
+            // route readout) and none of it could be rendered - so a 5th argument parks the cursor.
+            if (args is { Length: > 4 } && args[4].Contains(','))
+            {
+                var xy = args[4].Split(',');
+                if (float.TryParse(xy[0], out float mx) && float.TryParse(xy[1], out float my))
+                {
+                    Halo.Widgets.WidgetInput.Mouse = new System.Drawing.PointF(mx, my);
+                    Halo.Widgets.WidgetInput.Over = true;
+                }
             }
             using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
