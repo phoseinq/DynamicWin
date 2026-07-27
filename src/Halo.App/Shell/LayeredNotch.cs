@@ -255,7 +255,8 @@ internal sealed class LayeredNotch
     }
 
     public void Render(int w, int h, int radius, int tintAlpha, float contentFade, float collapsedFade, bool glass,
-        MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed)
+        MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed,
+        float glassFade = 1f)
     {
         int menuX = w + CircleGap + PrivacyPad;
 
@@ -295,7 +296,7 @@ internal sealed class LayeredNotch
         {
             g.Clear(Color.Transparent);
             g.ScaleTransform(S, S);
-            DrawShape(g, w, h, radius, tintAlpha, glass);
+            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             if (collapsedFade > 0.01f) drawCollapsed(g, w, h, collapsedFade);
@@ -353,7 +354,7 @@ internal sealed class LayeredNotch
         g.FillEllipse(cb, cx - ri, cy - ri, ri * 2, ri * 2);
     }
 
-    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass)
+    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass, float glassFade = 1f)
     {
         const int ss = 2;
         using var big = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
@@ -365,13 +366,16 @@ internal sealed class LayeredNotch
             using var path = PillPath(w * ss, h * ss, radius * ss);
             lock (_bgLock)
             {
-                if (glass && _bg != null)
+                if (glass && _bg != null && glassFade > 0.004f)
                 {
                     var clip = bg.Clip;
                     bg.SetClip(path);
                     int sx = (CaptureW - w) / 2;
                     bg.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                    bg.DrawImage(_bg, new Rectangle(0, 0, w * ss, h * ss), new Rectangle(sx, 0, w, h), GraphicsUnit.Pixel);
+                    using var ia = new ImageAttributes();
+                    ia.SetColorMatrix(new ColorMatrix { Matrix33 = Math.Clamp(glassFade, 0f, 1f) });
+                    bg.DrawImage(_bg, new Rectangle(0, 0, w * ss, h * ss),
+                        sx, 0, w, h, GraphicsUnit.Pixel, ia);
                     bg.Clip = clip;
                 }
             }

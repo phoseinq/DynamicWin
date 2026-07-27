@@ -1195,9 +1195,12 @@ internal sealed class NotchController
         _curH = h;
         _notch.OffsetX = _offsetX;
         float holdCue = _moving ? 0f : _holdT;
+
+        float glassFade = _empty && !Privacy.Active ? 1f - SmoothStep(_shrink) : 1f;
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
-            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed);
+            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed,
+            glassFade);
     }
 
     private void FollowForeground(IntPtr fg)
