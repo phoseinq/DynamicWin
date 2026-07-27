@@ -1,6 +1,6 @@
 <div align="center">
 
-**A glass notch for Windows — a Dynamic Island for your desktop.**
+**A glass notch for Windows — the Dynamic Island your desktop never got.**
 
 <br />
 
@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/Windows-11-0078D6?logo=windows11&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
 [![Built with](https://img.shields.io/badge/C%23-.NET%209-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
 [![Downloads](https://img.shields.io/github/downloads/phoseinq/DynamicWin/total?label=downloads&color=2CA5E0&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases)
-[![License](https://img.shields.io/badge/License-CC%20BY--SA%204.0-c49b04.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-c49b04.svg)](LICENSE)
 
 <br />
 
@@ -24,38 +24,94 @@
 
 <img src="ReadmeFiles/preview.gif" alt="Halo in action" width="900">
 
-<sub><b>Halo</b> — music, notifications, file tray, Bluetooth, and live AI-agent status, all in one pill</sub>
-
 </div>
 
 <br />
 
-## ✨ What it does
-
-A single glass pill sits at the top of your screen and quietly handles the things you keep reaching for — what's playing, the notification you just got, a file you want to carry between windows — without opening an app or covering your work.
-
-- 🎵 **Media** — now playing with a live waveform, album (or animated GIF) art, and full controls: play, seek, volume, and for video also ±10s, speed, and subtitles.
-- 🔔 **Notifications** — every toast is mirrored into the pill with the real app icon. Click to open it, or pull the grabber down to read a long message in full. A 2FA / verification code (6 or 8 digits) gets a one-click **Copy** button.
-- 📁 **File Tray** — drag files onto the pill to stash them, then drag them back out into any window, whenever.
-- 🔋 **Bluetooth** — connect headphones, a controller, or your phone and the pill shows a battery ring and percentage for a few seconds.
-- 🤖 **Claude Code & Codex** — a live panel per session: token usage, 5-hour and weekly limits, connection health, and a Cancel that really stops the running prompt.
-- ⬇️ **Downloads** — progress right in the pill, with a stop button.
-- 📌 **Pin** — keep the pill above fullscreen apps, and visible in screen recordings, whenever you want it there.
-
-Real acrylic glass, animation synced to your monitor's refresh rate (120/144 Hz), built from scratch in C# on Windows.UI.Composition.
+A single pill of glass sits at the top of your screen. It comes forward when something is worth
+saying and folds away when nothing is — what's playing, the notification that just arrived, a file
+you want to carry from one window to another. No app to open, nothing covering your work.
 
 <br />
 
 ## ⬇️ Install
 
-Grab the [latest release](https://github.com/phoseinq/DynamicWin/releases/latest):
-
 | Download | What it is |
 | :-- | :-- |
-| **DynamicWinSetup.exe** | installer — per-user, no admin prompt |
-| **DynamicWinPortable.zip** | portable — unzip and run `Halo\Halo.App.exe` |
+| **[DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)** | Installer. Per-user, no admin prompt. Offers to start with Windows and to hook into Codex. |
+| **[DynamicWinPortable.zip](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinPortable.zip)** | No install — unzip and run `Halo\Halo.App.exe`. |
 
-Windows 11 · x64. It opens at the top-center of your main monitor; drag it anywhere, or grab a corner to resize.
+**Windows 11 · x64.** It opens at the top-centre of your main monitor. Press and hold to drag it
+anywhere; it stays where you put it. Once installed it updates itself quietly in the background.
+
+<br />
+
+## 🎵 Media
+
+<img src="ReadmeFiles/media.gif" alt="The media panel" width="760">
+
+Album art — animated if the cover is a GIF — a waveform driven by the actual system output, and
+controls that behave like controls: grab the bar and it thickens under your cursor and follows your
+hand instead of waiting on the player. Video also gets ±10s, playback speed and subtitles.
+
+It reads Windows' own media session, so it works with whatever you already have open.
+
+<br />
+
+## 🔔 Notifications
+
+<img src="ReadmeFiles/copy-code.gif" alt="One-click copy for a verification code" width="600">
+
+Every toast lands in the pill with the *real* app icon, and the native Windows banner goes quiet so
+you are not told the same thing twice. Click one to open the exact message it came from.
+
+When a notification carries a **verification code**, the pill puts a Copy button next to it. No
+opening the app, no dragging a cursor across six digits.
+
+<br />
+
+## 📁 File tray
+
+<img src="ReadmeFiles/tray.gif" alt="The file tray" width="760">
+
+Drag a file onto the pill and it holds on to it. Drag it back out into any window later — a
+different app, a different desktop, twenty minutes on.
+
+<br />
+
+## ⬇️ Downloads
+
+<img src="ReadmeFiles/downloads.png" alt="The download panel" width="900">
+
+Real progress, Chrome and Edge alike. And Cancel actually cancels — including in Edge, where the
+button does not exist until the row has keyboard focus.
+
+<br />
+
+## 🤖 Coding sessions
+
+<img src="ReadmeFiles/agents.png" alt="The Claude Code panel" width="900">
+
+A live panel per **Claude Code** and **Codex** session: what it is doing right now, context left,
+your 5-hour and weekly limits as a ring, and a Cancel that stops the running prompt. Any other tool
+can join by writing a small JSON file.
+
+<br />
+
+## …and the quiet ones
+
+- 🔋 **Bluetooth battery** — connect headphones, a controller or your phone and the pill shows the level.
+- ⚠️ **Alerts** — battery, CPU, RAM and internet, each fired once when it happens rather than nagged.
+- 📌 **Pin** — keep it above fullscreen apps. Hold the pushpin to make it visible in screen recordings too.
+- 🔄 **Silent updates** — no prompt, no window.
+
+<br />
+
+## 🔒 Privacy
+
+No account, no server, no telemetry. Everything the pill shows you stays on your machine.
+[**PRIVACY.md**](PRIVACY.md) lists every file Halo writes and every network request it can make —
+there are nine, and each one says what it discloses.
 
 <br />
 
@@ -68,7 +124,7 @@ Windows 11 · x64. It opens at the top-center of your main monitor; drag it anyw
 
 <div align="center">
 
-⭐ **If Halo earns a spot on your screen, consider starring the repo.**
+⭐ **If you install it and end up liking the little assistant, support the project with a star.**
 
 <sub>MIT License · made by <a href="https://github.com/phoseinq">phoseinq</a> · <a href="https://pvboy.dev">pvboy.dev</a></sub>
 
