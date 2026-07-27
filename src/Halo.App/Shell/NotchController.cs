@@ -121,7 +121,8 @@ internal sealed class NotchController
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f;
 
     private const float HoldSeconds = 0.75f;
-    private const int CaptureFast = 2, CaptureSlow = 12;
+
+    private const int CaptureFast = 1, CaptureSlow = 2;
     private const int EmptyCatchAlpha = 1;
 
     private readonly LayeredNotch _notch;
@@ -271,7 +272,8 @@ internal sealed class NotchController
 
         var active = ActiveIndices();
         LoadOffset();
-        _notch.SetCapturable(_pinned);
+        LoadRecordable();
+        _notch.SetCapturable(_recordable);
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f;
         if (!_empty) _primary = active[0];
@@ -943,6 +945,7 @@ internal sealed class NotchController
     {
         bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
         if (_moving) { _lastMouseDown = down; return; }
+        if (UpdatePinGesture(p, down)) { _lastMouseDown = down; return; }
         if (down && !_lastMouseDown && !_resizing && _notif != null)
         {
 
@@ -973,11 +976,6 @@ internal sealed class NotchController
         {
             if (_progress > 0.9f)
             {
-                var pr = PinRect(ExpandedW, ExpandedH);
-                if (p.X >= _el + pr.X * S && p.X < _el + (pr.X + pr.Width) * S
-                    && p.Y >= _et + pr.Y * S && p.Y < _et + (pr.Y + pr.Height) * S)
-                    { _pinned = !_pinned; SavePin(); _notch.SetCapturable(_pinned); }
-                else
 
                 foreach (var (r, onClick) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
                 {
@@ -1279,6 +1277,50 @@ internal sealed class NotchController
 
     private static RectangleF PinRect(int w, int h) => new(9, 4, 24, 24);
 
+    private bool OverPin(Win32.POINT p)
+    {
+        var r = PinRect(ExpandedW, ExpandedH);
+        return p.X >= _el + r.X * S && p.X < _el + (r.X + r.Width) * S
+            && p.Y >= _et + r.Y * S && p.Y < _et + (r.Y + r.Height) * S;
+    }
+
+    private DateTime _pinPressAt = DateTime.MaxValue;
+    private bool _pinHoldFired;
+    private const double PinHoldSeconds = 0.55;
+
+    private bool UpdatePinGesture(Win32.POINT p, bool down)
+    {
+        bool over = _progress > 0.9f && _notif == null && OverPin(p);
+        if (down && !_lastMouseDown)
+        {
+            if (!over) return false;
+            _pinPressAt = DateTime.UtcNow;
+            _pinHoldFired = false;
+            return true;
+        }
+        if (_pinPressAt == DateTime.MaxValue) return false;
+
+        if (down)
+        {
+            if (!_pinHoldFired && (DateTime.UtcNow - _pinPressAt).TotalSeconds >= PinHoldSeconds)
+            {
+                _pinHoldFired = true;
+                _recordable = !_recordable;
+                SaveRecordable();
+                _notch.SetCapturable(_recordable);
+            }
+            return true;
+        }
+
+        if (!_pinHoldFired && over) { _pinned = !_pinned; SavePin(); }
+        _pinPressAt = DateTime.MaxValue;
+        return true;
+    }
+
+    private float PinHoldProgress()
+        => _pinPressAt == DateTime.MaxValue || _pinHoldFired ? 0f
+         : Math.Clamp((float)((DateTime.UtcNow - _pinPressAt).TotalSeconds / PinHoldSeconds), 0f, 1f);
+
     private void DrawPin(Graphics g, int w, int h, float a)
     {
         if (a <= 0.01f) return;
@@ -1286,18 +1328,20 @@ internal sealed class NotchController
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
         _pinHov = Toward(_pinHov, hov ? 1f : 0f, _dt / 0.10f);
         float hv = _pinHov * _pinHov * (3f - 2f * _pinHov);
-        DrawPushpin(g, r, _pinned, hv, a);
+        DrawPushpin(g, r, _pinned, hv, a, _recordable, PinHoldProgress());
         if (hv > 0.02f)
         {
             using var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
             using var b = new SolidBrush(Color.FromArgb((int)(200 * hv * a), 235, 235, 235));
             using var sf = new StringFormat { LineAlignment = StringAlignment.Center };
+
             g.DrawString(_pinned ? "unpin" : "pin on top", f, b,
                 new RectangleF(r.Right + 6, r.Y, 120, r.Height), sf);
         }
     }
 
-    internal static void DrawPushpin(Graphics g, RectangleF r, bool pinned, float hover, float a)
+    internal static void DrawPushpin(Graphics g, RectangleF r, bool pinned, float hover, float a,
+        bool recordable = false, float holdT = 0f)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var st = g.Save();
@@ -1308,7 +1352,45 @@ internal sealed class NotchController
         var head = new RectangleF(-hr, -3f * u - hr, hr * 2, hr * 2);
         using var needle = new GraphicsPath();
         needle.AddPolygon(new[] { new PointF(-2.3f * u, 2.5f * u), new PointF(2.3f * u, 2.5f * u), new PointF(0, 12f * u) });
-        if (pinned)
+
+        float grow = 1f + 0.18f * holdT;
+        if (grow > 1.001f)
+        {
+            float gh = hr * grow;
+            head = new RectangleF(-gh, -3f * u - gh, gh * 2, gh * 2);
+            hr = gh;
+        }
+
+        if (recordable)
+        {
+
+            var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
+            if (pinned)
+            {
+                using var nb = new SolidBrush(Color.FromArgb((int)(150 * a), 255, 200, 92));
+                g.FillPath(nb, needle);
+            }
+            else
+            {
+                using var pen = new Pen(Color.FromArgb((int)((122 + 78 * hover) * a), 255, 255, 255), 1.7f * u)
+                { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
+                g.DrawPath(pen, needle);
+            }
+            using (var hp = new GraphicsPath())
+            {
+                hp.AddEllipse(head);
+                using var pgb = new PathGradientBrush(hp)
+                {
+                    CenterPoint = new PointF(head.X + hr * 0.62f, head.Y + hr * 0.62f),
+                    CenterColor = Color.FromArgb((int)(255 * a), 255, 236, 182),
+                    SurroundColors = new[] { amber },
+                };
+                g.FillPath(pgb, hp);
+            }
+            using var gloss = new SolidBrush(Color.FromArgb((int)(115 * a), 255, 255, 255));
+            g.FillEllipse(gloss, head.X + hr * 0.28f, head.Y + hr * 0.26f, hr * 0.8f, hr * 0.8f);
+        }
+        else if (pinned)
         {
             var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
             using (var nb = new SolidBrush(amber)) g.FillPath(nb, needle);
@@ -1565,9 +1647,24 @@ internal sealed class NotchController
         try { System.IO.File.WriteAllText(PinPath, _pinned ? "1" : "0"); } catch { }
     }
 
+    private static readonly string RecordablePath = System.IO.Path.Combine(HaloDir, "capturable");
+    private bool _recordable;
+
+    private void LoadRecordable()
+    {
+        try { _recordable = System.IO.File.ReadAllText(RecordablePath).Trim() == "1"; } catch { }
+    }
+
+    private void SaveRecordable()
+    {
+        try { System.IO.File.WriteAllText(RecordablePath, _recordable ? "1" : "0"); } catch { }
+    }
+
     private bool PressOnControl(Win32.POINT p)
     {
         if (_progress <= 0.9f || _primary < 0 || _primary >= _widgets.Length) return false;
+
+        if (OverPin(p)) return true;
         try
         {
             foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
@@ -1597,7 +1694,9 @@ internal sealed class NotchController
             return;
         }
 
-        bool holding = down && hovered && !_resizing && _notif == null && !PressOnControl(p);
+        bool holding = down && hovered && !_resizing && _notif == null
+                    && !FileTray.DragActive && _trayPressPath == null && _trayMode < 1
+                    && !PressOnControl(p);
         bool still = Math.Abs(p.X - _holdAnchor.X) <= 8 && Math.Abs(p.Y - _holdAnchor.Y) <= 8;
         if (holding && _holdStart != DateTime.MaxValue && still)
         {

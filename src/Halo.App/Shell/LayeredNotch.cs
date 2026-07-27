@@ -133,8 +133,11 @@ internal sealed class LayeredNotch
     public void SetCapturable(bool on)
     {
         if (Environment.GetEnvironmentVariable("HALO_CAPTURABLE") == "1") on = true;
+        _capturable = on;
         Win32.SetWindowDisplayAffinity(Hwnd, on ? 0u : Win32.WDA_EXCLUDEFROMCAPTURE);
     }
+
+    private volatile bool _capturable;
 
     public void SetVisible(bool visible)
         => Win32.ShowWindow(Hwnd, visible ? Win32.SW_SHOWNOACTIVATE : Win32.SW_HIDE);
@@ -182,28 +185,77 @@ internal sealed class LayeredNotch
         if (!Win32.GetWindowRect(behind, out var wr)) return;
         int nx = _workLeft + (_workWidth - CaptureW) / 2, ny = _workTop;
         int sx = nx - wr.left, sy = ny - wr.top;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        string how;
 
-        var raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
-        IntPtr src = Win32.GetWindowDC(behind);
-        using (var g = Graphics.FromImage(raw))
+        Bitmap? raw = _capturable ? null : GrabScreen(nx, ny);
+        how = raw != null ? "screen" : "";
+
+        if (raw == null)
         {
-            g.Clear(Color.FromArgb(24, 24, 24));
-            IntPtr dhdc = g.GetHdc();
-            Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, src, sx, sy, Win32.SRCCOPY);
-            g.ReleaseHdc(dhdc);
-        }
-        Win32.ReleaseDC(behind, src);
+            raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
+            IntPtr src = Win32.GetWindowDC(behind);
+            using (var g = Graphics.FromImage(raw))
+            {
+                g.Clear(Color.FromArgb(24, 24, 24));
+                IntPtr dhdc = g.GetHdc();
+                Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, src, sx, sy, Win32.SRCCOPY);
+                g.ReleaseHdc(dhdc);
+            }
+            Win32.ReleaseDC(behind, src);
+            how = "window";
 
-        if (IsMostlyBlack(raw))
-        {
-            var pw = CaptureViaPrintWindow(behind, wr, sx, sy);
-            if (pw != null) { raw.Dispose(); raw = pw; }
+            if (IsMostlyBlack(raw))
+            {
+                var pw = CaptureViaPrintWindow(behind, wr, sx, sy);
+                if (pw != null) { raw.Dispose(); raw = pw; how = "printwindow"; }
+            }
         }
 
-        var blurred = Blur(Blur(raw, 8), 5);
+        var blurred = BlurPyramid(raw);
         raw.Dispose();
         lock (_bgLock) { var old = _bg; _bg = blurred; old?.Dispose(); }
         System.Threading.Interlocked.Increment(ref _captureVersion);
+        GlassTrace(how, (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    private static Bitmap? GrabScreen(int x, int y)
+    {
+        IntPtr screen = IntPtr.Zero;
+        try
+        {
+            screen = Win32.GetDC(IntPtr.Zero);
+            if (screen == IntPtr.Zero) return null;
+            var bmp = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.FromArgb(24, 24, 24));
+                IntPtr dhdc = g.GetHdc();
+                bool ok = Win32.BitBlt(dhdc, 0, 0, CaptureW, CaptureH, screen, x, y, Win32.SRCCOPY);
+                g.ReleaseHdc(dhdc);
+                if (!ok) { bmp.Dispose(); return null; }
+            }
+            return bmp;
+        }
+        catch { return null; }
+        finally { if (screen != IntPtr.Zero) Win32.ReleaseDC(IntPtr.Zero, screen); }
+    }
+
+    private static readonly bool GlassDebug =
+        Environment.GetEnvironmentVariable("HALO_GLASS_DEBUG") == "1";
+    private static int _traceCount;
+
+    private static void GlassTrace(string how, double ms)
+    {
+        if (!GlassDebug) return;
+        try
+        {
+            if (++_traceCount > 600) return;
+            string path = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "glass-debug.txt");
+            System.IO.File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {how} {ms:0.0}ms\n");
+        }
+        catch { }
     }
 
     private static bool IsMostlyBlack(Bitmap bmp)
@@ -684,6 +736,31 @@ internal sealed class LayeredNotch
             return shifted;
         }
         catch { return src; }
+    }
+
+    private static Bitmap BlurPyramid(Bitmap src)
+    {
+        int w = src.Width, h = src.Height;
+        using var s1 = new Bitmap(Math.Max(1, w / 8), Math.Max(1, h / 8), PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(s1))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            g.DrawImage(src, new Rectangle(0, 0, s1.Width, s1.Height), new Rectangle(0, 0, w, h), GraphicsUnit.Pixel);
+        }
+
+        using var s2 = new Bitmap(Math.Max(1, w / 5), Math.Max(1, h / 5), PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(s2))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(s1, new Rectangle(0, 0, s2.Width, s2.Height), new Rectangle(0, 0, s1.Width, s1.Height), GraphicsUnit.Pixel);
+        }
+        var big = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        using (var g = Graphics.FromImage(big))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(s2, new Rectangle(0, 0, w, h), new Rectangle(0, 0, s2.Width, s2.Height), GraphicsUnit.Pixel);
+        }
+        return big;
     }
 
     private static Bitmap Blur(Bitmap src, int factor)

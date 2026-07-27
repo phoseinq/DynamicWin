@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Halo.Interop;
 using Halo.Shell;
 using Halo.Widgets;
@@ -13,7 +14,12 @@ internal static class Program
 
         if (args.Length >= 1 && args[0] == "--restore-notifications") { Halo.Notifications.BannerGate.Uninstall(); return; }
 
-        if (args.Length >= 2 && args[0] == "--render-widget") { RenderWidget(args[1], args.Length > 2 ? args[2] : "media"); return; }
+        if (args.Length >= 2 && args[0] == "--render-widget")
+        {
+            RenderWidget(args[1], args.Length > 2 ? args[2] : "media",
+                args.Length > 3 && int.TryParse(args[3], out int sc) ? sc : 1);
+            return;
+        }
 
         if (args.Length >= 2 && args[0] == "--render-pin") { RenderPin(args[1]); return; }
 
@@ -146,22 +152,29 @@ internal static class Program
 
     private static void RenderPin(string outPath)
     {
-        using var bmp = new System.Drawing.Bitmap(360, 130);
+
+        using var bmp = new System.Drawing.Bitmap(620, 150);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             g.Clear(System.Drawing.Color.FromArgb(28, 28, 32));
-            void Cell(float ox, bool pinned, float hover)
+            using var lf = new System.Drawing.Font("Segoe UI", 11f);
+            using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(170, 235, 235, 235));
+            void Cell(float ox, bool pinned, float hover, string label, bool rec = false, float hold = 0f)
             {
                 var st = g.Save();
-                g.TranslateTransform(ox, 18);
+                g.TranslateTransform(ox, 14);
                 g.ScaleTransform(3.2f, 3.2f);
-                Halo.Shell.NotchController.DrawPushpin(g, new System.Drawing.RectangleF(0, 0, 24, 24), pinned, hover, 1f);
+                Halo.Shell.NotchController.DrawPushpin(
+                    g, new System.Drawing.RectangleF(0, 0, 24, 24), pinned, hover, 1f, rec, hold);
                 g.Restore(st);
+                g.DrawString(label, lf, lb, ox - 4, 108);
             }
-            Cell(20, true, 0f);
-            Cell(140, false, 0f);
-            Cell(260, false, 1f);
+            Cell(20, false, 0f, "off");
+            Cell(140, true, 0f, "pinned");
+            Cell(260, false, 0f, "in capture", rec: true);
+            Cell(380, true, 0f, "pinned+cap", rec: true);
+            Cell(500, false, 1f, "mid-hold", hold: 1f);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
@@ -323,7 +336,7 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
-    private static void RenderWidget(string outPath, string which)
+    private static void RenderWidget(string outPath, string which, int scale = 1)
     {
         var t = new System.Threading.Thread(() =>
         {
@@ -331,7 +344,12 @@ internal static class Program
             {
                 Halo.Widgets.Downloads.Name = "Source.Code.2011.1080p.BluRay.10bit.x265.Farsi.Dubbed.mkv";
                 Halo.Widgets.Downloads.Percent = 36;
-                Halo.Widgets.Downloads.ExePath = @"C:\Windows\explorer.exe";
+
+                Halo.Widgets.Downloads.ExePath = new[]
+                {
+                    @"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                }.FirstOrDefault(System.IO.File.Exists) ?? @"C:\Windows\explorer.exe";
                 Halo.Widgets.Downloads.Hwnd = new IntPtr(1);
             }
             if (which == "download-install")
@@ -342,8 +360,35 @@ internal static class Program
                 Halo.Widgets.Downloads.Installing = true;
                 which = "download";
             }
+
+            string demoRoot = "";
+            if (which == "claude-demo")
+            {
+                demoRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-claude-demo");
+                System.IO.Directory.CreateDirectory(demoRoot);
+                var now = DateTimeOffset.UtcNow;
+                System.IO.File.WriteAllText(System.IO.Path.Combine(demoRoot, "status.json"), $$"""
+                {
+                  "pid": {{System.Environment.ProcessId}},
+                  "sessionId": "demo",
+                  "cwd": "C:\\Projects\\halo",
+                  "state": "working",
+                  "consolePid": {{System.Environment.ProcessId}},
+                  "updatedAt": "{{now:o}}",
+                  "startedAt": "{{now.AddMinutes(-12):o}}",
+                  "currentTool": "Edit",
+                  "session": { "contextUsed": 341000, "contextMax": 1000000, "promptTokens": 48200 }
+                }
+                """);
+                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHourReset = now.AddHours(2).AddMinutes(48);
+            }
+
             IWidget w = which switch
             {
+                "claude-demo" => new ClaudeCodeWidget(
+                    new Halo.ClaudeCode.StatusStore(System.IO.Path.Combine(demoRoot, "status.json"),
+                        _ => DateTimeOffset.UtcNow.AddMinutes(-12), watchFiles: false), 0, () => { }),
                 "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), 0, () => { }),
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 "download" => new DownloadWidget(),
@@ -351,13 +396,25 @@ internal static class Program
             };
             for (int i = 0; i < 100 && !w.IsActive; i++)
                 System.Threading.Thread.Sleep(100);
-            using var bmp = new System.Drawing.Bitmap(560, 220);
+            scale = Math.Clamp(scale, 1, 6);
+            if (which == "claude-demo")
+            {
+
+                using (var warm = new System.Drawing.Bitmap(560, 220))
+                using (var wg = System.Drawing.Graphics.FromImage(warm))
+                    w.DrawContent(wg, 560, 220, 1f);
+                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2).AddMinutes(48);
+            }
+            using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {
                 g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
                 g.Clear(System.Drawing.Color.FromArgb(20, 20, 22));
+                g.ScaleTransform(scale, scale);
                 w.DrawContent(g, 560, 220, 1f);
             }
             bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);

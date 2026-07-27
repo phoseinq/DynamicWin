@@ -30,6 +30,31 @@ $cancelLabels = @('Cancel', 'Cancel download', 'Abbrechen', 'Annuler', 'Cancelar
 # opening download settings and then reporting that no cancel item existed.
 $moreLabels   = @('More actions', 'Weitere Aktionen', 'Plus d''actions', 'Mas acciones', 'Altre azioni')
 
+# Which browser this is decides whether the focus walk below is worth running at all, and the answer is
+# already written in the comments further down: Chrome's downloads bubble exposes ONE control per row, so
+# tabbing through it can never land on a Cancel — only the downloads PAGE has one. Edge is the opposite and
+# needs the walk. Running it for Chrome anyway is what the user sees as the cursor marching down the list
+# one row at a time for several seconds before anything happens.
+$proc = ''
+try { $proc = (Get-Process -Id ([System.Windows.Automation.AutomationElement]::FromHandle($hwnd)).Current.ProcessId).ProcessName.ToLower() } catch { }
+$bubbleOnly = @('chrome', 'brave', 'vivaldi', 'opera', 'opera_gx') -contains $proc
+
+if (-not ('Halo.Cursor' -as [type])) {
+    Add-Type -Namespace Halo -Name Cursor -MemberDefinition @'
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+public struct PT { public int X; public int Y; }
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool GetCursorPos(out PT p);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern short GetAsyncKeyState(int vk);
+'@
+}
+function CursorAt {
+    $p = New-Object Halo.Cursor+PT
+    [void][Halo.Cursor]::GetCursorPos([ref]$p)
+    return $p
+}
+
 $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
 $isControl = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::IsControlElementProperty, $true)
@@ -125,14 +150,19 @@ function Tap([byte]$vk) {
 # The retry is not optional: a browser builds its accessibility tree only once a UIA client attaches, and
 # attaching is what this script just did. The first sweep can come back with a handful of controls and no
 # toolbar at all — measured here as "no downloads button" against an Edge window that plainly had one.
+#
+# For a $bubbleOnly browser none of this applies: the bubble it would open has no Cancel in it, so opening
+# one costs a second and leaves a popup sitting over the user's screen that still has to be stepped around.
+# The tree does have to be built before anything can be found, though, and attaching a UIA client is what
+# builds it — so the sweep still runs, it just does not press.
 $opened = $false
 for ($try = 0; $try -lt 5; $try++) {
     $btn = DownloadsButton (Sweep)
-    if ($btn) { $opened = Press $btn; break }
+    if ($btn) { if (-not $bubbleOnly) { $opened = Press $btn }; break }
     Start-Sleep -Milliseconds 400
 }
 if ($opened) { Start-Sleep -Milliseconds 900 }
-elseif ($canTab) {
+elseif ($canTab -and -not $bubbleOnly) {
     # Ctrl+J is the one shortcut every Chromium browser and Firefox share — the fallback when the button
     # could not be named. Only when the caller confirmed the browser is in front, or the keystroke lands
     # in whatever window does hold it.
@@ -153,11 +183,35 @@ elseif ($canTab) {
 # with the row's Group name spelling out everything it contains ("File icon report.pdf 24.0 KB/s - 7.5 MB
 # of 60.0 MB, 37 mins left 12 Pause Cancel"). That is why cancel worked in Chrome and did nothing at all
 # in Edge for so long: the control was never there to be found.
+#
+# Three things now stop this walk, all of them the same bug seen from different sides: it is a long series
+# of blind keystrokes, and a keystroke only means what you intended while nothing else has moved.
+#   * $bubbleOnly  - Chrome has no Cancel to walk to. Skipped outright, which is also what makes cancelling
+#                    a download in a LONG list instant instead of one Tab per row.
+#   * focus left   - if the focused element stops belonging to the browser, the Tabs are landing in someone
+#                    else's window. Measured as the user clicking anything mid-walk.
+#   * cursor moved - hovering a Chromium row moves focus on its own, so a walk that assumed it knew where
+#                    it was is now several rows off and about to press Cancel on the wrong download.
+# On any of them the walk just stops; the page strategy below needs neither focus nor foreground and is
+# where Chrome was always going to end up anyway.
 $rowName = ''
 $first = ''
-for ($step = 0; $canTab -and $step -lt 60; $step++) {
+$startCursor = CursorAt
+for ($step = 0; $canTab -and -not $bubbleOnly -and $step -lt 60; $step++) {
     $f = $null
     try { $f = [System.Windows.Automation.AutomationElement]::FocusedElement } catch { }
+
+    $owned = $false
+    try { $owned = $f -and $f.Current.ProcessId -eq $ownerPid } catch { }
+    if (-not $owned) { Write-Output 'focus left the browser mid-walk; falling through to the page'; break }
+
+    $c = CursorAt
+    if ([Math]::Abs($c.X - $startCursor.X) -gt 8 -or [Math]::Abs($c.Y - $startCursor.Y) -gt 8 -or
+        ([Halo.Cursor]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0) {
+        Write-Output 'user moved the pointer mid-walk; falling through to the page'
+        break
+    }
+
     if ($f) {
         $name = ''; $type = ''
         try { $name = $f.Current.Name; $type = $f.Current.ControlType.ProgrammaticName } catch { }
@@ -219,7 +273,12 @@ function OpenDownloadsPage {
     return $false
 }
 
-[void](OpenDownloadsPage)
+# Same reason the sweeps above retry: the app-menu button is not in the tree the instant a client attaches,
+# and one miss here used to mean the whole cancel quietly did nothing.
+for ($try = 0; $try -lt 3; $try++) {
+    if (OpenDownloadsPage) { break }
+    Start-Sleep -Milliseconds 500
+}
 
 # ── strategy 3: the row's own menu ─────────────────────────────────────────────────────────────────────
 # On the downloads page an in-progress row shows only "Copy download link" and "More actions", with Pause
