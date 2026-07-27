@@ -15,7 +15,7 @@ internal static class Program
         // forget the learned set. Run this from the uninstaller (or by hand) to leave the machine as found.
         if (args.Length >= 1 && args[0] == "--restore-notifications") { Halo.Notifications.BannerGate.Uninstall(); return; }
         // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|codex|download] [scale]`
-        // claude-demo renders a synthetic session instead of the live one — for docs and blog images, where
+        // claude-demo / claude-idle render a synthetic session instead of the live one — for docs and blog images, where
         // the author's real context and real spend have no business appearing.
         if (args.Length >= 2 && args[0] == "--render-widget")
         {
@@ -400,17 +400,20 @@ internal static class Program
             // and real dollars — fine for eyeballing a layout, not for a public page. Credits are left
             // unset so the money line does not render at all, rather than rendering an invented figure.
             string demoRoot = "";
-            if (which == "claude-demo")
+            if (which is "claude-demo" or "claude-idle")
             {
                 demoRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-claude-demo");
                 System.IO.Directory.CreateDirectory(demoRoot);
                 var now = DateTimeOffset.UtcNow;
+                // the lamp that replaces the stop button when nothing can be interrupted is what the
+                // panel shows most of the time, so it needs to be renderable too
+                var demoState = which == "claude-idle" ? "idle" : "working";
                 System.IO.File.WriteAllText(System.IO.Path.Combine(demoRoot, "status.json"), $$"""
                 {
                   "pid": {{System.Environment.ProcessId}},
                   "sessionId": "demo",
                   "cwd": "C:\\Projects\\halo",
-                  "state": "working",
+                  "state": "{{demoState}}",
                   "consolePid": {{System.Environment.ProcessId}},
                   "updatedAt": "{{now:o}}",
                   "startedAt": "{{now.AddMinutes(-12):o}}",
@@ -424,7 +427,7 @@ internal static class Program
 
             IWidget w = which switch
             {
-                "claude-demo" => new ClaudeCodeWidget(
+                "claude-demo" or "claude-idle" => new ClaudeCodeWidget(
                     new Halo.ClaudeCode.StatusStore(System.IO.Path.Combine(demoRoot, "status.json"),
                         _ => DateTimeOffset.UtcNow.AddMinutes(-12), watchFiles: false), 0, () => { }),
                 "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), 0, () => { }),
@@ -435,7 +438,7 @@ internal static class Program
             for (int i = 0; i < 100 && !w.IsActive; i++)
                 System.Threading.Thread.Sleep(100);
             scale = Math.Clamp(scale, 1, 6);
-            if (which == "claude-demo")
+            if (which is "claude-demo" or "claude-idle")
             {
                 // Drawing the panel is what calls Limits.OnPanelOpen(), which goes and refetches — and the
                 // synthetic figures set above are gone by the time the real draw happens, leaving a blank
@@ -448,12 +451,12 @@ internal static class Program
             // The warm draw above opened NetMon's fast-sampling window; without a pause the ring buffer is
             // still empty and the connection graph renders its "sampling…" state every time — so the one
             // part of the panel that is a chart could never actually be eyeballed as a chart.
-            if (which is "claude" or "claude-demo" or "codex")
+            if (which is "claude" or "claude-demo" or "claude-idle" or "codex")
                 System.Threading.Thread.Sleep(3500);
             // Demo figures go in LAST, after that wait: the refetch the warm draw kicked off is asynchronous,
             // and setting them before the sleep let the real answer land on top — the saved frame then showed
             // the author's actual usage and dollar spend, which is the exact thing this mode exists to avoid.
-            if (which == "claude-demo")
+            if (which is "claude-demo" or "claude-idle")
             {
                 Halo.ClaudeCode.Limits.FiveHour = 0.42f;
                 Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2).AddMinutes(48);

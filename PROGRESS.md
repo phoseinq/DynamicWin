@@ -1,6 +1,29 @@
 # Halo — progress
 
-## 2026-07-27 (night): the Claude Code panel is a ring cluster now
+## 2026-07-27 (night): the ring panel, made legible
+Build 0/0, **197 tests**. Hot-deployed. Four changes on top of the ring cluster below.
+
+- **Type up a step throughout** — key captions and sub-lines were 11px and reported as unreadable;
+  title 20→22, activity 12.5→14, captions 11→13, values 14.5→18, sub-lines 11→12.5, and the graph's own
+  legend and axis with them. Key pitch 34→40 to hold it.
+- **The stop button moved onto the status lamp**, in front of the title. It was in the far corner, about
+  as far from the name of the thing it stops as the panel allows, and it is the same circle as the lamp.
+  One 34px slot now: the red stop while a prompt can be interrupted, a plain lamp in the state colour
+  (white when idle) the rest of the time. No ring and no square in the idle form — drawing button chrome
+  with nothing to cancel would be faking an affordance.
+- **The flag is centred under its graph** instead of shoved against the right edge.
+- **The graph is filled areas, not two hairlines.** Two 1.6px lines crossing in a 30px strip was a
+  diagram you had to squint at; each series is now an area fading out downward with the line kept on top,
+  and the Y axis is gone — in a strip that short it was a third line competing with the two carrying data.
+
+`--render-widget claude-idle` is new: the lamp is what the panel shows most of the time and there was no
+way to render it, since the demo session is hardcoded to "working".
+
+**Caught by checking geometry rather than by eye:** the key's sub-line box was 210px from x=182, and the
+graph starts at 362 — a hovered 5-hour row prints "resets Wed 14:30 · $12.34 left" and slid straight
+under the chart. Clamped to 168.
+
+## 2026-07-27 (night, earlier): the Claude Code panel is a ring cluster now
 Build 0/0, **197 tests**. Hot-deployed. Third pass, and the first that changes the *form* rather than
 the arrangement — bars, then tiles, both still a list to be read one item at a time.
 

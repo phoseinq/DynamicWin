@@ -242,25 +242,29 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
-        using var title = new Font("Segoe UI Semibold", 20f, GraphicsUnit.Pixel);
-        using var line = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
-        using var keyCap = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
-        using var keyVal = new Font("Segoe UI Semibold", 14.5f, GraphicsUnit.Pixel);
-        using var keySub = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+        // everything moved up a step: at 11px the key captions and the sub-lines were being reported as
+        // unreadable on a panel that is only ever glanced at
+        using var title = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
+        using var line = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        using var keyCap = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        using var keyVal = new Font("Segoe UI Semibold", 18f, GraphicsUnit.Pixel);
+        using var keySub = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var dot = RingColor(st); // yellow while thinking, green on a tool - same as the collapsed ring
 
-        // ---- header
-        using (var db = new SolidBrush(Mul(dot, a)))
-            g.FillEllipse(db, Pad, 26, 10, 10);
+        // ---- header. The stop button used to live in the far corner, as far from the name of the thing
+        // it stops as the panel allows. It is the same circle as the status lamp, so they are now one
+        // element in front of the title: a lamp in the state colour when there is nothing to interrupt,
+        // the red stop when there is. Same slot either way, so the title never shifts.
+        DrawCancel(g, w, h, a, dot);
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, Pad + 18, 17);
+            g.DrawString("Claude Code", title, tb, Pad + 44, 16);
         string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
         using (var af = Ellipsis())
-            g.DrawString(act, line, ab, new RectangleF(Pad + 18, 40, 300, 18), af);
+            g.DrawString(act, line, ab, new RectangleF(Pad + 44, 45, 296, 20), af);
 
         // ---- the object: three arcs, outer to inner - 5-hour, weekly, context
         double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
@@ -286,7 +290,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         // it is a detailed glyph and the innermost ring only leaves about 18px of clear radius.
 
         // ---- the key: arc order, exact numbers, hover swaps a countdown for its absolute reset
-        float kx = RingCx + RingOuter + 32, ky = 84, pitch = 34;
+        float kx = RingCx + RingOuter + 34, ky = 80, pitch = 40;
         bool KeyHover(int i) => WidgetInput.Over
             && WidgetInput.Mouse.X >= kx - 16 && WidgetInput.Mouse.X < kx + 200
             && WidgetInput.Mouse.Y >= ky + i * pitch - 8 && WidgetInput.Mouse.Y < ky + i * pitch + pitch - 8;
@@ -295,15 +299,15 @@ internal sealed class ClaudeCodeWidget : IWidget
         {
             float y = ky + i * pitch;
             using (var sb = new SolidBrush(Mul(swatch, a)))
-                g.FillEllipse(sb, kx - 16, y + 5, 7, 7);
-            using (var cb = new SolidBrush(Mul(Dim, a * 0.8f)))
-                g.DrawString(cap, keyCap, cb, kx, y - 1);
+                g.FillEllipse(sb, kx - 18, y + 5, 9, 9);
+            using (var cb = new SolidBrush(Mul(Dim, a * 0.85f)))
+                g.DrawString(cap, keyCap, cb, kx, y);
             using (var vb = new SolidBrush(Mul(White, a)))
-                g.DrawString(value, keyVal, vb, kx + 72, y - 4);
+                g.DrawString(value, keyVal, vb, kx + 84, y - 4);
             if (sub.Length > 0)
                 using (var ub = new SolidBrush(Mul(Dim, a * 0.85f)))
                 using (var uf = Ellipsis())
-                    g.DrawString(sub, keySub, ub, new RectangleF(kx, y + 14, 210, 15), uf);
+                    g.DrawString(sub, keySub, ub, new RectangleF(kx, y + 18, 168, 17), uf);
         }
 
         if (Limits.FiveHour >= 0)
@@ -339,7 +343,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         else Key(2, Dim, "context", "\u2014", "no active session");
 
         // ---- right edge: the graph, the exit flag under it, the freshness line below that
-        DrawNet(g, w - Pad - 176, 92, 176, 34, a);
+        DrawNet(g, w - Pad - 176, 86, 176, 30, a);
         Fx.DrawFlagGhost(g, IpCountry.Flag, FlagRect(w), a);
 
         var rr = RefreshRect(w, h);
@@ -350,31 +354,38 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
             g.DrawString($"{age}  ·  \u27f3 refresh", keySub, rb, rr, rsf);
-
-        DrawCancel(g, w, h, a);
     }
 
     private static StringFormat Ellipsis() => new(StringFormat.GenericTypographic)
     { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
 
-    // tucked under the graph it belongs to. Small, but not so small the ripple eats it: at 46px the
+    // centred under the graph it belongs to. Small, but not so small the ripple eats it: at 46px the
     // crescent and star washed into a red smudge.
-    private static RectangleF FlagRect(int w) => new(w - Pad - 74, 136, 74, 49);
+    private static RectangleF FlagRect(int w) => new(w - Pad - 176 + (176 - 74) / 2f, 138, 74, 49);
 
-    // small circular stop button (square glyph = stop), red when a prompt can be interrupted
-    private void DrawCancel(Graphics g, int w, int h, float a)
+    // One element doing two jobs, in one slot so the title never shifts: while a prompt can be
+    // interrupted it is the red stop button, and the rest of the time it is the status lamp in whatever
+    // colour the state is (white when idle). Drawing a button when there is nothing to cancel would be
+    // faking an affordance, so the idle form has no ring and no square - just the lamp.
+    private void DrawCancel(Graphics g, int w, int h, float a, Color state)
     {
         var r = CancelRect(w, h);
-        bool on = CanCancel;
-        var col = on ? Red : Color.FromArgb(120, 255, 255, 255);
-        float ba = on ? a : a * 0.4f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var b = new SolidBrush(Mul(Color.FromArgb(46, col), a)))
+        if (!CanCancel)
+        {
+            const float d = 15f;
+            using var glow = new SolidBrush(Mul(Color.FromArgb(38, state), a));
+            g.FillEllipse(glow, r.X + (r.Width - d * 1.9f) / 2, r.Y + (r.Height - d * 1.9f) / 2, d * 1.9f, d * 1.9f);
+            using var lamp = new SolidBrush(Mul(state, a));
+            g.FillEllipse(lamp, r.X + (r.Width - d) / 2, r.Y + (r.Height - d) / 2, d, d);
+            return;
+        }
+        using (var b = new SolidBrush(Mul(Color.FromArgb(46, Red), a)))
             g.FillEllipse(b, r.X, r.Y, r.Width, r.Height);
-        using (var pen = new Pen(Mul(col, ba), 1.4f))
+        using (var pen = new Pen(Mul(Red, a), 1.4f))
             g.DrawEllipse(pen, r.X, r.Y, r.Width, r.Height);
         float sq = r.Width * 0.34f;
-        using (var sb = new SolidBrush(Mul(on ? Red : Dim, a)))
+        using (var sb = new SolidBrush(Mul(Red, a)))
         using (var sp = Rounded(new RectangleF(r.X + (r.Width - sq) / 2, r.Y + (r.Height - sq) / 2, sq, sq), 2f))
             g.FillPath(sb, sp);
     }
@@ -405,21 +416,20 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float ax = x0 - 5;
-        using (var axis = new Pen(Mul(Dim, a * (hasData ? 0.6f : 0.25f)), 1f))
-        {
-            g.DrawLine(axis, ax, barsY - 3, ax, barsY + gh);       // Y axis
-            g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh); // X axis
-        }
+        // baseline only. The old L put a full-height Y axis in the same weight as the series, which in a
+        // 30px strip is another line competing with the two that carry the data.
+        using (var axis = new Pen(Mul(Dim, a * (hasData ? 0.35f : 0.2f)), 1f))
+            g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh);
         if (!hasData)
         {
-            using var wf = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+            using var wf = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
             using var wb = new SolidBrush(Mul(Dim, a * 0.7f));
             using var wsf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
             g.DrawString("sampling…", wf, wb, new RectangleF(x0, barsY, gw, gh), wsf);
             return; // no axis numbers: the cap would be a default rather than a measurement
         }
-        using (var tf = new Font("Segoe UI", 9f, GraphicsUnit.Pixel))
+        using (var tf = new Font("Segoe UI", 10.5f, GraphicsUnit.Pixel))
         using (var tb = new SolidBrush(Mul(Dim, a * 0.8f)))
         {
             var sz = g.MeasureString(cap.ToString(), tf);
@@ -430,6 +440,9 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         float Y(int ms) => barsY + gh * (1 - Math.Clamp((float)ms / cap, 0.04f, 1f));
 
+        // Two 1.6px lines crossing each other in a 30px strip was a diagram you had to squint at. Each
+        // series is a filled area now, fading out downwards, with the line kept on top so the exact
+        // value is still legible where the two overlap - shape first, precision second.
         void Series(int[] s, Color col)
         {
             var pts = new List<(PointF p, bool lost)>();
@@ -439,13 +452,24 @@ internal sealed class ClaudeCodeWidget : IWidget
                 bool lost = s[i] == NetMon.Lost;
                 pts.Add((new PointF(x0 + i * stepX, lost ? barsY : Y(s[i])), lost));
             }
-            using var ok = new Pen(Mul(col, a), 1.6f) { LineJoin = LineJoin.Round };
-            using var bad = new Pen(Mul(Red, a), 1.6f) { LineJoin = LineJoin.Round };
+            if (pts.Count == 0) return;
+            float floorY = barsY + gh;
+            if (pts.Count > 1)
+            {
+                var poly = new List<PointF> { new(pts[0].p.X, floorY) };
+                foreach (var (pt, _) in pts) poly.Add(pt);
+                poly.Add(new PointF(pts[^1].p.X, floorY));
+                using var area = new LinearGradientBrush(
+                    new RectangleF(x0, barsY - 1, Math.Max(gw, 1f), gh + 2),
+                    Color.FromArgb((int)(78 * a), col), Color.FromArgb(0, col), 90f);
+                g.FillPolygon(area, poly.ToArray());
+            }
+            using var ok = new Pen(Mul(col, a), 1.8f) { LineJoin = LineJoin.Round };
+            using var bad = new Pen(Mul(Red, a), 2.2f) { LineJoin = LineJoin.Round };
             for (int i = 1; i < pts.Count; i++)
                 g.DrawLine(pts[i - 1].lost || pts[i].lost ? bad : ok, pts[i - 1].p, pts[i].p);
-            if (pts.Count > 0)
-                using (var db = new SolidBrush(Mul(pts[^1].lost ? Red : col, a)))
-                    g.FillEllipse(db, pts[^1].p.X - 2f, pts[^1].p.Y - 2f, 4.5f, 4.5f);
+            using (var db = new SolidBrush(Mul(pts[^1].lost ? Red : col, a)))
+                g.FillEllipse(db, pts[^1].p.X - 2.6f, pts[^1].p.Y - 2.6f, 5.6f, 5.6f);
         }
         Series(net, Green);
         Series(api, Blue);
@@ -454,7 +478,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         int lastN = LastSample(net), lastA = LastSample(api);
         string tn = Fx.NetLabel + " " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
         string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
-        using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
+        using (var f = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel))
         {
             float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
             float lx = x0 + gw - (wN + wS + wA);
@@ -510,7 +534,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
         else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));
 
-        using var f2 = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+        using var f2 = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
         float bw2 = 0;
         foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
         bw2 += 16;
@@ -526,11 +550,8 @@ internal sealed class ClaudeCodeWidget : IWidget
                 g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 14);
     }
 
-    private static RectangleF CancelRect(int w, int h)
-    {
-        const float d = 34, margin = 22;
-        return new RectangleF(w - margin - d, 18, d, d);
-    }
+    // in front of the title, where the lamp used to be
+    private static RectangleF CancelRect(int w, int h) => new(Pad - 3, 14, 34, 34);
 
     // bottom-right of the band, right-aligned to the panel's padding
     private static RectangleF RefreshRect(int w, int h) => new(w - Pad - 176, h - 26, 176, 18);
