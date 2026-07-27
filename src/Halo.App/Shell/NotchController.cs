@@ -1298,9 +1298,15 @@ internal sealed class NotchController
         _curH = h;
         _notch.OffsetX = _offsetX; // where the pill is parked (drag-to-move)
         float holdCue = _moving ? 0f : _holdT;
+        // The glass layer has to fade out with the tint. It used to be drawn at full opacity whatever the
+        // tint was, so when the last app closed (a VLC video ending, say) the "invisible" catch-strip kept
+        // painting a blurred picture of the desktop behind it — a small grey rectangle that looked like it
+        // was colour-matching the wallpaper because it *was* the wallpaper.
+        float glassFade = _empty && !Privacy.Active ? 1f - SmoothStep(_shrink) : 1f;
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
-            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed);
+            _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed,
+            glassFade);
     }
 
     // focusing a window that hosts a live agent's process/console makes that widget primary,

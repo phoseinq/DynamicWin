@@ -279,7 +279,8 @@ internal sealed class LayeredNotch
     }
 
     public void Render(int w, int h, int radius, int tintAlpha, float contentFade, float collapsedFade, bool glass,
-        MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed)
+        MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed,
+        float glassFade = 1f)
     {
         int menuX = w + CircleGap + PrivacyPad; // strip slides right to open a gap for the privacy dot
         // reserve the strip's max extent (transparent padding is free): widest fan + all rows
@@ -323,7 +324,7 @@ internal sealed class LayeredNotch
         {
             g.Clear(Color.Transparent);
             g.ScaleTransform(S, S);
-            DrawShape(g, w, h, radius, tintAlpha, glass);
+            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             if (collapsedFade > 0.01f) drawCollapsed(g, w, h, collapsedFade);
@@ -385,7 +386,13 @@ internal sealed class LayeredNotch
         g.FillEllipse(cb, cx - ri, cy - ri, ri * 2, ri * 2);
     }
 
-    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass)
+    // glassFade scales the captured-backdrop layer. It exists because that layer used to be drawn at FULL
+    // opacity no matter what tintAlpha was: when the pill empties out, the tint fades to alpha 1 (invisible,
+    // but still an OLE hit-target for a dragged file) while the glass kept painting a blurred picture of
+    // whatever was behind it. The result was a small grey rectangle that appeared to "match the background"
+    // because it literally was the background — left behind after the last app closed. Fading them together
+    // makes the empty pill actually empty.
+    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass, float glassFade = 1f)
     {
         const int ss = 2;
         using var big = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
@@ -397,13 +404,16 @@ internal sealed class LayeredNotch
             using var path = PillPath(w * ss, h * ss, radius * ss);
             lock (_bgLock)
             {
-                if (glass && _bg != null)
+                if (glass && _bg != null && glassFade > 0.004f)
                 {
                     var clip = bg.Clip;
                     bg.SetClip(path);
                     int sx = (CaptureW - w) / 2;
                     bg.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                    bg.DrawImage(_bg, new Rectangle(0, 0, w * ss, h * ss), new Rectangle(sx, 0, w, h), GraphicsUnit.Pixel);
+                    using var ia = new ImageAttributes();
+                    ia.SetColorMatrix(new ColorMatrix { Matrix33 = Math.Clamp(glassFade, 0f, 1f) });
+                    bg.DrawImage(_bg, new Rectangle(0, 0, w * ss, h * ss),
+                        sx, 0, w, h, GraphicsUnit.Pixel, ia);
                     bg.Clip = clip;
                 }
             }
