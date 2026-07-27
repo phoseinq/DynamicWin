@@ -84,13 +84,21 @@ internal static class NetMon
             if (DateTime.UtcNow - lastBg > TimeSpan.FromSeconds(10))
             {
                 lastBg = DateTime.UtcNow;
-                bool apiDown = HttpLatency(HttpApi, "https://api.anthropic.com/v1/messages", fresh: true) == Lost;
+                int apiMs = HttpLatency(HttpApi, "https://api.anthropic.com/v1/messages", fresh: true);
+                bool apiDown = apiMs == Lost;
                 int netMs = HttpLatency(HttpNet, "https://www.google.com/generate_204", fresh: true); // always probe → latency for Slow
                 bool netDown = apiDown && netMs == Lost; // net "down" only asserted to fingerprint proxy vs internet
                 SetHealth(apiDown, netDown);
                 bool bad = netMs == Lost || netMs > SlowMs;
                 _slowStreak = bad ? _slowStreak + 1 : 0;
                 SetSlow(_slowStreak >= 2); // ~20s of bad before we cry wolf; clears on the first good sample
+
+                // Also feed the graph. It used to be fed only by the fast panel-open sampling below (which
+                // only runs inside Poke()'s 8s window), so an outage that happened with the panel closed
+                // left the ring buffer with nothing in it — reopening the panel afterward to check showed
+                // an empty graph even though the collapsed pill's ring/mood had reacted correctly in real
+                // time. This heartbeat runs unconditionally, so the graph now always has recent history.
+                RecordSample(netMs, apiMs);
             }
             if (DateTime.UtcNow < _until)
             {
@@ -101,12 +109,17 @@ internal static class NetMon
                 int netMs = HttpLatency(HttpNet, "https://www.google.com/generate_204");
                 apiTask.Join(2600);
 
-                lock (_net) { _net[_idx] = netMs; _api[_idx] = apiMs; _idx = (_idx + 1) % _net.Length; }
-                Interlocked.Increment(ref Version);
+                RecordSample(netMs, apiMs);
                 Thread.Sleep(700);
             }
             else Thread.Sleep(300);
         }
+    }
+
+    private static void RecordSample(int netMs, int apiMs)
+    {
+        lock (_net) { _net[_idx] = netMs; _api[_idx] = apiMs; _idx = (_idx + 1) % _net.Length; }
+        Interlocked.Increment(ref Version);
     }
 
     private static void SetHealth(bool apiDown, bool netDown)
@@ -160,13 +173,17 @@ internal static class NetMon
             if (fresh) req.Headers.ConnectionClose = true; // don't let the pool hide a dead route
             using var resp = http.Send(req, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
             int sc = (int)resp.StatusCode;
-            // down = the request never really reached a healthy Anthropic: 5xx (incl. 529 Overloaded),
-            // plus edge blocks CC also can't get through — 403 (Cloudflare/WAF geoblock, "Just a moment"),
-            // 407 (proxy auth), 429 (rate-limited). 401/404 = server reachable, just auth/root noise → up.
-            return sc >= 500 || sc == 403 || sc == 407 || sc == 429 ? Lost : (int)sw.ElapsedMilliseconds;
+            return IsDownStatus(sc) ? Lost : (int)sw.ElapsedMilliseconds;
         }
         catch { return Lost; }
     }
+
+    // down = the request never really reached a healthy Anthropic: 5xx (incl. 529 Overloaded), plus edge
+    // blocks CC also can't get through — 403 (Cloudflare/WAF geoblock, "Just a moment"), 407 (proxy
+    // auth), 429 (rate-limited). 401/404 = server reachable, just auth/root noise → up. Pulled out of
+    // HttpLatency so the status-code mapping is unit-tested without a live HTTP call.
+    internal static bool IsDownStatus(int statusCode) =>
+        statusCode >= 500 || statusCode == 403 || statusCode == 407 || statusCode == 429;
 }
 
 // Faint flag of the country the current (exit) IP sits in — shown next to the panel title.

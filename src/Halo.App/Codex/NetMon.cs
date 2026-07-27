@@ -76,9 +76,17 @@ internal static class CodexNetMon
             if (DateTime.UtcNow - lastBackgroundProbe > TimeSpan.FromSeconds(10))
             {
                 lastBackgroundProbe = DateTime.UtcNow;
-                var apiDown = HttpLatency(ApiTarget, fresh: true) == Lost;
-                var netDown = apiDown && HttpLatency(NetTarget, fresh: true) == Lost;
+                var apiMs = HttpLatency(ApiTarget, fresh: true);
+                var apiDown = apiMs == Lost;
+                var netMs = HttpLatency(NetTarget, fresh: true);
+                var netDown = apiDown && netMs == Lost;
                 SetHealth(apiDown, netDown);
+
+                // Also feed the graph. It used to be fed only by the fast panel-open sampling below (only
+                // active inside Poke()'s 8s window), so an outage while the panel was closed left the ring
+                // buffer empty — reopening the panel afterward showed nothing even though ApiDown had
+                // already reacted in real time. This heartbeat runs unconditionally.
+                RecordSample(netMs, apiMs);
             }
             if (DateTime.UtcNow < _until)
             {
@@ -88,13 +96,7 @@ internal static class CodexNetMon
                 var netMilliseconds = HttpLatency(NetTarget);
                 apiProbe.Join(2600);
 
-                lock (_net)
-                {
-                    _net[_index] = netMilliseconds;
-                    _api[_index] = apiMilliseconds;
-                    _index = (_index + 1) % _net.Length;
-                }
-                Interlocked.Increment(ref Version);
+                RecordSample(netMilliseconds, apiMilliseconds);
                 Thread.Sleep(700);
             }
             else
@@ -102,6 +104,17 @@ internal static class CodexNetMon
                 Thread.Sleep(300);
             }
         }
+    }
+
+    private static void RecordSample(int netMs, int apiMs)
+    {
+        lock (_net)
+        {
+            _net[_index] = netMs;
+            _api[_index] = apiMs;
+            _index = (_index + 1) % _net.Length;
+        }
+        Interlocked.Increment(ref Version);
     }
 
     private static void SetHealth(bool apiDown, bool netDown)
@@ -127,14 +140,18 @@ internal static class CodexNetMon
             if (fresh) request.Headers.ConnectionClose = true; // don't let the pool hide a dead route
             using var response = Http.Send(request, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
             int sc = (int)response.StatusCode;
-            // down = never really reached a healthy API: 5xx (incl. 529 Overloaded), plus edge blocks the
-            // client also can't get through — 403 (Cloudflare/WAF geoblock), 407 (proxy auth), 429 (rate-limited).
-            // 401/404 = server reachable, just auth/root noise → up.
-            return sc >= 500 || sc == 403 || sc == 407 || sc == 429 ? Lost : (int)stopwatch.ElapsedMilliseconds;
+            return IsDownStatus(sc) ? Lost : (int)stopwatch.ElapsedMilliseconds;
         }
         catch
         {
             return Lost;
         }
     }
+
+    // down = never really reached a healthy API: 5xx (incl. 529 Overloaded), plus edge blocks the client
+    // also can't get through — 403 (Cloudflare/WAF geoblock), 407 (proxy auth), 429 (rate-limited).
+    // 401/404 = server reachable, just auth/root noise → up. Pulled out so the mapping is unit-tested
+    // without a live HTTP call.
+    internal static bool IsDownStatus(int statusCode) =>
+        statusCode >= 500 || statusCode == 403 || statusCode == 407 || statusCode == 429;
 }

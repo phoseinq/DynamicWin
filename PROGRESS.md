@@ -1,5 +1,33 @@
 # Halo — progress
 
+## 2026-07-27 (night): an outage during a closed panel left no trace in the graph
+Build 0/0, **185 tests** (19 new). Hot-deployed here (`Halo.App.dll` only); **not committed/released
+yet** at time of writing.
+
+### The report
+User saw Claude's own surface admit `529 Overloaded · Retrying`, but the pill's ring/mood never
+flagged it and the graph showed nothing even after opening the panel afterward.
+
+### What was actually true vs. what needed fixing
+The 5xx→`Lost` mapping, the eager always-on heartbeat, and the ring/mood override were all already
+correct (`ClaudeCode/NetMon.cs`, from the 2026-07-17 pass) — a live probe at the time of investigation
+confirmed `api.anthropic.com/v1/messages` was healthy again and `IsDownStatus` already treats 529 as
+down. The real gap: **the 10s background heartbeat computed `apiDown`/`netDown` as booleans and threw
+away the measured values — it never wrote into the graph's ring buffer.** Only the fast panel-open
+sampling (gated by `Poke()`'s 8s window) did that. So an outage that happened with the panel closed left
+the ring buffer with nothing in it: the collapsed pill's mood/ring reacted correctly in real time, but
+reopening the panel afterward to check showed an empty graph — which reads exactly like "doesn't notice
+the outage" even though half the mechanism was working.
+
+### Fix
+The background heartbeat now calls the same `RecordSample` the fast path uses, so the graph has
+continuous history (~10s resolution) regardless of whether the panel was ever open. Also pulled the
+status-code-to-`Lost` decision out into `IsDownStatus(int)` on both `ClaudeCode/NetMon` and
+`Codex/NetMon` (identical gap, same background-only blind spot, fixed identically per the "twin" rule)
+— it was inline in a method that makes a real HTTP call, so 529 specifically was previously unverified
+by anything. `NetMonTests.cs`: 19 cases pinning 529/500/503/403/407/429 as down and 200/405/404/401/499
+as up, for both widgets.
+
 ## 2026-07-27 (evening): the notification sound was being cut in half — **3.1.3**
 Build 0/0 with `-warnaserror`, **166 tests** (6 new).
 
