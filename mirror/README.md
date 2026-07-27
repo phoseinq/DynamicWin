@@ -24,6 +24,12 @@
 
 <img src="ReadmeFiles/preview.gif" alt="Halo in action" width="900">
 
+<br /><br />
+
+### 👉 [Try the pill in your browser](https://pvboy.dev/assets/blog/halo-live.html)
+
+<sub>No install. Hover it, open the panel, drag the seek bar, tap the circle to swap app.</sub>
+
 </div>
 
 <br />
