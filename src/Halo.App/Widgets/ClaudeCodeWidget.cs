@@ -232,99 +232,115 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    // 560x220 is a wide, short panel, and three full-width bars stacked down it spent the width on
-    // nothing while crowding the height. The three numbers are peers, so they sit side by side as tiles:
-    // each one is a caption, the figure at a size you can read at a glance, a bar, and the detail under
-    // it. That frees a whole band at the bottom for the connection graph, which is the only thing here
-    // that is actually a chart. The exit-IP flag stops being a 210px watermark under the text and becomes
-    // a small mark beside the graph, which is the part of the panel it is about.
-    private const int Pad = 22, TileGap = 14;
+    // Bars and then tiles both treated the three figures as a list to be read one at a time. They are not
+    // a list -- they are three budgets draining at once -- so they are one object now: concentric arcs
+    // around the Claude mark, outer to inner, with a key beside them carrying the exact numbers. It is the
+    // ring language the collapsed pill already speaks (RingProgress draws exactly this arc), so opening the
+    // panel enlarges what you were already looking at instead of switching notation halfway.
+    private const int Pad = 22;
+    private const float RingCx = 96f, RingCy = 130f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
 
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
         using var title = new Font("Segoe UI Semibold", 20f, GraphicsUnit.Pixel);
-        using var figure = new Font("Segoe UI Semibold", 19f, GraphicsUnit.Pixel);
-        using var caption = new Font("Segoe UI", 10.5f, GraphicsUnit.Pixel);
-        using var small = new Font("Segoe UI", 11.5f, GraphicsUnit.Pixel);
         using var line = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+        using var keyCap = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+        using var keyVal = new Font("Segoe UI Semibold", 14.5f, GraphicsUnit.Pixel);
+        using var keySub = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var dot = RingColor(st); // yellow while thinking, green on a tool — same as the collapsed ring
+        var dot = RingColor(st); // yellow while thinking, green on a tool - same as the collapsed ring
 
         // ---- header
         using (var db = new SolidBrush(Mul(dot, a)))
-            g.FillEllipse(db, Pad, 27, 10, 10);
+            g.FillEllipse(db, Pad, 26, 10, 10);
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, Pad + 18, 18);
-
+            g.DrawString("Claude Code", title, tb, Pad + 18, 17);
         string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
         using (var af = Ellipsis())
-            g.DrawString(act, line, ab, new RectangleF(Pad + 18, 41, w - Pad - 60 - (Pad + 18), 18), af);
+            g.DrawString(act, line, ab, new RectangleF(Pad + 18, 40, 300, 18), af);
 
-        // ---- three tiles: context, 5-hour, weekly
-        float tileW = (w - Pad * 2 - TileGap * 2) / 3f, ty = 74;
-        bool TileHover(int i) => WidgetInput.Over
-            && WidgetInput.Mouse.X >= Pad + i * (tileW + TileGap)
-            && WidgetInput.Mouse.X < Pad + i * (tileW + TileGap) + tileW
-            && WidgetInput.Mouse.Y >= ty - 6 && WidgetInput.Mouse.Y < ty + 62;
-
-        void Tile(int i, string cap, string value, string detail, double frac, Color fill, bool known)
+        // ---- the object: three arcs, outer to inner - 5-hour, weekly, context
+        double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
+        var rings = new (float frac, Color col)[]
         {
-            float x = Pad + i * (tileW + TileGap);
-            using (var cb = new SolidBrush(Mul(Dim, a * 0.75f)))
-                g.DrawString(cap, caption, cb, x, ty);
-            using (var vb = new SolidBrush(Mul(known ? White : Dim, a)))
-                g.DrawString(value, figure, vb, x - 1, ty + 14);
-            Fill(g, x, ty + 44, tileW, 5, Mul(Track, a));
-            if (known && frac > 0) Fill(g, x, ty + 44, (float)(tileW * Math.Clamp(frac, 0, 1)), 5, Mul(fill, a));
-            if (detail.Length > 0)
-                using (var sb = new SolidBrush(Mul(Dim, a * 0.85f)))
-                using (var sf = Ellipsis())
-                    g.DrawString(detail, small, sb, new RectangleF(x, ty + 54, tileW, 16), sf);
+            (Limits.FiveHour, Limits.FiveHour >= 0 ? UsageColor(Limits.FiveHour) : Dim),
+            (Limits.Week,     Limits.Week     >= 0 ? UsageColor(Limits.Week)     : Dim),
+            ((float)ctxFrac,  Blue),
+        };
+        for (int i = 0; i < rings.Length; i++)
+        {
+            float r = RingOuter - i * RingStep;
+            using (var track = new Pen(Mul(Track, a), RingBand))
+                g.DrawArc(track, RingCx - r, RingCy - r, r * 2, r * 2, 0, 360);
+            // an unfetched budget draws its track only: an arc at zero would read as "nothing spent yet"
+            if (rings[i].frac < 0) continue;
+            float sweep = Math.Clamp(rings[i].frac, 0f, 1f) * 360f;
+            if (sweep <= 0.5f) continue;
+            using var arc = new Pen(Mul(rings[i].col, a), RingBand) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(arc, RingCx - r, RingCy - r, r * 2, r * 2, -90f, sweep);
+        }
+        // The centre is left alone. The Claude mark went in there at 26px and came out an orange splat -
+        // it is a detailed glyph and the innermost ring only leaves about 18px of clear radius.
+
+        // ---- the key: arc order, exact numbers, hover swaps a countdown for its absolute reset
+        float kx = RingCx + RingOuter + 32, ky = 84, pitch = 34;
+        bool KeyHover(int i) => WidgetInput.Over
+            && WidgetInput.Mouse.X >= kx - 16 && WidgetInput.Mouse.X < kx + 200
+            && WidgetInput.Mouse.Y >= ky + i * pitch - 8 && WidgetInput.Mouse.Y < ky + i * pitch + pitch - 8;
+
+        void Key(int i, Color swatch, string cap, string value, string sub)
+        {
+            float y = ky + i * pitch;
+            using (var sb = new SolidBrush(Mul(swatch, a)))
+                g.FillEllipse(sb, kx - 16, y + 5, 7, 7);
+            using (var cb = new SolidBrush(Mul(Dim, a * 0.8f)))
+                g.DrawString(cap, keyCap, cb, kx, y - 1);
+            using (var vb = new SolidBrush(Mul(White, a)))
+                g.DrawString(value, keyVal, vb, kx + 72, y - 4);
+            if (sub.Length > 0)
+                using (var ub = new SolidBrush(Mul(Dim, a * 0.85f)))
+                using (var uf = Ellipsis())
+                    g.DrawString(sub, keySub, ub, new RectangleF(kx, y + 14, 210, 15), uf);
         }
 
-        if (st?.Session is { } sess)
-        {
-            double ctx = ContextFrac(st);
-            long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
-            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            Tile(0, "CONTEXT", $"{usedK}K", $"of {maxLabel}  ·  {ctx * 100:0}%", ctx, Blue, true);
-        }
-        else Tile(0, "CONTEXT", "—", "no active session", 0, Blue, false);
-
-        // credits ride the 5-hour tile when the account has spent any: the spend normally, the remaining on
-        // hover IF the API exposes it. Promotional balance shown on claude.ai is NOT returned to the Claude
-        // Code token, so hover falls back to the spend.
         if (Limits.FiveHour >= 0)
         {
-            string detail = TileHover(1)
-                ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
-                : $"{ResetIn(Limits.FiveHourReset)} left";
+            string sub = KeyHover(0) ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
+                                     : $"{ResetIn(Limits.FiveHourReset)} left";
+            // credits ride the 5-hour row: the spend normally, the remaining on hover IF the API exposes it.
+            // Promotional balance on claude.ai is NOT returned to the Claude Code token, so hover falls back.
             if (Limits.CreditsUsed > 0)
-                detail += TileHover(1)
+                sub += KeyHover(0)
                     ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
                        : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} of ${Limits.CreditsLimit:0}"
                        : $"  ·  ${Limits.CreditsUsed:0.00} used")
                     : $"  ·  ${Limits.CreditsUsed:0.00}";
-            Tile(1, "5-HOUR", TileHover(1) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour),
-                 detail, Limits.FiveHour, UsageColor(Limits.FiveHour), true);
+            Key(0, UsageColor(Limits.FiveHour), "5-hour",
+                KeyHover(0) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour), sub);
         }
-        else Tile(1, "5-HOUR", "—", "not fetched yet", 0, Blue, false);
+        else Key(0, Dim, "5-hour", "\u2014", "not fetched yet");
 
         if (Limits.Week >= 0)
-            Tile(2, "WEEKLY", TileHover(2) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
-                 TileHover(2) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
-                              : $"{ResetIn(Limits.WeekReset)} left",
-                 Limits.Week, UsageColor(Limits.Week), true);
-        else Tile(2, "WEEKLY", "—", "not fetched yet", 0, Blue, false);
+            Key(1, UsageColor(Limits.Week), "weekly",
+                KeyHover(1) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
+                KeyHover(1) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
+                            : $"{ResetIn(Limits.WeekReset)} left");
+        else Key(1, Dim, "weekly", "\u2014", "not fetched yet");
 
-        // ---- bottom band: the connection graph, the exit flag, and the usage freshness
-        DrawNet(g, Pad, 158, 246, 30, a);
+        if (st?.Session is { } sess)
+        {
+            long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
+            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
+            Key(2, Blue, "context", $"{usedK}K", $"of {maxLabel}  ·  {ctxFrac * 100:0}% used");
+        }
+        else Key(2, Dim, "context", "\u2014", "no active session");
 
-        var fr = FlagRect();
-        Fx.DrawFlagGhost(g, IpCountry.Flag, fr, a);
+        // ---- right edge: the graph, the exit flag under it, the freshness line below that
+        DrawNet(g, w - Pad - 176, 92, 176, 34, a);
+        Fx.DrawFlagGhost(g, IpCountry.Flag, FlagRect(w), a);
 
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
@@ -333,7 +349,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString($"{age}  ·  ⟳ refresh", small, rb, rr, rsf);
+            g.DrawString($"{age}  ·  \u27f3 refresh", keySub, rb, rr, rsf);
 
         DrawCancel(g, w, h, a);
     }
@@ -341,10 +357,9 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static StringFormat Ellipsis() => new(StringFormat.GenericTypographic)
     { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
 
-    // Parked at the end of the graph band: dead space, and beside the part of the panel the exit IP
-    // actually concerns. 46px was too small to survive the ripple -- the crescent and star washed into a
-    // red smudge -- so it sits at 76, which still reads as a mark rather than as an image.
-    private static RectangleF FlagRect() => new(280, 150, 76, 51);
+    // tucked under the graph it belongs to. Small, but not so small the ripple eats it: at 46px the
+    // crescent and star washed into a red smudge.
+    private static RectangleF FlagRect(int w) => new(w - Pad - 74, 136, 74, 49);
 
     // small circular stop button (square glyph = stop), red when a prompt can be interrupted
     private void DrawCancel(Graphics g, int w, int h, float a)
@@ -518,7 +533,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     }
 
     // bottom-right of the band, right-aligned to the panel's padding
-    private static RectangleF RefreshRect(int w, int h) => new(w - Pad - 176, h - 40, 176, 20);
+    private static RectangleF RefreshRect(int w, int h) => new(w - Pad - 176, h - 26, 176, 18);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"
@@ -604,16 +619,17 @@ internal sealed class ClaudeCodeWidget : IWidget
         (int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t),
         (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    // Blue up to 50%, then into amber, then red — but around HUE, not through RGB. Lerping blue to amber
-    // component-wise passes through their average, and (91,157,255)→(255,176,32) averages to (163,165,157):
-    // a bar at 61% came out at 0.05 saturation, i.e. grey, which reads as disabled rather than as warming
-    // up. Rotating the hue instead runs blue→cyan→green→yellow→amber and stays saturated the whole way.
+    // Green while there is plenty left, into amber, then red — rotated around HUE, not lerped through RGB.
+    // Two reasons. Component-wise, (91,157,255)→(255,176,32) averages to (163,165,157), so a bar at 61%
+    // came out at 0.05 saturation — grey, which reads as disabled on a meter whose job is "warming up".
+    // And the ramp used to START at blue, which is also the context colour: with both drawn as concentric
+    // arcs, any usage under 50% made the outer and inner rings identical. Blue now belongs to context alone.
     // the ramp is a design rule with a test on it, so it needs one seam out to the test assembly
     internal static Color UsageColorForTest(float f) => UsageColor(f);
 
     private static Color UsageColor(float f) =>
-        f <= 0.5f ? Blue
-        : f <= 0.75f ? HueLerp(Blue, Amber, (f - 0.5f) / 0.25f)
+        f <= 0.5f ? Green
+        : f <= 0.75f ? HueLerp(Green, Amber, (f - 0.5f) / 0.25f)
         : HueLerp(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
 
     // interpolates in HSV along the shorter way round the wheel

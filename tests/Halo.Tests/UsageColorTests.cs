@@ -27,9 +27,23 @@ public class UsageColorTests
             $"usage bar at {frac:P0} is {ClaudeCodeWidget.UsageColorForTest(frac)}, " +
             $"saturation {Saturation(ClaudeCodeWidget.UsageColorForTest(frac)):0.00}");
 
+    // blue is context's colour on the ring cluster; a usage ramp that also started blue made the outer
+    // and inner arcs identical under 50%
     [Fact]
-    public void Stays_blue_while_there_is_plenty_left()
-        => Assert.Equal(Color.FromArgb(91, 157, 255), ClaudeCodeWidget.UsageColorForTest(0.30f));
+    public void Stays_green_while_there_is_plenty_left()
+        => Assert.Equal(Color.FromArgb(62, 207, 92), ClaudeCodeWidget.UsageColorForTest(0.30f));
+
+    [Fact]
+    public void Never_collides_with_the_context_blue()
+    {
+        var blue = Color.FromArgb(91, 157, 255);
+        for (float f = 0f; f <= 1f; f += 0.05f)
+        {
+            var c = ClaudeCodeWidget.UsageColorForTest(f);
+            int d = Math.Abs(c.R - blue.R) + Math.Abs(c.G - blue.G) + Math.Abs(c.B - blue.B);
+            Assert.True(d > 120, $"usage at {f:P0} is {c}, too close to the context blue (distance {d})");
+        }
+    }
 
     [Fact]
     public void Ends_on_red_when_the_window_is_spent()
@@ -41,7 +55,7 @@ public class UsageColorTests
     // hue has to move monotonically down the wheel (blue 217 -> amber 39), which is what keeps the ramp
     // reading as one continuous warming rather than a set of steps
     [Fact]
-    public void Warms_monotonically_across_the_blue_to_amber_span()
+    public void Warms_monotonically_across_the_green_to_amber_span()
     {
         float last = 361f;
         for (float f = 0.5f; f <= 0.75f; f += 0.05f)

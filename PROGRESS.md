@@ -1,6 +1,31 @@
 # Halo — progress
 
-## 2026-07-27 (night): the Claude Code panel rebuilt as tiles
+## 2026-07-27 (night): the Claude Code panel is a ring cluster now
+Build 0/0, **197 tests**. Hot-deployed. Third pass, and the first that changes the *form* rather than
+the arrangement — bars, then tiles, both still a list to be read one item at a time.
+
+The three figures are not a list, they are three budgets draining at once, so they are one object:
+concentric arcs around an empty centre, outer to inner as 5-hour / weekly / context, with a key beside
+them carrying the exact numbers and the resets. It is the ring language the collapsed pill already
+speaks — `RingProgress` draws this same arc — so opening the panel enlarges what you were already
+looking at instead of switching notation halfway.
+
+### What the form change exposed
+- **Two of the three rings were the same colour.** The usage ramp started at blue and context *is* blue,
+  so under 50% the outer and inner arcs were identical and the object said nothing. The ramp starts at
+  green now; blue belongs to context alone. `UsageColorTests` gained a case that walks the whole ramp and
+  fails if any point lands within 120 (summed RGB) of the context blue.
+- **The Claude mark at the centre came out an orange splat** — it is a detailed glyph and the inner ring
+  leaves ~18px of clear radius. The centre is empty.
+- 9px bands on a 15px step ran together into a spiral; 8 on 16 reads as three rings.
+
+**Known trade-off:** equal percentages do not look equal across the three arcs, because the radii differ.
+They are independent budgets that are never compared against each other, and the key carries the exact
+figures, so this was accepted rather than solved.
+
+**Still asymmetric:** `CodexWidget` keeps the old one-column layout.
+
+## 2026-07-27 (night, earlier): the Claude Code panel rebuilt as tiles
 Build 0/0, **196 tests**. Hot-deployed. Same information as ever; the two-column pass below was a
 rearrangement, this replaces the structure.
 
