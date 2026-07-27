@@ -1,5 +1,45 @@
 # Halo — progress
 
+## 2026-07-27 (latest): installer task defaults, and the header demo on a phone
+Built 0/0 and signed, **installed here from the signed setup** (3.1.1.0, autostart shortcut present,
+`~/.codex/hooks.json` written by the install task). Blog changes are **deployed to both vhosts**;
+`installer/Halo.iss` and this entry are **not committed yet**.
+
+### Both installer checkboxes were only default-on for a first install
+`AppVersion` still read 3.1.0 — the released build was 3.1.1 — and neither tick survived an upgrade:
+- **Codex carried `Flags: checkedonce`**, which is explicitly "unchecked when Setup finds a previous
+  version installed". Every upgrade therefore silently dropped the integration. Flag removed.
+- **`UsePreviousTasks` defaults to yes**, so Inno restores the *previous run's* selection and overrides
+  the defaults entirely. One person unticking autostart once meant it stayed off for every release after.
+  `UsePreviousTasks=no`, so the `[Tasks]` defaults win on every install.
+Verified with a real `/VERYSILENT` install over the existing one: `Startup\Halo.lnk` exists and
+`~/.codex/hooks.json` carries the four `Halo.Hooks.exe codex …` entries.
+
+### The blog header demo was cut in half on a phone
+`assets/blog/halo-live.html`, deployed to `pvboy.dev` and `boystore.org`. The header is an iframe as wide
+as the page; the open panel plus the circle beside it is **494px, and hero mode scales it 1.35× → 667px**,
+inside a frame that is ~360px across and (at `aspect-ratio:5/2`) **144px tall**. Tapping the pill grew it
+straight past all four edges. Three separate causes, all of them needed:
+- **No fit.** `fit()` now writes `--s` and `--openw` from the real viewport. It **narrows the panel first**
+  (the contents are flex and reflow at full text size) down to **312px — 40px padding plus the volume
+  group, the transport and the empty column that keeps the transport optically centred; narrower and the
+  slider runs into the buttons** — and only then scales the dock down. Desktop is untouched: at 900×360
+  it still resolves to 1.35 / 440px, confirmed by a **pixel diff of old vs new rendered in the same page**
+  (the only difference left was the hint, and `bottom:clamp(8px,9.5%,34px)` still lands on 34px there).
+- **`:hover` latches on a touch screen.** `.notch:hover` and `.notch.open` were one selector list, so the
+  first tap opened the pill *and* stuck the hover on, and the second tap could not close it. They are two
+  rules now, the hover half behind `@media (hover:hover)`. Same for `.alt:hover` and the hint fade — which
+  is why the hint also needed `body:has(.notch.open)`, there being no pointer to leave the dock.
+- **The invisible panel was eating the tap**: it fills the collapsed notch, so the seek bar's pointer
+  capture could swallow the gesture meant to open the pill. `pointer-events:none` until it is visible.
+Hint text now says "tap" under `(hover:none)`, and a tap outside the dock closes it.
+`blog/post.html` on both vhosts gained `@media (max-width:640px){…aspect-ratio:16/9}` — the shallowest box
+the fitted dock clears. Backups on the server: `*.bak-mobile-20260727-*`.
+**Verified against the live URLs** at 360×203 collapsed / open / download-app and 900×360 desktop, plus
+the real post page at a 390px viewport. Trap: `--virtual-time-budget` does **not** advance timers in this
+Chrome's `--headless=new`, so a lone screenshot catches the 0.42s open transition mid-flight and looks
+like a regression — render both versions as iframes in one page and diff the halves instead.
+
 ## 2026-07-27 (later): glass latency, the pin's second setting, and two gesture collisions
 Built 0/0, **160 tests** green, deployed here (hot-swapped exe). **Not pushed yet at time of writing.**
 

@@ -3,7 +3,7 @@
 ; ponytail: per-user install (no UAC), Inno's stock wizard = the UI, one optional autostart task.
 
 #define AppName "Halo"
-#define AppVersion "3.1.0"
+#define AppVersion "3.1.2"
 #define AppPublisher "phoseinq"
 #define AppExe "Halo.App.exe"
 
@@ -17,6 +17,9 @@ PrivilegesRequired=lowest
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; an upgrade otherwise restores the *previous* run's ticks, so autostart stayed off forever
+; for anyone who unticked it once. the defaults below win on every install.
+UsePreviousTasks=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
 SetupIconFile=halo.ico
@@ -34,7 +37,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "startup"; Description: "Start {#AppName} automatically when Windows starts"; GroupDescription: "Startup:"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
-Name: "codexhooks"; Description: "Integrate with Codex"; GroupDescription: "Integrations:"; Flags: checkedonce
+; both default to checked, and stay checked on upgrades — `checkedonce` used to drop the Codex
+; task on the second install, and UsePreviousTasks would have carried a one-off untick forever.
+Name: "codexhooks"; Description: "Integrate with Codex"; GroupDescription: "Integrations:"
 
 [Files]
 Source: "..\dist\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
