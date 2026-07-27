@@ -291,7 +291,10 @@ internal sealed class NotchController
             _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
             {
                 App = Loc.T("Network"), Title = title, Body = body,
-                Kind = "network", Duration = 6, Icon = lost ? NetBadge() : WifiBadge(),
+                // Eight rather than the default six, matching the limit and battery notices:
+                // this one carries two names to read, and it appears because the network changed
+                // on its own, so nobody was already looking at the pill when it did.
+                Kind = "network", Duration = 8, Icon = lost ? NetBadge() : WifiBadge(),
             });
         });
         _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
