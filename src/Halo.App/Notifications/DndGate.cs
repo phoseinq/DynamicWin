@@ -34,12 +34,16 @@ internal static class BannerGate
     {
         Log("enable (per-app banner suppression)");
         LoadState();
-        bool changed = false;
         lock (_lock)
+        {
+
+            _lastToast = Environment.TickCount64;
             foreach (var aumid in new List<string>(_orig.Keys))
-                changed |= WriteZero(aumid);
-        changed |= SeedKnownApps();
-        if (changed) ScheduleApply();
+                WriteZero(aumid);
+        }
+        SeedKnownApps();
+
+        ScheduleApply();
     }
 
     private static bool SeedKnownApps()

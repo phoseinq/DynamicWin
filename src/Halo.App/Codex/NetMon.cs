@@ -67,9 +67,13 @@ internal static class CodexNetMon
             if (DateTime.UtcNow - lastBackgroundProbe > TimeSpan.FromSeconds(10))
             {
                 lastBackgroundProbe = DateTime.UtcNow;
-                var apiDown = HttpLatency(ApiTarget, fresh: true) == Lost;
-                var netDown = apiDown && HttpLatency(NetTarget, fresh: true) == Lost;
+                var apiMs = HttpLatency(ApiTarget, fresh: true);
+                var apiDown = apiMs == Lost;
+                var netMs = HttpLatency(NetTarget, fresh: true);
+                var netDown = apiDown && netMs == Lost;
                 SetHealth(apiDown, netDown);
+
+                RecordSample(netMs, apiMs);
             }
             if (DateTime.UtcNow < _until)
             {
@@ -79,13 +83,7 @@ internal static class CodexNetMon
                 var netMilliseconds = HttpLatency(NetTarget);
                 apiProbe.Join(2600);
 
-                lock (_net)
-                {
-                    _net[_index] = netMilliseconds;
-                    _api[_index] = apiMilliseconds;
-                    _index = (_index + 1) % _net.Length;
-                }
-                Interlocked.Increment(ref Version);
+                RecordSample(netMilliseconds, apiMilliseconds);
                 Thread.Sleep(700);
             }
             else
@@ -93,6 +91,17 @@ internal static class CodexNetMon
                 Thread.Sleep(300);
             }
         }
+    }
+
+    private static void RecordSample(int netMs, int apiMs)
+    {
+        lock (_net)
+        {
+            _net[_index] = netMs;
+            _api[_index] = apiMs;
+            _index = (_index + 1) % _net.Length;
+        }
+        Interlocked.Increment(ref Version);
     }
 
     private static void SetHealth(bool apiDown, bool netDown)
@@ -118,12 +127,14 @@ internal static class CodexNetMon
             if (fresh) request.Headers.ConnectionClose = true;
             using var response = Http.Send(request, System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
             int sc = (int)response.StatusCode;
-
-            return sc >= 500 || sc == 403 || sc == 407 || sc == 429 ? Lost : (int)stopwatch.ElapsedMilliseconds;
+            return IsDownStatus(sc) ? Lost : (int)stopwatch.ElapsedMilliseconds;
         }
         catch
         {
             return Lost;
         }
     }
+
+    internal static bool IsDownStatus(int statusCode) =>
+        statusCode >= 500 || statusCode == 403 || statusCode == 407 || statusCode == 429;
 }

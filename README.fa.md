@@ -22,7 +22,7 @@
 
 <div align="center">
 
-<img src="ReadmeFiles/preview.gif" alt="Halo در حال کار" width="900">
+<img src="ReadmeFiles/media-panel.svg" alt="پنلِ مدیای قرص، در حال پخش" width="900">
 
 <br /><br />
 

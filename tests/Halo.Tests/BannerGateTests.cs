@@ -18,6 +18,16 @@ public class BannerGateTests
         Assert.Equal(Quiet, BannerGate.ApplyDelayMs(now: 0, lastRestart: -Cooldown, lastToast: 0));
     }
 
+    // Enable() stamps lastToast at launch so the startup restart — the one that makes a service started
+    // by logon actually re-read the zeros already sitting in the registry — cannot fire into a sound that
+    // was already playing when Halo came up.
+    [Fact]
+    public void Startup_apply_waits_rather_than_firing_into_a_sound_in_flight()
+    {
+        Assert.Equal(Quiet, BannerGate.ApplyDelayMs(now: 0, lastRestart: -Cooldown, lastToast: 0));
+        Assert.Equal(0, BannerGate.ApplyDelayMs(now: Quiet, lastRestart: -Cooldown, lastToast: 0));
+    }
+
     [Fact]
     public void A_later_toast_pushes_a_pending_restart_back_out()
     {
