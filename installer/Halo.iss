@@ -22,7 +22,10 @@ DisableProgramGroupPage=yes
 UsePreviousTasks=no
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+; halo.ico's small sizes must stay BMP/DIB entries — a fully PNG-compressed .ico left this .exe with no
+; icon at all in Explorer and in browser download lists. installer/make_icon.py writes it.
 SetupIconFile=halo.ico
+WizardSmallImageFile=wizard-small.bmp
 OutputDir=..\dist
 OutputBaseFilename=DynamicWinSetup
 Compression=lzma2/max
