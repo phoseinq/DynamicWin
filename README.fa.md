@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="ReadmeFiles/banner-fa.svg" alt="Halo — یک قرصِ شیشه‌ای برای ویندوز، همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت" width="900">
+**یک قرصِ شیشه‌ای برای ویندوز — همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت.**
 
 <br />
 
@@ -21,6 +21,10 @@
 <br />
 
 <div align="center">
+
+<img src="ReadmeFiles/banner-fa.svg" alt="Halo — یک قرصِ شیشه‌ای برای ویندوز، همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت" width="900">
+
+<br /><br />
 
 ### 👈 [قرص را همین‌جا توی مرورگر امتحان کن](https://pvboy.dev/assets/blog/halo-live.html)
 
