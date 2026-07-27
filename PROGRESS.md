@@ -1,5 +1,37 @@
 # Halo — progress
 
+## 2026-07-27 (night): the Claude Code panel redrawn in two columns
+Build 0/0, **196 tests** (10 new). Hot-deployed; **not committed to the mirror** (app source, not docs).
+Same information as before — nothing added, nothing dropped.
+
+### Layout
+One column of numbers, one of state. The graph used to be wedged between the title and the stop button
+with about 135px, which put a moving chart beside the first line you read; it now owns the right column
+at ~190px and is 46px tall instead of 22. Context / 5-hour / weekly sit on a 38px pitch in the left
+column, a faded hairline marks the seam, and the freshness + refresh line moved under the graph.
+
+The activity line is now ellipsised to the left column. `waiting_input` prints Claude's *real question*
+there, and at any length it used to run under the graph.
+
+### Two things the redesign exposed
+- **The usage bar went grey.** `UsageColor` lerped blue→amber per channel, and those two average to
+  (163,165,157) — measured saturation **0.05** at 61%, i.e. pure grey, which reads as *disabled* on a bar
+  whose whole job is to say "warming up". It now rotates hue instead, running blue→cyan→green→yellow→amber
+  and staying saturated the whole way. `UsageColorTests` pins it: 7 sample points must stay above 0.35
+  saturation, blue below 50%, red at 100%, and hue must fall monotonically across the ramp.
+- **The graph had never been eyeballed with data.** `--render-widget` drew the frame before NetMon had a
+  single sample, so every render showed an empty axis. The hook now waits 3.5s after the warm draw for the
+  agent widgets. An empty buffer also drew a bare L-shaped axis labelled with a *default* cap of 150 — a
+  number that was never measured — which now says `sampling…` and no axis numbers instead.
+
+### A leak this introduced and then fixed
+Adding that wait let the asynchronous usage refetch land *after* `claude-demo` had set its synthetic
+figures, so the saved frame showed real usage and a real dollar balance — precisely what the demo mode
+exists to prevent. Demo figures are now applied last, after the wait, with credits forced to zero.
+
+**Still asymmetric:** `CodexWidget.DrawExpanded` is untouched and keeps the old one-column layout, so the
+twins no longer match.
+
 ## 2026-07-27 (night): the README hero, tried as a vector and then dropped
 Three commits on `master`, all published to `V3` (`603dcac` → `6170dc2` → `8a87c1a`).
 

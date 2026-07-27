@@ -232,85 +232,109 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
+    // Two columns: the left one is the numbers you read, the right one is state and diagnostics. The
+    // graph used to be squeezed between the title and the stop button, which left it about 135px and put
+    // a moving chart right next to the one line you actually read first; it now owns the right column and
+    // is wider for it. The activity line is ellipsised to the left column because "waiting_input" prints
+    // Claude's real question there, which ran under the graph at any decent length.
+    private const int Pad = 24, ColGap = 24;
+    private static float LeftColW(int w) => (w - Pad * 2) * 0.575f;
+    private static float RightColX(int w) => Pad + LeftColW(w) + ColGap;
+
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
-        int pad = 26;
         using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
 
+        float lw = LeftColW(w), rx = RightColX(w), rw = w - Pad - rx;
         var dot = RingColor(st); // yellow while thinking, green on a tool — same as the collapsed ring
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Fx.DrawFlagGhost(g, IpCountry.Flag, w, h, a); // wind-blown exit-IP flag, centred watermark
+
         using (var db = new SolidBrush(Mul(dot, a)))
-            g.FillEllipse(db, pad, pad + 8, 11, 11); // centred on the title's cap height
+            g.FillEllipse(db, Pad, Pad + 7, 11, 11); // centred on the title's cap height
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, pad + 20, pad - 2);
+            g.DrawString("Claude Code", title, tb, Pad + 20, Pad - 3);
+
         string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
             ? st.Message! : Activity(st); // show the actual question while Claude waits
         using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-            g.DrawString(line, small, ab, pad + 20, pad + 24);
+        using (var af = new StringFormat(StringFormat.GenericTypographic)
+        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter })
+            g.DrawString(line, small, ab, new RectangleF(Pad + 20, Pad + 23, lw - 20, 18), af);
 
-        // limits + graph stay up even with no session — only the context bar needs a live transcript
-        float y = pad + 58;
-        int barW = w - pad * 2;
+        // ---- left column: the meters. Limits stay up even with no session; only context needs a transcript.
+        float y = 78, pitch = 38;
         if (st?.Session is { } sess)
         {
             double ctx = ContextFrac(st);
             long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
             string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
+            DrawBar(g, Pad, y, lw, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
         }
         else
         {
             using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Claude Code session", body, nb, pad, y + 4);
+            g.DrawString("No active session", body, nb, Pad, y + 4);
         }
+
         // hovering a limit row swaps its value for the precise one (exact % + absolute reset time)
+        bool RowHover(float rowY) => WidgetInput.Over
+            && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + pitch
+            && WidgetInput.Mouse.X >= Pad && WidgetInput.Mouse.X <= Pad + lw;
         string LimitValue(float f, DateTimeOffset reset, float rowY)
-        {
-            bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
-                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
-                       : $"{Pct(f)}  ·  {ResetIn(reset)}";
-        }
+            => RowHover(rowY) ? $"{f * 100:0.#}%  ·  {reset.ToLocalTime():ddd HH:mm}"
+                              : $"{Pct(f)}  ·  {ResetIn(reset)}";
+
         // credits sit on the 5-hour row when the account has spent any: normally the spend, on hover the
         // remaining IF the API exposes it (prepaid balance or a monthly cap). Note: promotional-credit
         // balance shown on claude.ai is NOT returned to the Claude Code token, so hover falls back to spend.
         if (Limits.FiveHour >= 0)
         {
-            bool hov5 = WidgetInput.Over && WidgetInput.Mouse.Y >= y + 40 && WidgetInput.Mouse.Y < y + 76
-                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
             string credits = Limits.CreditsUsed <= 0 ? ""
-                : hov5
+                : RowHover(y + pitch)
                     ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
                        : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} left of ${Limits.CreditsLimit:0}"
                        : $"  ·  ${Limits.CreditsUsed:0.00} used")
-                    : $"  ·  ${Limits.CreditsUsed:0.00} credits";
-            DrawBar(g, pad, y + 40, barW, "5-hour limit",
-                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + 40) + credits,
+                    : $"  ·  ${Limits.CreditsUsed:0.00}";
+            DrawBar(g, Pad, y + pitch, lw, "5-hour limit",
+                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + pitch) + credits,
                 Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
         }
         if (Limits.Week >= 0)
-            DrawBar(g, pad, y + 80, barW, "Weekly limit",
-                LimitValue(Limits.Week, Limits.WeekReset, y + 80), Limits.Week, UsageColor(Limits.Week), a, body, small);
+            DrawBar(g, Pad, y + pitch * 2, lw, "Weekly limit",
+                LimitValue(Limits.Week, Limits.WeekReset, y + pitch * 2), Limits.Week,
+                UsageColor(Limits.Week), a, body, small);
 
-        // usage freshness + manual refresh (clickable)
+        // hairline between the columns, faded at both ends so it reads as a seam and not a box edge
+        using (var seam = new LinearGradientBrush(
+            new RectangleF(rx - ColGap / 2f - 1, 70, 2, 108), Color.Transparent, Color.Transparent, 90f))
+        {
+            seam.InterpolationColors = new ColorBlend
+            {
+                Colors = new[] { Color.Transparent, Mul(Track, a), Mul(Track, a), Color.Transparent },
+                Positions = new[] { 0f, 0.22f, 0.78f, 1f },
+            };
+            g.FillRectangle(seam, rx - ColGap / 2f - 1, 70, 1.4f, 108);
+        }
+
+        // ---- right column: stop, freshness, and the connection graph with room to breathe
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
         string age = Limits.LastSuccess == DateTime.MinValue ? "usage never fetched"
             : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}";
-        string rtxt = $"{age}  ·  ⟳ refresh";
         using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(rtxt, small, rb, rr, rsf);
+            g.DrawString($"{age}  ·  ⟳ refresh", small, rb, rr, rsf);
 
-        DrawCancel(g, w, h, a, body);
+        DrawNet(g, rx, 88, rw, a);
+        DrawCancel(g, w, h, a);
     }
 
     // small circular stop button (square glyph = stop), red when a prompt can be interrupted
-    private void DrawCancel(Graphics g, int w, int h, float a, Font font)
+    private void DrawCancel(Graphics g, int w, int h, float a)
     {
         var r = CancelRect(w, h);
         bool on = CanCancel;
@@ -325,18 +349,19 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var sb = new SolidBrush(Mul(on ? Red : Dim, a)))
         using (var sp = Rounded(new RectangleF(r.X + (r.Width - sq) / 2, r.Y + (r.Height - sq) / 2, sq, sq), 2f))
             g.FillPath(sb, sp);
-
-        DrawNet(g, r.X - 26, a); // breathing room between the graph and the stop button
     }
 
     // connection-to-Anthropic graph: green = your internet (GET google.com/generate_204), blue = path to
     // api.anthropic.com. Lost stretches turn red on that line — so you can tell whose fault it is.
-    private static void DrawNet(Graphics g, float rightX, float a)
+    // x0/topY/width rather than a hardcoded corner: the graph moved out of the header into its own
+    // column, and it is the width it gets that decides whether the two series are readable at all.
+    private static void DrawNet(Graphics g, float colX, float topY, float colW, float a)
     {
         var (net, api) = NetMon.Snapshot();
-        const float stepX = 5f, gh = 22f;
         int n = net.Length;
-        float gw = (n - 1) * stepX, x0 = rightX - gw, top = 19, barsY = top + 14;
+        const float axisGutter = 26f, gh = 46f;
+        float gw = colW - axisGutter;
+        float stepX = gw / (n - 1), x0 = colX + axisGutter, top = topY, barsY = top + 14;
 
         // dynamic scale (api TCP latency is usually way above ping)
         int cap = 150;
@@ -344,12 +369,27 @@ internal sealed class ClaudeCodeWidget : IWidget
         foreach (var v in api) if (v > cap) cap = v;
         cap = (cap + 49) / 50 * 50;
 
+        // an empty ring buffer used to draw a bare L-shaped axis labelled with a default cap, which reads
+        // as a broken frame for the first second after the panel opens. Say what is happening instead.
+        bool hasData = false;
+        foreach (var v in net) if (v != NetMon.Empty) { hasData = true; break; }
+        if (!hasData) foreach (var v in api) if (v != NetMon.Empty) { hasData = true; break; }
+
         g.SmoothingMode = SmoothingMode.AntiAlias;
         float ax = x0 - 5;
-        using (var axis = new Pen(Mul(Dim, a * 0.6f), 1f))
+        using (var axis = new Pen(Mul(Dim, a * (hasData ? 0.6f : 0.25f)), 1f))
         {
             g.DrawLine(axis, ax, barsY - 3, ax, barsY + gh);       // Y axis
             g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh); // X axis
+        }
+        if (!hasData)
+        {
+            using var wf = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+            using var wb = new SolidBrush(Mul(Dim, a * 0.7f));
+            using var wsf = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString("sampling…", wf, wb, new RectangleF(x0, barsY, gw, gh), wsf);
+            return; // no axis numbers: the cap would be a default rather than a measurement
         }
         using (var tf = new Font("Segoe UI", 9f, GraphicsUnit.Pixel))
         using (var tb = new SolidBrush(Mul(Dim, a * 0.8f)))
@@ -389,13 +429,13 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
         {
             float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
-            float lx = rightX - (wN + wS + wA);
+            float lx = x0 + gw - (wN + wS + wA);
             using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a))) g.DrawString(tn, f, b, lx, top - 2);
             using (var b = new SolidBrush(Mul(Dim, a))) g.DrawString(" · ", f, b, lx + wN, top - 2);
             using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a))) g.DrawString(ta, f, b, lx + wN + wS, top - 2);
         }
 
-        DrawNetHover(g, a, net, api, x0, stepX, barsY, gh, rightX, Y);
+        DrawNetHover(g, a, net, api, x0, stepX, barsY, gh, x0 + gw, Y);
     }
 
     private static int LastSample(int[] s)
@@ -464,7 +504,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         return new RectangleF(w - margin - d, 20, d, d);
     }
 
-    private static RectangleF RefreshRect(int w, int h) => new(w - 26 - 220, h - 26, 220, 20);
+    // sits under the graph in the right column, right-aligned to the panel's padding
+    private static RectangleF RefreshRect(int w, int h) => new(RightColX(w), h - 42, w - Pad - RightColX(w), 20);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"
@@ -550,11 +591,48 @@ internal sealed class ClaudeCodeWidget : IWidget
         (int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t),
         (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    // blue up to 50%, then smoothly blends into amber, then red — no hard steps
+    // Blue up to 50%, then into amber, then red — but around HUE, not through RGB. Lerping blue to amber
+    // component-wise passes through their average, and (91,157,255)→(255,176,32) averages to (163,165,157):
+    // a bar at 61% came out at 0.05 saturation, i.e. grey, which reads as disabled rather than as warming
+    // up. Rotating the hue instead runs blue→cyan→green→yellow→amber and stays saturated the whole way.
+    // the ramp is a design rule with a test on it, so it needs one seam out to the test assembly
+    internal static Color UsageColorForTest(float f) => UsageColor(f);
+
     private static Color UsageColor(float f) =>
         f <= 0.5f ? Blue
-        : f <= 0.75f ? LerpC(Blue, Amber, (f - 0.5f) / 0.25f)
-        : LerpC(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+        : f <= 0.75f ? HueLerp(Blue, Amber, (f - 0.5f) / 0.25f)
+        : HueLerp(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+
+    // interpolates in HSV along the shorter way round the wheel
+    private static Color HueLerp(Color a, Color b, float t)
+    {
+        var (h1, s1, v1) = ToHsv(a);
+        var (h2, s2, v2) = ToHsv(b);
+        float dh = h2 - h1;
+        if (dh > 180f) dh -= 360f;
+        else if (dh < -180f) dh += 360f;
+        return FromHsv((h1 + dh * t + 360f) % 360f, s1 + (s2 - s1) * t, v1 + (v2 - v1) * t);
+    }
+
+    private static (float h, float s, float v) ToHsv(Color c)
+    {
+        float r = c.R / 255f, g = c.G / 255f, b = c.B / 255f;
+        float max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
+        float h = d == 0 ? 0
+            : max == r ? 60f * (((g - b) / d + 6f) % 6f)
+            : max == g ? 60f * ((b - r) / d + 2f)
+            : 60f * ((r - g) / d + 4f);
+        return (h, max == 0 ? 0 : d / max, max);
+    }
+
+    private static Color FromHsv(float h, float s, float v)
+    {
+        float c = v * s, x = c * (1 - Math.Abs(h / 60f % 2 - 1)), m = v - c;
+        (float r, float g, float b) p = h < 60 ? (c, x, 0) : h < 120 ? (x, c, 0) : h < 180 ? (0, c, x)
+            : h < 240 ? (0, x, c) : h < 300 ? (x, 0, c) : (c, 0, x);
+        return Color.FromArgb((int)Math.Round((p.r + m) * 255), (int)Math.Round((p.g + m) * 255),
+                              (int)Math.Round((p.b + m) * 255));
+    }
 
     private static string ResetIn(DateTimeOffset r)
     {

@@ -444,8 +444,23 @@ internal static class Program
                 using (var warm = new System.Drawing.Bitmap(560, 220))
                 using (var wg = System.Drawing.Graphics.FromImage(warm))
                     w.DrawContent(wg, 560, 220, 1f);
+            }
+            // The warm draw above opened NetMon's fast-sampling window; without a pause the ring buffer is
+            // still empty and the connection graph renders its "sampling…" state every time — so the one
+            // part of the panel that is a chart could never actually be eyeballed as a chart.
+            if (which is "claude" or "claude-demo" or "codex")
+                System.Threading.Thread.Sleep(3500);
+            // Demo figures go in LAST, after that wait: the refetch the warm draw kicked off is asynchronous,
+            // and setting them before the sleep let the real answer land on top — the saved frame then showed
+            // the author's actual usage and dollar spend, which is the exact thing this mode exists to avoid.
+            if (which == "claude-demo")
+            {
                 Halo.ClaudeCode.Limits.FiveHour = 0.42f;
                 Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2).AddMinutes(48);
+                Halo.ClaudeCode.Limits.Week = 0.61f;
+                Halo.ClaudeCode.Limits.WeekReset = DateTimeOffset.UtcNow.AddDays(3).AddHours(5);
+                Halo.ClaudeCode.Limits.CreditsUsed = 0;   // no invented dollars on a public image
+                Halo.ClaudeCode.Limits.LastSuccess = DateTime.UtcNow.AddMinutes(-2);
             }
             using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
