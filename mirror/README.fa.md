@@ -22,10 +22,6 @@
 
 <div align="center">
 
-<img src="ReadmeFiles/preview.gif" alt="Halo در حال کار" width="900">
-
-<br /><br />
-
 ### 👈 [قرص را همین‌جا توی مرورگر امتحان کن](https://pvboy.dev/assets/blog/halo-live.html)
 
 <sub>بدونِ نصب. موس را رویش ببر، پنل را باز کن، نوارِ جابه‌جایی را بکش، روی دایره بزن تا اپ عوض شود.</sub>
