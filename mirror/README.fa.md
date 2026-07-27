@@ -22,7 +22,7 @@
 
 <div align="center">
 
-<img src="ReadmeFiles/banner-fa.svg" alt="Halo — یک قرصِ شیشه‌ای برای ویندوز، همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت" width="900">
+<img src="ReadmeFiles/banner-fa-2.svg" alt="Halo — یک قرصِ شیشه‌ای برای ویندوز، همان Dynamic Islandی که دسکتاپ هیچ‌وقت نداشت" width="900">
 
 <br /><br />
 
