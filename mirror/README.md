@@ -22,7 +22,7 @@
 
 <div align="center">
 
-<img src="ReadmeFiles/preview.gif" alt="Halo in action" width="900">
+<img src="ReadmeFiles/media-panel.svg" alt="The pill's media panel, playing" width="900">
 
 <br /><br />
 

@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="300" viewBox="0 0 760 300"
+     font-family="'Segoe UI', 'Plus Jakarta Sans', sans-serif">
+<!-- Animated with SMIL, not CSS keyframes: a CSS animation of the geometry properties (width, y) is
+     silently ignored when an svg is rendered as an image, which is exactly how a README embeds it — the
+     seek bar measured 0 filled pixels at every timestamp. SMIL animates in that context, and no README
+     will run a script. Every element also starts at a sensible value, so a renderer that animates
+     nothing at all still shows a coherent panel rather than an empty bar. -->
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0"    stop-color="#0e1424"/>
+    <stop offset="0.55" stop-color="#141a2e"/>
+    <stop offset="1"    stop-color="#2a1430"/>
+  </linearGradient>
+  <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#1a2036" stop-opacity=".96"/>
+    <stop offset="1" stop-color="#10152a" stop-opacity=".96"/>
+  </linearGradient>
+  <linearGradient id="seekg" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0"   stop-color="#fbbf24"/>
+    <stop offset="0.5" stop-color="#fb7185"/>
+    <stop offset="1"   stop-color="#f472b6"/>
+  </linearGradient>
+  <linearGradient id="art" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#5b2a86"/>
+    <stop offset="0.5"  stop-color="#a03a7a"/>
+    <stop offset="1"    stop-color="#2a1040"/>
+  </linearGradient>
+  <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"    stop-color="#fde68a"/>
+    <stop offset="0.55" stop-color="#fb923c"/>
+    <stop offset="1"    stop-color="#e11d48"/>
+  </linearGradient>
+  <linearGradient id="dlg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#3b82f6"/>
+    <stop offset="1" stop-color="#2563eb"/>
+  </linearGradient>
+  <clipPath id="artClip"><rect x="52" y="30" width="78" height="78" rx="17"/></clipPath>
+  <clipPath id="sunClip"><rect x="52" y="30" width="78" height="46"/></clipPath>
+  <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+    <feGaussianBlur stdDeviation="26"/>
+  </filter>
+</defs>
+
+<rect width="760" height="300" rx="26" fill="url(#bg)"/>
+<circle cx="660" cy="120" r="120" fill="#f472b6" filter="url(#glow)" opacity=".34">
+  <animate attributeName="opacity" values=".30;.55;.30" dur="6s" repeatCount="indefinite"/>
+</circle>
+<circle cx="120" cy="230" r="110" fill="#6366f1" filter="url(#glow)" opacity=".26">
+  <animate attributeName="opacity" values=".22;.40;.22" dur="7.5s" repeatCount="indefinite"/>
+</circle>
+
+<!-- the pill's expanded panel -->
+<rect x="28" y="14" width="620" height="240" rx="30" fill="url(#panel)" stroke="#2b3352" stroke-width="1"/>
+
+<!-- album art -->
+<rect x="52" y="30" width="78" height="78" rx="17" fill="url(#art)"/>
+<g clip-path="url(#artClip)">
+  <circle cx="91" cy="74" r="21" fill="url(#sun)" clip-path="url(#sunClip)"/>
+  <g stroke="#f9a8d4" stroke-width="1.1" opacity=".75">
+    <path d="M52 84h78M52 92h78M52 100h78"/>
+    <path d="M91 78 L58 108M91 78 L124 108M91 78 L76 108M91 78 L106 108"/>
+  </g>
+  <rect x="52" y="30" width="78" height="78" rx="17" fill="none" stroke="#f0abfc" stroke-width="1" opacity=".45"/>
+</g>
+
+<text x="152" y="62" fill="#f4f7ff" font-size="21" font-weight="700">Midnight City</text>
+<text x="152" y="88" fill="#9aa4c4" font-size="15">M83 — Hurry Up, We're Dreaming</text>
+
+<!-- seek bar -->
+<rect x="52" y="126" width="538" height="6" rx="3" fill="#39405e"/>
+<rect x="52" y="126" width="205" height="6" rx="3" fill="url(#seekg)">
+  <animate attributeName="width" values="0;538" dur="24s" repeatCount="indefinite"/>
+</rect>
+<circle cx="257" cy="129" r="6" fill="#ffffff">
+  <animate attributeName="cx" values="52;590" dur="24s" repeatCount="indefinite"/>
+</circle>
+
+<text x="52" y="158" fill="#8b94b8" font-size="13">
+  <animate attributeName="opacity" values="1;1;0;0;0;0;0;0;1" dur="24s" repeatCount="indefinite" calcMode="discrete"/>
+  0:00
+</text>
+<text x="52" y="158" fill="#8b94b8" font-size="13" opacity="0">
+  <animate attributeName="opacity" values="0;0;1;1;0;0;0;0;0" dur="24s" repeatCount="indefinite" calcMode="discrete"/>
+  1:00
+</text>
+<text x="52" y="158" fill="#8b94b8" font-size="13" opacity="0">
+  <animate attributeName="opacity" values="0;0;0;0;1;1;0;0;0" dur="24s" repeatCount="indefinite" calcMode="discrete"/>
+  2:00
+</text>
+<text x="52" y="158" fill="#8b94b8" font-size="13" opacity="0">
+  <animate attributeName="opacity" values="0;0;0;0;0;0;1;1;0" dur="24s" repeatCount="indefinite" calcMode="discrete"/>
+  3:00
+</text>
+<text x="590" y="158" fill="#8b94b8" font-size="13" text-anchor="end">4:03</text>
+
+<!-- volume -->
+<path d="M56 190v10h7l9 7v-24l-9 7z" fill="#c8d0ea"/>
+<rect x="86" y="193" width="80" height="5" rx="2.5" fill="#39405e"/>
+<rect x="86" y="193" width="50" height="5" rx="2.5" fill="#dbe2f5"/>
+
+<!-- transport -->
+<g fill="#e8edfb">
+  <rect x="262" y="184" width="3" height="22" rx="1.5"/>
+  <path d="M281 184v22l-16-11z"/>
+  <rect x="313" y="184" width="6" height="22" rx="2"/>
+  <rect x="325" y="184" width="6" height="22" rx="2"/>
+  <path d="M363 184v22l16-11z"/>
+  <rect x="379" y="184" width="3" height="22" rx="1.5"/>
+</g>
+
+<!-- a live equaliser: the one thing a still frame can never show -->
+<g fill="url(#seekg)">
+  <rect x="470" y="244" width="5" height="7" rx="2.5">
+    <animate attributeName="height" values="7;20;7"  dur="1.1s" repeatCount="indefinite"/>
+    <animate attributeName="y"      values="244;231;244" dur="1.1s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="481" y="234" width="5" height="17" rx="2.5">
+    <animate attributeName="height" values="17;6;17" dur="0.9s" repeatCount="indefinite"/>
+    <animate attributeName="y"      values="234;245;234" dur="0.9s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="492" y="240" width="5" height="11" rx="2.5">
+    <animate attributeName="height" values="11;22;11" dur="1.3s" repeatCount="indefinite"/>
+    <animate attributeName="y"      values="240;229;240" dur="1.3s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="503" y="231" width="5" height="20" rx="2.5">
+    <animate attributeName="height" values="20;8;20" dur="1.0s" repeatCount="indefinite"/>
+    <animate attributeName="y"      values="231;243;231" dur="1.0s" repeatCount="indefinite"/>
+  </rect>
+</g>
+
+<!-- the download chip that lives beside the pill -->
+<rect x="656" y="14" width="76" height="86" rx="26" fill="url(#panel)" stroke="#2b3352" stroke-width="1"/>
+<rect x="668" y="26" width="52" height="52" rx="15" fill="url(#dlg)"/>
+<g stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+  <path d="M694 37v20M685 50l9 9 9-9"/>
+  <path d="M684 67h20"/>
+</g>
+</svg>
