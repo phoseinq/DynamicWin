@@ -498,8 +498,7 @@ internal sealed class NotchController
         _chimedHour = t.Hour;
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
-            App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-            Body = Almanac.Detail(t),
+            App = Almanac.Label, Title = Almanac.Headline(t), Body = Almanac.Detail(t),
             Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
         });
     }
@@ -534,8 +533,7 @@ internal sealed class NotchController
                     Almanac.Poke();
                     _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
                     {
-                        App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-                        Body = Almanac.Detail(t),
+                        App = Almanac.Label, Title = Almanac.Headline(t), Body = Almanac.Detail(t),
                         Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
                     });
                     break;
@@ -1717,8 +1715,9 @@ internal sealed class NotchController
 
         new Halo.Notifications.NotifItem
         {
-            App = "Clock", Title = "1:00 AM",
-            Body = Almanac.Detail(DateTime.Now, "Tehran", new Almanac.Weather(27, 0), metric: true, jalali: true),
+            App = "Tehran",
+            Title = Almanac.Headline(DateTime.Today.AddHours(1), new Almanac.Weather(27, 0, Day: false), metric: true),
+            Body = Almanac.Detail(DateTime.Today.AddHours(1), jalali: true),
             Icon = LocalBadge(0xE708, 232, 32f),
         },
     };

@@ -492,18 +492,45 @@ internal static class Fx
 
     private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
 
-        internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx)
+        internal static Color SlotColor(string? slot) => slot switch
+    {
+        "running" => Color.FromArgb(62, 207, 92),
+        "reading" or "peeking" or "fetching" or "searching"
+            => Color.FromArgb(53, 208, 232),
+        "writing" or "patching" or "publishing"
+            => Color.FromArgb(169, 139, 255),
+
+        "digging" or "reviewing" or "planning" or "plotting" or "skill"
+            => Color.FromArgb(191, 215, 62),
+
+        "delegating" or "consulting" or "watching"
+            => Color.FromArgb(190, 80, 175),
+        "asking" => Color.FromArgb(255, 95, 138),
+        "unknown" => Color.FromArgb(255, 150, 26),
+        "compacting" => Color.FromArgb(91, 157, 255),
+        _ => Color.FromArgb(62, 207, 92),
+    };
+
+        internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx, bool hueIsFree = false)
     {
 
         float squeeze = MathF.Max(Ramp(ctx.ContextFrac, 0.55f, 0.95f), Ramp(ctx.UsageFrac, 0.70f, 0.98f));
         float drag = ctx.Running is { } r ? Ramp((float)r.TotalMinutes, 2f, 12f) : 0f;
+        float lift = MathF.Max(squeeze, 0.55f * drag);
+        var c = state;
 
-        var target = HueLerp(UsageAmber, RingHot, squeeze);
+        if (hueIsFree)
+        {
+            var target = HueLerp(UsageAmber, RingHot, squeeze);
+            c = HueLerp(c, target, MathF.Max(0.85f * squeeze, 0.30f * drag * (1f - squeeze)));
+        }
 
-        float pull = MathF.Max(0.85f * squeeze, 0.25f * drag * (1f - squeeze));
-        var c = HueLerp(state, target, pull);
+        RgbToHsv(c, out float h, out float s, out float v);
+        c = HsvToRgb(h,
+            Math.Clamp(s + (hueIsFree ? 0f : 0.10f) * lift, 0f, 1f),
+            Math.Clamp(v + 0.10f * lift, 0f, 1f));
 
-        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.86f);
+        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.93f);
 
         return Color.FromArgb(state.A, c.R, c.G, c.B);
     }

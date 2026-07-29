@@ -45,7 +45,7 @@
 
 ### [⬇️ دانلود برای ویندوز](https://github.com/phoseinq/DynamicWin/releases/latest)
 
-<sub>ویندوز ۱۱ · x64</sub>
+<sub>ویندوز ۱۱ · x64 · برای همین کاربر، بدونِ پرامپتِ ادمین · خودش بی‌صدا آپدیت می‌شود</sub>
 
 <sub>`DynamicWinSetup.exe` را بردار برای نصب، یا `DynamicWinPortable.zip` را برای اجرای بدونِ نصب.</sub>
 

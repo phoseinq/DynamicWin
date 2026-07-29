@@ -145,16 +145,20 @@ internal static class Almanac
     private static string Temp(int c, bool metric)
         => (metric ? c : (int)Math.Round(c * 9 / 5.0 + 32)) + "°";
 
-        internal static string Detail(DateTime now, string? place, Weather? w, bool metric, bool jalali)
-    {
-        var s = now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
-            + (jalali && JalaliDate(now) is { Length: > 0 } j
-                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
-        if (place is { Length: > 0 }) s += " · " + place;
+        internal static string Label => Place is { Length: > 0 } p ? p : "Clock";
 
-        if (w is not null) s += (place is { Length: > 0 } ? " " : " · ") + Temp(w.TempC, metric);
-        return s;
+        internal static string Headline(DateTime now, Weather? w, bool metric)
+    {
+        var t = now.ToString("h:mm tt", CultureInfo.InvariantCulture);
+        return w is null ? t : t + " · " + Temp(w.TempC, metric);
     }
 
-        internal static string Detail(DateTime now) => Detail(now, Place, Latest, Metric, SolarHijri);
+        internal static string Detail(DateTime now, bool jalali)
+        => now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
+            + (jalali && JalaliDate(now) is { Length: > 0 } j
+                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
+
+        internal static string Headline(DateTime now) => Headline(now, Latest, Metric);
+
+    internal static string Detail(DateTime now) => Detail(now, SolarHijri);
 }

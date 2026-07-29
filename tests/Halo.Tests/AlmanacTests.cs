@@ -12,47 +12,44 @@ public class AlmanacTests
 {
     private static readonly DateTime Afternoon = new(2026, 7, 30, 15, 0, 0);   // a Thursday
 
+    // Four facts used to queue up on one line - "Thursday 30 Jul · 8 Mordad · Tehran · 34°C clear" - while
+    // the banner had a third row sitting empty. One fact per row now, and exactly one separator survives.
     [Fact]
-    public void TheDayIsThereEvenWhenNothingElseIs()
-        => Assert.Equal("Thursday, 30 Jul", Almanac.Detail(Afternoon, null, null, metric: true, jalali: false));
-
-    [Fact]
-    public void EachKnownPartIsAddedAndNoUnknownOneIs()
+    public void EachRowCarriesOneThing()
     {
-        Assert.Equal("Thursday, 30 Jul · Tehran",
-            Almanac.Detail(Afternoon, "Tehran", null, metric: true, jalali: false));
-        Assert.Equal("Thursday, 30 Jul · Tehran 34°",
-            Almanac.Detail(Afternoon, "Tehran", new Almanac.Weather(34, 0), metric: true, jalali: false));
+        Assert.Equal("1:00 PM · 34°", Almanac.Headline(Afternoon.Date.AddHours(13), new Almanac.Weather(34, 0), metric: true));
+        Assert.Equal("Thursday, 8 Mordad", Almanac.Detail(Afternoon, jalali: true));
+        Assert.Equal("Thursday, 30 Jul", Almanac.Detail(Afternoon, jalali: false));
     }
 
-    // it was "Thursday 30 Jul · 8 Mordad · Tehran · 34°C clear" - three separators, the same day said
-    // twice, and a word for something the badge now draws
     [Fact]
-    public void TheLineCarriesOneDateOneSeparatorAndNoSkyWord()
+    public void NothingIsSaidTwiceAndTheSkyIsNotSaidAtAll()
     {
-        var line = Almanac.Detail(Afternoon, "Tehran", new Almanac.Weather(34, 0), metric: true, jalali: true);
-        Assert.Equal("Thursday, 8 Mordad · Tehran 34°", line);
-        Assert.Equal(1, line.Count(c => c == '·'));
-        Assert.DoesNotContain("Jul", line);          // one calendar, the one the place keeps
-        Assert.DoesNotContain("clear", line);        // the sky is the badge
+        var whole = Almanac.Headline(Afternoon, new Almanac.Weather(34, 0), metric: true)
+            + " " + Almanac.Detail(Afternoon, jalali: true);
+        Assert.Equal(1, whole.Count(c => c == '·'));
+        Assert.DoesNotContain("Jul", whole);      // one calendar, the one the place keeps
+        Assert.DoesNotContain("clear", whole);    // the sky is the badge
     }
+
+    [Fact]
+    public void WithNoReadingTheTitleIsJustTheClock()
+        => Assert.Equal("3:00 PM", Almanac.Headline(Afternoon, null, metric: true));
 
     [Fact]
     public void AnImperialMachineGetsFahrenheit()
-        => Assert.Contains("93°",
-            Almanac.Detail(Afternoon, null, new Almanac.Weather(34, 0), metric: false, jalali: false));
+        => Assert.Contains("93°", Almanac.Headline(Afternoon, new Almanac.Weather(34, 0), metric: false));
 
+    // the place is constant, so it goes where the app name goes rather than costing a field every hour
     [Fact]
-    public void WithNoPlaceTheTemperatureStillGetsItsOwnSeparator()
-        => Assert.Equal("Thursday, 30 Jul · 34°",
-            Almanac.Detail(Afternoon, null, new Almanac.Weather(34, 61), metric: true, jalali: false));
+    public void TheLabelIsThePlaceOrTheFallback()
+        => Assert.False(string.IsNullOrWhiteSpace(Almanac.Label));
 
     [Fact]
     public void TheSolarHijriDateIsAConversionNotAnEstimate()
     {
         Assert.Equal("8 Mordad", Almanac.JalaliDate(Afternoon));
-        Assert.Contains("8 Mordad",
-            Almanac.Detail(Afternoon, "Tehran", null, metric: true, jalali: true));
+        Assert.Contains("8 Mordad", Almanac.Detail(Afternoon, jalali: true));
     }
 
     // the sky is a glyph and a hue now. What must hold is that every code lands on a glyph that exists in

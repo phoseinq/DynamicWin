@@ -15,6 +15,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static readonly Color Green = Color.FromArgb(62, 207, 92);
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
     private static readonly Color Red = Color.FromArgb(229, 72, 77);
+    private static readonly Color Mint = Color.FromArgb(82, 224, 163);
     private static readonly Color Track = Color.FromArgb(38, 255, 255, 255);
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
@@ -751,15 +752,20 @@ internal sealed class ClaudeCodeWidget : IWidget
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White
 
-         : st?.State == "waiting_input" ? Amber
+         : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
-         : Shown(st) == "working" ? (string.IsNullOrEmpty(st?.CurrentTool) ? Amber : Green)
+         : JustCompacted(st) ? Mint
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
          : White;
 
     private Color RingColor(CcStatus? st)
     {
         var b = RingBase(st);
-        return RingIsTheMessage(st) ? b : Fx.MoodRing(b, Mood(st));
+        if (RingIsTheMessage(st)) return b;
+
+        bool hueIsFree = st?.State != "waiting_input"
+            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+        return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 
     private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
@@ -807,21 +813,30 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string? OutageText() =>
         NetMon.NetDown ? Moods.Line("netError") : NetMon.ApiDown ? Moods.Line("apiError") : null;
 
-    private static string ToolVerb(string? tool, in MoodContext ctx) => tool switch
+        internal static string? ToolSlot(string? tool) => tool switch
     {
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => Moods.Line("writing", ctx),
-        "Read" => Moods.Line("reading", ctx),
-        "Bash" or "PowerShell" => Moods.Line("running", ctx),
-        "Grep" or "Glob" => Moods.Line("digging", ctx),
-        "WebFetch" => Moods.Line("fetching", ctx),
-        "WebSearch" => Moods.Line("searching", ctx),
-        "Task" or "Agent" => Moods.Line("delegating", ctx),
-        "TodoWrite" => Moods.Line("planning", ctx),
-        "SlashCommand" or "Skill" => Moods.Line("skill", ctx),
-        "AskUserQuestion" => Moods.Line("asking", ctx),
-        null or "" => Moods.Line("unknown", ctx),
-        _ => tool!.ToLowerInvariant() + "…",
+        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing",
+        "Read" => "reading",
+        "Bash" or "PowerShell" or "KillShell" => "running",
+        "BashOutput" or "Monitor" => "watching",
+        "Grep" or "Glob" or "ToolSearch" => "digging",
+        "WebFetch" => "fetching",
+        "WebSearch" => "searching",
+        "Task" or "Agent" or "SendMessage" => "delegating",
+        "TodoWrite" or "TaskCreate" or "TaskUpdate" or "ExitPlanMode" or "EnterPlanMode"
+            or "ScheduleWakeup" or "CronCreate" => "planning",
+        "SlashCommand" or "Skill" => "skill",
+        "AskUserQuestion" => "asking",
+        "ReportFindings" => "reviewing",
+        "Artifact" or "SendUserFile" => "publishing",
+        null or "" => "unknown",
+
+        _ when tool.StartsWith("mcp__", StringComparison.Ordinal) => "consulting",
+        _ => null,
     };
+
+    private static string ToolVerb(string? tool, in MoodContext ctx)
+        => ToolSlot(tool) is { } slot ? Moods.Line(slot, ctx) : Moods.PrettyTool(tool);
 
     private static TimeSpan? Running(CcStatus? st) =>
         ParseTime(st?.StartedAt) is { } t ? DateTimeOffset.UtcNow - t : null;

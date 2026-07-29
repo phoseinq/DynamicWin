@@ -95,6 +95,7 @@ internal static class Moods
             "digging…", "rummaging…", "spelunking…", "sifting…", "prospecting…", "foraging…",
             "poking around…", "on the trail…", "combing code…", "raking through…",
             "torch and gloves…", "under the floor…", "behind the panel…", "hood's up…",
+            "hmm, where…", "it's in here…",
         },
         ["fetching"] = new[]
         {
@@ -130,12 +131,14 @@ internal static class Moods
             "asking you :)", "your turn", "your move", "over to you", "needs a call",
             "a question", "wants a word", "your say-so", "needs a hand", "hold this?",
         },
+
         ["unknown"] = new[]
         {
             "hmm…", "thinking…", "considering…", "mulling it…", "chewing on it…",
             "figuring it out…", "reasoning…", "weighing it up…", "deliberating…", "sizing it up…",
             "having a think…", "turning it over…",
             "measuring up…", "eyeing it up…", "head-scratching…",
+            "hmm, ok…", "erm…", "uhh…", "let's see…", "right then…", "so…",
         },
         ["compacting"] = new[]
         {
@@ -152,6 +155,30 @@ internal static class Moods
         {
             "plotting…", "replanning…", "revising…", "reordering…", "re-scoping…",
             "shuffling tasks…", "redrawing it…", "new blueprint…",
+        },
+
+        ["watching"] = new[]
+        {
+            "watching…", "keeping an eye…", "on the dial…", "waiting on it…",
+            "watching the pot…", "tailing it…",
+        },
+        ["reviewing"] = new[]
+        {
+            "reviewing…", "checking the work…", "inspecting…", "snagging…", "second look…",
+            "going over it…",
+        },
+        ["publishing"] = new[]
+        {
+            "publishing…", "shipping it…", "out the door…", "posting it…", "handing it over…",
+        },
+        ["consulting"] = new[]
+        {
+            "consulting…", "asking a tool…", "asking next door…", "phoning a friend…",
+            "calling the desk…",
+        },
+        ["peeking"] = new[]
+        {
+            "peeking o.o", "having a peek…", "eyes on the shot…", "taking a look…",
         },
 
         ["writing" + LongSuffix] = new[]
@@ -196,6 +223,7 @@ internal static class Moods
         ["unknown" + LongSuffix] = new[]
         {
             "still thinking…", "deep thought…", "long think…", "cogitating…", "one minute…",
+            "hmmm…", "hmm, tricky…", "erm, hang on…",
         },
         ["compacting" + LongSuffix] = new[]
         {
@@ -250,6 +278,7 @@ internal static class Moods
         ["unknown" + AgesSuffix] = new[]
         {
             "deep in thought…", "still cooking…", "hard problem…",
+            "hmmmm…", "well, hmm…", "still erm-ing…",
         },
         ["compacting" + AgesSuffix] = new[]
         {
@@ -270,7 +299,7 @@ internal static class Moods
         },
         ["unknown" + TightSuffix] = new[]
         {
-            "no room to think…", "desk is buried…", "bench is covered…",
+            "no room to think…", "desk is buried…", "bench is covered…", "hmm, no room…",
         },
         ["running" + TightSuffix] = new[]
         {
@@ -308,7 +337,7 @@ internal static class Moods
 
         ["unknown" + AgainSuffix] = new[]
         {
-            "same drill…", "on repeat…",
+            "same drill…", "on repeat…", "hmm, again…",
         },
         ["running" + AgainSuffix] = new[]
         {
@@ -439,6 +468,21 @@ internal static class Moods
         var picked = Pick(key, stale);
         lock (Gate) Held[key] = (picked, now);
         return picked;
+    }
+
+        internal static string PrettyTool(string? tool)
+    {
+        var t = (tool ?? "").Trim();
+        if (t.Length == 0) return Fixed("unknown");
+        if (t.StartsWith("mcp__", StringComparison.Ordinal))
+        {
+            var parts = t.Split("__", StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2) t = parts[1];
+        }
+        t = t.Replace('_', ' ').Replace('-', ' ').Trim().ToLowerInvariant();
+        if (t.Length == 0) return Fixed("unknown");
+        if (t.Length > MaxWidth - 1) t = t.Substring(0, MaxWidth - 1).TrimEnd();
+        return t + "…";
     }
 
         internal static string Pick(string key, string? avoid = null)
