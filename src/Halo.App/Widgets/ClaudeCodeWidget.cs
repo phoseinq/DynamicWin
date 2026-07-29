@@ -1,9 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using Halo.Agents;
 using Halo.ClaudeCode;
 
 namespace Halo.Widgets;
@@ -70,14 +71,27 @@ internal sealed class ClaudeCodeWidget : IWidget
         => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
-        ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
+        ? new AgentNotice(Shown(status), ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
     public IEnumerable<int> OwnerPids => Live is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
-    // text-emerge animation + the compacting pulse both need frames while collapsed
-    public bool Animating => _appear < 1f || Compacting(Live);
+    // text-emerge animation + the compacting pulse both need frames while collapsed. The flag's ripple needs
+    // them too, but only while the pointer is actually on the panel: pinned open with the mouse elsewhere,
+    // nobody is looking at it, and a permanent repaint for a flourish nobody can see is not worth the wake-ups.
+    // RingsSettling keeps frames coming after the pointer leaves, or the lift would freeze half-raised and
+    // the next hover would start from wherever it stopped.
+    public bool Animating => _appear < 1f || Compacting(Live)
+        || (_wasOpen && (WidgetInput.Over || RingsSettling));
 
     private string _shownKey = "";
     private float _appear = 1f;
+
+    // per-ring hover lift, eased; _ringTick is the wall clock the easing is measured against
+    private readonly float[] _ringLift = new float[3];
+    private long _ringTick;
+    private bool RingsSettling
+    {
+        get { foreach (var v in _ringLift) if (v > 0.01f) return true; return false; }
+    }
 
     private static Bitmap? LoadIcon()
     {
@@ -89,7 +103,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         catch { return null; }
     }
 
-    private bool CanCancel => Live is { State: "working", Pid: > 0 };
+    private bool CanCancel => Live is { Pid: > 0 } st && Shown(st) == "working";
 
     private bool _wasOpen;
 
@@ -139,19 +153,20 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         // balanced zones: verb hugs the icon, the timer owns the right edge — text length changes
         // never leave a lopsided gap. Moods (idle/offline) centre in the whole free space instead.
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        var mood = Mood(st);
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
+            "working" => ToolVerb(st?.CurrentTool, mood),
+            "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
-            _ => IdleMood(st),
+            _ => IdleMood(st, mood),
         });
         string el = LimitHit ? LimitReset() : Elapsed(st); // limit shows regardless of session state
         if (Compacting(st) && !LimitHit && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
-        bool busy = st?.State == "working" || Compacting(st) || LimitHit;
+        bool busy = Shown(st) == "working" || Compacting(st) || LimitHit;
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
@@ -192,6 +207,41 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string? _cancelledCompactKey; // startedAt of a compact the user Esc'd out of
 
     public static void MarkCompactCancelled(string? startedAt) => _cancelledCompactKey = startedAt;
+
+    private static string? _cancelledTurnKey; // startedAt of a turn the user interrupted
+
+    public static void MarkTurnCancelled(string? startedAt) => _cancelledTurnKey = startedAt;
+
+    // How long a tool-less "working" is believed. Long enough to cover a thinking block, short enough
+    // that a stuck pill fixes itself while you are still looking at it.
+    internal const int SettleAfterSeconds = 180;
+
+    /// <summary>
+    /// Whether a turn the file still calls "working" is actually over. Interrupting a turn leaves no
+    /// trace at all: Claude Code writes status on lifecycle events and an Esc is not one, so the last
+    /// thing written stays "working" with no tool - and a pid-backed status counts as live for as long
+    /// as the process runs, so the pill sat on "hmm…" forever. Reported for both the Esc key and the
+    /// panel's own stop button, which is not a coincidence: the button injects Esc, so the two paths
+    /// are the same path and neither produced a hook.
+    ///
+    /// Two ways out, because there are two ways in. The button and the Esc watcher latch the turn's own
+    /// startedAt, which is exact and self-clearing - the next turn carries a new stamp. Nothing can see
+    /// an Esc typed into a terminal that is not the foreground agent host, so the backstop is time: a
+    /// "working" with no tool name that has not been written to in SettleAfterSeconds is treated as
+    /// over. It can only ever catch the thinking gap, because while a tool runs its name is on the
+    /// status - and being wrong costs a wrongly-idle pill until the next hook, not a permanently stuck one.
+    /// </summary>
+    internal static bool TurnOver(CcStatus? st, DateTimeOffset now)
+    {
+        if (st is not { State: "working" }) return false;
+        if (st.StartedAt is { Length: > 0 } && st.StartedAt == _cancelledTurnKey) return true;
+        if (!string.IsNullOrEmpty(st.CurrentTool)) return false;
+        return ParseTime(st.UpdatedAt) is { } u && now - u > TimeSpan.FromSeconds(SettleAfterSeconds);
+    }
+
+    // the state the panel should BELIEVE, which is not always the one on disk
+    private static string? Shown(CcStatus? st) =>
+        TurnOver(st, DateTimeOffset.UtcNow) ? "idle" : st?.State;
 
     private static bool Compacting(CcStatus? st) =>
         st?.State == "compacting" && st.StartedAt != _cancelledCompactKey
@@ -236,23 +286,65 @@ internal sealed class ClaudeCodeWidget : IWidget
     // 18px text in one row and giving both the same y puts their baselines ~4px apart, which is exactly
     // the "nothing lines up" the layout kept being accused of - and it is invisible until you look for it.
     // TextTop() converts a baseline into the top-left GDI+ actually wants, using the font's own ascent.
+    // Past this the answers measurably drift and the fix is /compact, so it is worth one banner. Public
+    // because the controller raises that banner and the panel colours its figures off the same number -
+    // two places disagreeing about "nearly full" would be worse than either threshold.
+    internal const float ContextWarnAt = 0.80f;
+
+    // Context has its own ramp: 0 blue while there is room, 1 amber on the approach, 2 red past the line
+    // where /compact stops being optional. Shares ContextWarnAt with the banner on purpose - the figure
+    // turning red and the banner arriving are the same event, and pure so both can be pinned by a test.
+    internal static int ContextBand(float frac)
+        => frac >= ContextWarnAt ? 2 : frac >= ContextWarnAt - 0.15f ? 1 : 0;
+
+    // The one place that turns a context fraction into a colour. It used to be two: the arc was a flat
+    // Blue and the figure ran the band ramp, so at 86% the panel showed a red number inside a blue ring.
+    // A negative fraction is "no session", which is the track's own grey job - the arc is skipped
+    // entirely at that point, so the colour here only has to be something harmless.
+    internal static Color ContextColour(double frac)
+        => frac < 0 ? Blue : ContextBand((float)frac) switch { 2 => Red, 1 => Amber, _ => Blue };
+
+    // (session id, fraction) for the alert. Null id = nothing live to warn about.
+    internal (string? id, float frac) ContextState()
+    {
+        var st = Live;
+        if (st?.Session is not { ContextMax: > 0 } ses) return (null, -1f);
+        var id = st.Pid + ":" + st.StartedAt; // pids get recycled, so the start stamp is what makes it a session
+        return (id, (float)Math.Clamp((double)ses.ContextUsed / ses.ContextMax, 0, 1));
+    }
+
     private const int Pad = 22;
     private const float ColR = 356f, RightEdge = 538f;   // right column: graph, exit, freshness
     private const float RingCx = 84f, RingCy = 132f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
     private const float KeyX = 178f, KeyValX = 268f;     // key captions and their figures, both fixed
     private const float Row0 = 96f, RowPitch = 42f;      // baselines of the three key rows
 
+    // Rounded, and that rounding is the whole reason the small rows got legible. AntiAliasGridFit hints the
+    // glyph outlines onto the PIXEL GRID, and it was being handed a fractional origin: the ascent ratio puts
+    // this at .915 of a pixel and the x comes out of MeasureString just as fractional, so every hinted stem
+    // was resampled across two pixels and arrived soft and uneven. The error is a fixed fraction of a pixel,
+    // so the smaller the font the larger the share of the glyph it eats - which is exactly why the 12-13px
+    // rows looked worse than the title. Costs at most half a pixel of layout, buys back the hinting.
     private static float TextTop(Font f, float baseline)
-        => baseline - f.FontFamily.GetCellAscent(f.Style) / (float)f.FontFamily.GetEmHeight(f.Style) * f.Size;
+        => MathF.Round(baseline - f.FontFamily.GetCellAscent(f.Style) / (float)f.FontFamily.GetEmHeight(f.Style) * f.Size);
 
     private static void Text(Graphics g, string t, Font f, Brush b, float x, float baseline)
-        => g.DrawString(t, f, b, x, TextTop(f, baseline), StringFormat.GenericTypographic);
+        => g.DrawString(t, f, b, MathF.Round(x), TextTop(f, baseline), StringFormat.GenericTypographic);
+
+    // typographic measure, so laying runs side by side matches what DrawString actually advanced - the
+    // default MeasureString pads and the seams drift apart. MeasureTrailingSpaces because a run ending in
+    // the separator's spaces otherwise measures short and the next run slides left onto the dot.
+    private static readonly StringFormat AdvanceFmt =
+        new(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.MeasureTrailingSpaces };
+
+    private static float Advance(Graphics g, string t, Font f)
+        => t.Length == 0 ? 0f : g.MeasureString(t, f, System.Drawing.Point.Empty, AdvanceFmt).Width;
 
     private static void TextClipped(Graphics g, string t, Font f, Brush b, float x, float baseline, float w)
     {
         using var sf = new StringFormat(StringFormat.GenericTypographic)
         { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-        g.DrawString(t, f, b, new RectangleF(x, TextTop(f, baseline), w, f.Size * 1.6f), sf);
+        g.DrawString(t, f, b, new RectangleF(MathF.Round(x), TextTop(f, baseline), w, f.Size * 1.6f), sf);
     }
 
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
@@ -260,8 +352,10 @@ internal sealed class ClaudeCodeWidget : IWidget
         using var title = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
         using var line = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using var keyCap = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
-        using var keyVal = new Font("Segoe UI Semibold", 18f, GraphicsUnit.Pixel);
-        using var keySub = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+        using var keyVal = new Font("Segoe UI Semibold", 16f, GraphicsUnit.Pixel);
+        // whole pixels, not 12.5: a half-pixel em cannot be grid-fitted, so the hinter rounds the size and
+        // then every advance lands between pixels anyway. The three sub-13px fonts here were all 12.5.
+        using var keySub = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
         var state = RingColor(st); // yellow while thinking, green on a tool - same as the collapsed ring
@@ -270,31 +364,112 @@ internal sealed class ClaudeCodeWidget : IWidget
         // shifts between them - red stop while a prompt can be interrupted, plain lamp otherwise.
         DrawCancel(g, w, h, a, state);
         using (var tb = new SolidBrush(Mul(White, a)))
-            Text(g, "Claude Code", title, tb, Pad + 38, 40);
-        string act = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
-            ? st.Message! : Activity(st); // show the actual question while Claude waits
-        using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-            TextClipped(g, act, line, ab, Pad + 38, 62, ColR - Pad - 46);
+            Text(g, "Claude Code", title, tb, 84, 40);
+        // The line under the title is down to ONE job: the question Claude is actually waiting on. The verbs
+        // ("hmmm", "googling :P"), the moods and the elapsed clock all left - narrating that something is
+        // running, in the panel you opened because something is running, and the lamp beside the title
+        // already says so in colour. A question is the one thing here that is addressed to you.
+        if (st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message))
+            using (var ab = new SolidBrush(Mul(Amber, a)))
+                TextClipped(g, st.Message!, line, ab, 84, 62, ColR - 92);
 
         // ---- the object: three arcs, outer to inner - 5-hour, weekly, context
         double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
+        // One colour for the context reading, decided once. The arc used to be a flat Blue while the
+        // figure below it went through ContextBand's blue/amber/red, so at 86% the number was red and
+        // the ring it belongs to was still blue - the same value painted two different colours in the
+        // same panel. The band, not UsageColor: context has its own thresholds because they are the
+        // ones the /compact banner fires on, and the arc has to agree with the warning, not with the
+        // usage rows beside it.
+        var ctxCol = ContextColour(ctxFrac);
         var rings = new (float frac, Color col)[]
         {
             (Limits.FiveHour, Limits.FiveHour >= 0 ? UsageColor(Limits.FiveHour) : Dim),
             (Limits.Week,     Limits.Week     >= 0 ? UsageColor(Limits.Week)     : Dim),
-            ((float)ctxFrac,  Blue),
+            ((float)ctxFrac,  ctxCol),
         };
+        // Which band the pointer is inside, by distance from the centre - the rings are concentric, so the
+        // radius alone answers it and there is no need to test three shapes.
+        int hotRing = -1;
+        if (WidgetInput.Over)
+        {
+            float dx = WidgetInput.Mouse.X - RingCx, dy = WidgetInput.Mouse.Y - RingCy;
+            float dist = MathF.Sqrt(dx * dx + dy * dy);
+            for (int i = 0; i < rings.Length; i++)
+                if (MathF.Abs(dist - (RingOuter - i * RingStep)) <= RingBand / 2f + 3f) { hotRing = i; break; }
+        }
+
+        // Eased towards the target with a time constant rather than a per-frame step, so the lift takes the
+        // same ~0.09s whatever fps tier the pill is running at.
+        long ringNow = Environment.TickCount64;
+        float rdt = _ringTick == 0 ? 1f / 60f : Math.Clamp((ringNow - _ringTick) / 1000f, 0.001f, 0.1f);
+        _ringTick = ringNow;
+        for (int i = 0; i < _ringLift.Length; i++)
+            _ringLift[i] += ((hotRing == i ? 1f : 0f) - _ringLift[i]) * (1f - MathF.Exp(-rdt / 0.09f));
+
         for (int i = 0; i < rings.Length; i++)
         {
+            float lift = _ringLift[i];
             float r = RingOuter - i * RingStep;
-            using (var track = new Pen(Mul(Track, a), RingBand))
+            float band = RingBand + 3.2f * lift;
+            using (var track = new Pen(Mul(Track, a * (1f + 0.5f * lift)), band))
                 g.DrawArc(track, RingCx - r, RingCy - r, r * 2, r * 2, 0, 360);
             // an unfetched budget draws its track only: an arc at zero would read as "nothing spent yet"
             if (rings[i].frac < 0) continue;
             float sweep = Math.Clamp(rings[i].frac, 0f, 1f) * 360f;
             if (sweep <= 0.5f) continue;
-            using var arc = new Pen(Mul(rings[i].col, a), RingBand) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            // the unhovered rings step back rather than the hovered one merely stepping forward: dimming the
+            // others is what makes one of three concentric arcs actually read as picked out
+            float other = hotRing >= 0 ? 1f - 0.35f * (1f - lift) : 1f;
+            using var arc = new Pen(Mul(rings[i].col, a * other), band) { StartCap = LineCap.Round, EndCap = LineCap.Round };
             g.DrawArc(arc, RingCx - r, RingCy - r, r * 2, r * 2, -90f, sweep);
+        }
+
+        // The readout goes in the hole at the centre of the cluster, which was empty while the numbers it
+        // belongs to sat over in the next column. Fades in with the same lift that thickens the ring, so
+        // pointing at an arc and reading its figure are one movement.
+        float show = 0f;
+        int shown = -1;
+        for (int i = 0; i < _ringLift.Length; i++)
+            if (_ringLift[i] > show) { show = _ringLift[i]; shown = i; }
+        if (shown >= 0 && show > 0.01f)
+        {
+            var (rf, rc) = rings[shown];
+            string big = rf < 0 ? "\u2014" : $"{Math.Clamp(rf, 0f, 1f) * 100:0}%";
+            string cap2 = shown switch
+            {
+                0 => Limits.FiveHour < 0 ? "5-hour  \u00b7  not fetched"
+                    : Limits.CreditsUsed > 0 ? $"5-hour  \u00b7  {ResetIn(Limits.FiveHourReset)} left  \u00b7  ${Limits.CreditsUsed:0.00}"
+                    : $"5-hour  \u00b7  {ResetIn(Limits.FiveHourReset)} left",
+                1 => Limits.Week >= 0 ? $"weekly  \u00b7  {ResetIn(Limits.WeekReset)} left" : "weekly  \u00b7  not fetched",
+                _ => st?.Session is { ContextMax: > 0 } ses
+                    ? $"context  \u00b7  {ses.ContextUsed / 1000}K of {ses.ContextMax / 1000}K" : "context  \u00b7  no session",
+            };
+            // The hole is a CIRCLE, so the room for text is a chord, not the bounding box: at radius 16 that
+            // is ~30px across the middle and less above and below. A fixed 15px overflowed "42%" onto the
+            // inner arc and would have been worse at "100%", so the size is picked by measuring down a
+            // ladder until the figure fits the chord at its own height.
+            float hole = RingOuter - 2 * RingStep - RingBand / 2f - 2f;
+            Font centreF = new("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
+            foreach (float px in new[] { 15f, 14f, 13f, 12f, 11f, 10f, 9f })
+            {
+                var probe = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+                float half = probe.Height / 2f;
+                float chord = 2f * MathF.Sqrt(MathF.Max(1f, hole * hole - half * half));
+                if (Advance(g, big, probe) <= chord || px <= 9f) { centreF.Dispose(); centreF = probe; break; }
+                probe.Dispose();
+            }
+            using var _centreF = centreF;
+            using var underF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+            using var mid = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+            using (var cb = new SolidBrush(Mul(rf < 0 ? Dim : rc, a * show)))
+                g.DrawString(big, centreF, cb, new RectangleF(RingCx - 30, RingCy - 11, 60, 22), mid);
+            using (var ub = new SolidBrush(Mul(Dim, a * show * 0.95f)))
+                // clear of the outer arc's BAND, not just its radius - and of the extra 3.2 the band gains
+                // when that arc is the one being hovered, which is exactly when this line is on screen
+                g.DrawString(cap2, underF, ub,
+                    new RectangleF(RingCx - 74, RingCy + RingOuter + RingBand / 2f + 7f, 148, 16), mid);
         }
 
         // ---- the key. Caption and figure share a baseline; the sub-line sits on the next one down.
@@ -302,145 +477,118 @@ internal sealed class ClaudeCodeWidget : IWidget
             && WidgetInput.Mouse.X >= KeyX - 20 && WidgetInput.Mouse.X < ColR - 8
             && WidgetInput.Mouse.Y >= Row0 + i * RowPitch - 16 && WidgetInput.Mouse.Y < Row0 + i * RowPitch + 20;
 
-        void Key(int i, Color swatch, string cap, string value, string sub)
+        // The caption stays grey and only the FIGURE takes colour - the label is not the reading, and
+        // colouring both turns the row into a block of one hue you have to decode. `hot` does the same to
+        // one token inside the sub-line, so "7% used" can carry the state while "of 1M" stays quiet.
+        void Key(int i, Color swatch, string cap, string value, string sub, Color? figure = null,
+                 string? hot = null)
         {
             float b1 = Row0 + i * RowPitch, b2 = b1 + 17;
             using (var sb = new SolidBrush(Mul(swatch, a)))
                 g.FillEllipse(sb, KeyX - 20, b1 - 9, 9, 9);
             using (var cb = new SolidBrush(Mul(Dim, a * 0.85f)))
                 Text(g, cap, keyCap, cb, KeyX, b1);
-            using (var vb = new SolidBrush(Mul(White, a)))
+            using (var vb = new SolidBrush(Mul(figure ?? White, a)))
                 Text(g, value, keyVal, vb, KeyValX, b1);
-            if (sub.Length > 0)
-                using (var ub = new SolidBrush(Mul(Dim, a * 0.8f)))
-                    TextClipped(g, sub, keySub, ub, KeyX, b2, ColR - KeyX - 12);
+            if (sub.Length == 0) return;
+            int cut = hot is { Length: > 0 } ? sub.IndexOf(hot, StringComparison.Ordinal) : -1;
+            if (cut < 0)
+            {
+                using var ub = new SolidBrush(Mul(Dim, a * 0.8f));
+                TextClipped(g, sub, keySub, ub, KeyX, b2, ColR - KeyX - 12);
+                return;
+            }
+            using (var ub = new SolidBrush(Mul(Dim, a * 0.8f)))
+            using (var hb = new SolidBrush(Mul(figure ?? White, a * 0.95f)))
+            {
+                string pre = sub.Substring(0, cut), post = sub.Substring(cut + hot!.Length);
+                float x = KeyX;
+                Text(g, pre, keySub, ub, x, b2);
+                x += Advance(g, pre, keySub);
+                Text(g, hot!, keySub, hb, x, b2);
+                x += Advance(g, hot!, keySub);
+                Text(g, post, keySub, ub, x, b2);
+            }
         }
+
+        // Rows take the next free slot rather than a fixed index, so one that has nothing to say can be
+        // left out and the rest close up. Without this, hiding the weekly row would leave its gap behind.
+        int slot = 0;
 
         if (Limits.FiveHour >= 0)
         {
-            string sub = KeyHover(0) ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
+            int s = slot++;
+            string sub = KeyHover(s) ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
                                      : $"{ResetIn(Limits.FiveHourReset)} left";
-            // credits ride the 5-hour row: the spend normally, the remaining on hover IF the API exposes it.
-            // Promotional balance on claude.ai is NOT returned to the Claude Code token, so hover falls back.
-            if (Limits.CreditsUsed > 0)
-                sub += KeyHover(0)
-                    ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
-                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} of ${Limits.CreditsLimit:0}"
-                       : $"  ·  ${Limits.CreditsUsed:0.00} used")
-                    : $"  ·  ${Limits.CreditsUsed:0.00}";
-            Key(0, UsageColor(Limits.FiveHour), "5-hour",
-                KeyHover(0) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour), sub);
+            // Credits ride the 5-hour row, but only once you point at it. They used to sit on the resting
+            // line beside the countdown, which put a dollar figure on screen permanently for a number most
+            // glances are not asking about. The richer form (remaining, or spent against the cap) shows when
+            // the API exposes it; promotional balance on claude.ai is NOT returned to the Claude Code token,
+            // hence the fallback to plain spend.
+            if (Limits.CreditsUsed > 0 && KeyHover(s))
+                sub += Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
+                     : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} of ${Limits.CreditsLimit:0}"
+                     : $"  ·  ${Limits.CreditsUsed:0.00} used";
+            Key(s, UsageColor(Limits.FiveHour), "5-hour",
+                KeyHover(s) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour), sub,
+                UsageColor(Limits.FiveHour));
         }
-        else Key(0, Dim, "5-hour", "\u2014", "not fetched yet");
+        // The em-dash already says "no figure"; spelling it out underneath was the same fact twice. This
+        // row keeps the dash rather than vanishing: the 5-hour window always exists on a Claude account,
+        // so a missing figure means the fetch failed, and that is worth seeing.
+        else Key(slot++, Dim, "5-hour", "\u2014", "");
 
+        // The weekly row disappears outright when there is no figure, instead of holding a slot to show a
+        // dash. Unlike the 5-hour window this one may genuinely not apply to the account, so an empty row
+        // here reports no failure - it just occupies space to say nothing.
         if (Limits.Week >= 0)
-            Key(1, UsageColor(Limits.Week), "weekly",
-                KeyHover(1) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
-                KeyHover(1) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
-                            : $"{ResetIn(Limits.WeekReset)} left");
-        else Key(1, Dim, "weekly", "\u2014", "not fetched yet");
+        {
+            int s = slot++;
+            Key(s, UsageColor(Limits.Week), "weekly",
+                KeyHover(s) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
+                KeyHover(s) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
+                            : $"{ResetIn(Limits.WeekReset)} left",
+                UsageColor(Limits.Week));
+        }
 
         if (st?.Session is { } sess)
         {
             long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
             string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            Key(2, Blue, "context", $"{usedK}K", $"of {maxLabel}  ·  {ctxFrac * 100:0}% used");
+            Key(slot, ctxCol, "context", $"{usedK}K", $"of {maxLabel}  ·  {ctxFrac * 100:0}% used", ctxCol,
+                $"{ctxFrac * 100:0}%");
         }
-        else Key(2, Dim, "context", "\u2014", "no active session");
+        else Key(slot, Dim, "context", "\u2014", "no active session");
 
         // ---- right column, all three blocks on the same left edge and the same right edge
-        DrawNet(g, ColR, 74, RightEdge - ColR, 46, a);
-        DrawExit(g, a, keySub, keyCap);
+        // 46 -> 38: two lanes need less than a mirrored axis did, and the 8px buys the exit block below a
+        // bigger flag and a bottom margin it did not have
+        DrawNet(g, ColR, 74, RightEdge - ColR, 38, a);
+        ExitBlock.Draw(g, a, keySub, keyCap, ColR, RightEdge,
+            NetMon.Snapshot().api, NetMon.Empty, NetMon.Lost);
 
+        // A permanent "updated 4m ago" is a timestamp nobody asked for sitting in the corner, so the age
+        // waits for the pointer. The word stays, though: a lone glyph is a guess about what it does, and
+        // this one is a button - it has to read as pressable without being hovered first.
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
-        string age = Limits.LastSuccess == DateTime.MinValue ? "usage never fetched"
-            : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}";
-        using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
+        using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a * (rHover ? 1f : 0.65f))))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Far, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString($"{age}  ·  \u27f3 refresh", keySub, rb, rr, rsf);
+        {
+            string label = rHover
+                ? (Limits.LastSuccess == DateTime.MinValue ? "never fetched  ·  \u27f3 refresh"
+                   : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}  ·  \u27f3 refresh")
+                : "\u27f3 refresh";
+            g.DrawString(label, keySub, rb, rr, rsf);
+        }
 
         DrawNetHover(g, a); // last: the exit block used to be painted over the top of it
     }
 
-    // The flag used to be the whole story: a country and nothing else. What you actually want to know
-    // about an exit is whose network it is, and - when the API is routed through a proxy - whether the
-    // tool is leaving by the same door as everything else. Both are measured; the second line only
-    // appears when the two exits genuinely differ, so it stays quiet the rest of the time.
-    internal static RectangleF ExitRect() => new(ColR, 132, RightEdge - ColR, 56);
-
-    private static void DrawExit(Graphics g, float a, Font body, Font cap)
-    {
-        const float y = 152f, fw = 26f, fh = 17f;
-        bool hov = WidgetInput.Over && ExitRect().Contains(WidgetInput.Mouse);
-        var flag = IpCountry.Flag;
-        if (flag != null)
-        {
-            var old = g.InterpolationMode;
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            using var ia = new ImageAttributes();
-            ia.SetColorMatrix(new ColorMatrix { Matrix33 = 0.85f * a });
-            g.DrawImage(flag, Rectangle.Round(new RectangleF(ColR, y - fh + 3, fw, fh)),
-                        0, 0, flag.Width, flag.Height, GraphicsUnit.Pixel, ia);
-            g.InterpolationMode = old;
-            using var bd = new Pen(Mul(Track, a), 1f);
-            g.DrawRectangle(bd, ColR, y - fh + 3, fw, fh);
-        }
-
-        string who = IpCountry.Cc is { Length: > 0 } cc
-            ? (IpCountry.Isp is { Length: > 0 } isp ? $"{cc}  ·  {isp}" : cc)
-            : "locating…";
-        using (var wb = new SolidBrush(Mul(White, a * 0.9f)))
-        {
-            using var sf = new StringFormat(StringFormat.GenericTypographic)
-            { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-            g.DrawString(who, body, wb, new RectangleF(ColR + fw + 9, TextTop(body, y),
-                RightEdge - ColR - fw - 9, body.Size * 1.6f), sf);
-        }
-
-        // Resting: the address. Hovering: what is actually known about the route — its ASN, and whether
-        // Claude's own traffic leaves by this exit or another one, with the loss this route is measuring.
-        // No score: ipwho.is does not sell one on the free tier and inventing a number is not on.
-        string second, third = "";
-        Color secondCol = Dim;
-        if (IpCountry.Split)
-        {
-            second = $"api exits {IpCountry.ApiCc ?? "?"}  ·  {IpCountry.ApiIp}";
-            secondCol = Amber;
-            if (hov) third = IpCountry.Ip is { Length: > 0 } mine ? $"everything else: {mine}" : "";
-        }
-        else if (hov)
-        {
-            second = IpCountry.Asn is { Length: > 0 } asn
-                ? $"{asn}  ·  {RouteQuality()}" : RouteQuality();
-            third = NetMon.ProxyUrl is { Length: > 0 }
-                ? "api takes the same exit" : "no proxy set · direct";
-        }
-        else second = IpCountry.Ip ?? "";
-
-        using var sf2 = new StringFormat(StringFormat.GenericTypographic)
-        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
-        if (second.Length > 0)
-            using (var sb2 = new SolidBrush(Mul(secondCol, a * 0.85f)))
-                g.DrawString(second, cap, sb2, new RectangleF(ColR, TextTop(cap, y + 19),
-                    RightEdge - ColR, cap.Size * 1.6f), sf2);
-        if (third.Length > 0)
-            using (var sb3 = new SolidBrush(Mul(Dim, a * 0.7f)))
-                g.DrawString(third, cap, sb3, new RectangleF(ColR, TextTop(cap, y + 36),
-                    RightEdge - ColR, cap.Size * 1.6f), sf2);
-    }
-
-    // the only honest quality figure available: what this route is measuring right now
-    private static string RouteQuality()
-    {
-        var (net, api) = NetMon.Snapshot();
-        int lost = 0, seen = 0;
-        foreach (var v in api) { if (v == NetMon.Empty) continue; seen++; if (v == NetMon.Lost) lost++; }
-        int last = LastSample(api);
-        string ms = last == NetMon.Empty ? "…" : last == NetMon.Lost ? "dropped" : $"{last} ms";
-        return seen == 0 ? ms : $"{ms}  ·  {lost}/{seen} lost";
-    }
+    // The exit block moved to ExitBlock: it reports the machine's network, not this agent's, and the
+    // Codex panel shows the identical thing. Only the latency series is ours.
+    internal static RectangleF ExitRect() => ExitBlock.Rect(ColR, RightEdge);
 
     // One element doing two jobs, in one slot so the title never shifts: while a prompt can be
     // interrupted it is the red stop button, and the rest of the time it is the status lamp in whatever
@@ -477,7 +625,8 @@ internal sealed class ClaudeCodeWidget : IWidget
     // shared scale keeps them comparable, and a dropped sample is a full-height bar in red on whichever
     // side lost it - which is the question this graph exists to answer: whose fault is it.
     // what the hover needs, stashed by DrawNet so the tooltip can be painted after everything else
-    private (int[] net, int[] api, float x0, float slot, float mid, float half, float right, int cap)? _hover;
+    private (int[] net, int[] api, float x0, float step, int first, int count,
+             float top, float bottom, float right)? _hover;
 
     private void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
     {
@@ -489,16 +638,14 @@ internal sealed class ClaudeCodeWidget : IWidget
         if (!hasData) foreach (var v in api) if (v != NetMon.Empty) { hasData = true; break; }
 
         float mid = topY + colH / 2f, half = colH / 2f - 1f;
-        float slot = colW / n, barW = Math.Max(2.5f, slot - 2f);
+        float span = colW - 4f;
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var rule = new Pen(Mul(Dim, a * (hasData ? 0.32f : 0.18f)), 1f))
-            g.DrawLine(rule, colX, mid, colX + colW, mid);
 
         _hover = null;
         if (!hasData)
         {
-            using var wf = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+            using var wf = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
             using var wb = new SolidBrush(Mul(Dim, a * 0.7f));
             using var wsf = new StringFormat(StringFormat.GenericTypographic)
             { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
@@ -522,30 +669,73 @@ internal sealed class ClaudeCodeWidget : IWidget
         }
         cap = (cap + 49) / 50 * 50;
 
-        void Side(int[] series, Color col, bool up)
+        // One origin for BOTH lanes: the samples are taken together, so spreading each series over its own
+        // filled range would slide them out of time with each other wherever one had a gap the other did not.
+        int first = n;
+        for (int i = 0; i < n; i++)
+            if (net[i] != NetMon.Empty || api[i] != NetMon.Empty) { first = i; break; }
+        int count = n - first;
+        // Sample positions: the centre of an equal slice of the column. Every style lands on the same x,
+        // so the tooltip needs one formula, and the slices shrink as the buffer fills - which is what keeps
+        // the shape spanning the whole width instead of packing against the right edge the way it used to.
+        float slot = count > 0 ? span / count : span;
+        float X(int i) => colX + 2f + i * slot + slot / 2f;
+
+        // 0.94, so a sample at or over the cap stops just short of the edge: a shape welded to the boundary
+        // reads as clipped rather than as a spike.
+        float Mag(int v) => v == NetMon.Lost ? half
+            : v == NetMon.Empty ? 1.2f
+            : Math.Max(1.6f, half * 0.94f * Math.Clamp(v / (float)cap, 0.02f, 1f));
+
+        // The oldest sample sits at 0.45 alpha and the newest at full. It reads as depth, and it points the
+        // eye at "now" without spending a label saying which end that is.
+        float Age(int i) => count < 2 ? 1f : 0.45f + 0.55f * (i / (float)(count - 1));
+
+        void Rule(float alpha)
         {
-            for (int i = 0; i < series.Length; i++)
+            using var rule = new Pen(Mul(Dim, a * alpha), 1f);
+            g.DrawLine(rule, colX, mid, colX + colW, mid);
+        }
+
+        // Mirrored capsules, one per sample: your internet growing up from a centre rule, the path to
+        // Anthropic growing down. Nothing ever overlaps, the shared scale keeps the two comparable, and a
+        // dropped sample is a full-height bar in red on whichever side lost it - whose fault is it being the
+        // read this graph exists for. Chosen over a filled ridge and a dot field, both of which were built
+        // and looked at before this one was kept.
+        void Waveform()
+        {
+            Rule(0.22f);
+            // capped: with a cold buffer the slices are wide, and an uncapped bar turns into a fat blob -
+            // at which point a tall sample is a circle and the row reads as scattered pills
+            float barW = Math.Clamp(slot - 2.2f, 2f, 5.5f);
+            for (int i = 0; i < count; i++)
             {
-                int v = series[i];
-                if (v == NetMon.Empty) continue;
-                bool lost = v == NetMon.Lost;
-                float mag = lost ? half : Math.Max(2f, half * Math.Clamp(v / (float)cap, 0.03f, 1f));
-                float x = colX + i * slot + (slot - barW) / 2f;
-                var rect = up ? new RectangleF(x, mid - mag, barW, mag)
-                              : new RectangleF(x, mid + 1, barW, mag);
-                using var b = new SolidBrush(Mul(lost ? Red : col, a * (lost ? 0.95f : 0.8f)));
-                using var path = Rounded(rect, barW / 2f);
-                g.FillPath(b, path);
+                void Cap(int v, Color col, bool up)
+                {
+                    if (v == NetMon.Empty) return;
+                    bool lost = v == NetMon.Lost;
+                    float m = Mag(v);
+                    var r = up ? new RectangleF(X(i) - barW / 2f, mid - 1.5f - m, barW, m)
+                               : new RectangleF(X(i) - barW / 2f, mid + 1.5f, barW, m);
+                    using var b = new SolidBrush(Mul(lost ? Red : col, a * Age(i) * (lost ? 1f : 0.92f)));
+                    using var p = Rounded(r, barW / 2f);
+                    g.FillPath(b, p);
+                }
+                Cap(net[first + i], Green, true);
+                Cap(api[first + i], Blue, false);
             }
         }
-        Side(net, Green, up: true);
-        Side(api, Blue, up: false);
 
-        // legend carries the scale, since a mirrored profile has no axis to hang numbers off
+        Waveform();
+
+        // The legend used to carry the axis cap too ("ms · scale 1500"), on the grounds that a mirrored
+        // profile has nothing to hang numbers off. The tooltip IS that axis now - it reads out any bar you
+        // point at - so the cap was a developer's number sitting in the corner. The unit rides the last
+        // figure instead of floating alone at the right edge.
         int lastN = LastSample(net), lastA = LastSample(api);
         string tn = Fx.NetLabel + " " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
-        string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA.ToString());
-        using (var f = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel))
+        string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
+        using (var f = new Font("Segoe UI", 13f, GraphicsUnit.Pixel))
         {
             float bl = topY - 8;
             using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a)))
@@ -555,13 +745,9 @@ internal sealed class ClaudeCodeWidget : IWidget
                 Text(g, "·", f, b, colX + wN + 6, bl);
             using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a)))
                 Text(g, ta, f, b, colX + wN + 18, bl);
-            using (var b = new SolidBrush(Mul(Dim, a * 0.7f)))
-            using (var sf = new StringFormat(StringFormat.GenericTypographic) { Alignment = StringAlignment.Far })
-                g.DrawString($"ms · scale {cap}", f, b,
-                    new RectangleF(colX, TextTop(f, bl), colW, f.Size * 1.6f), sf);
         }
 
-        _hover = (net, api, colX, slot, mid, half, colX + colW, cap);
+        _hover = (net, api, colX + 2f, slot, first, count, topY, topY + colH, colX + colW);
     }
 
     // the tooltip is the precise read: both values, how many samples each side lost, and whose fault a
@@ -569,17 +755,20 @@ internal sealed class ClaudeCodeWidget : IWidget
     private void DrawNetHover(Graphics g, float a)
     {
         if (_hover is not { } hv) return;
-        var (net, api, x0, slot, mid, half, right, cap) = hv;
+        var (net, api, x0, step, first, count, top, bottom, right) = hv;
         var m = WidgetInput.Mouse;
-        if (!WidgetInput.Over || m.X < x0 || m.X > right || m.Y < mid - half - 10 || m.Y > mid + half + 10)
-            return;
-        int idx = Math.Clamp((int)((m.X - x0) / slot), 0, net.Length - 1);
+        if (!WidgetInput.Over || m.X < x0 || m.X > right || m.Y < top - 10 || m.Y > bottom + 10) return;
+        if (count <= 0) return;
+        // nearest sample, not the one whose cell was landed in: the trace is points joined by lines now,
+        // so the thing under the pointer is a vertex, and rounding is what picks the one being looked at
+        int rel = step > 0 ? (int)((m.X - x0) / step) : 0;
+        int idx = first + Math.Clamp(rel, 0, count - 1);
         int vN = net[idx], vA = api[idx];
         if (vN == NetMon.Empty && vA == NetMon.Empty) return;
 
-        float gx = x0 + idx * slot + slot / 2f;
+        float gx = x0 + (idx - first) * step;
         using (var guide = new Pen(Mul(White, a * 0.30f), 1f) { DashStyle = DashStyle.Dot })
-            g.DrawLine(guide, gx, mid - half, gx, mid + half);
+            g.DrawLine(guide, gx, top, gx, bottom);
 
         int lostN = 0, cntN = 0, lostA = 0, cntA = 0;
         for (int i = 0; i < net.Length; i++)
@@ -603,8 +792,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         bw2 += 16;
         float bh2 = lines.Count * 15 + 10;
         float bx = Math.Clamp(gx - bw2 / 2f, Pad, right - bw2);
-        float by = mid + half + 8;
-        if (by + bh2 > 214) by = mid - half - bh2 - 8;   // no room below: hang it above the profile
+        float by = bottom + 8;
+        if (by + bh2 > 214) by = top - bh2 - 8;   // no room below: hang it above the lanes
         using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
         {
             using (var bg = new SolidBrush(Mul(Color.FromArgb(255, 16, 16, 18), a))) g.FillPath(bg, path);
@@ -621,62 +810,10 @@ internal sealed class ClaudeCodeWidget : IWidget
         return NetMon.Empty;
     }
 
-    // hover: guide line + details box (both paths at that sample, loss counts, whose fault)
-    private static void DrawNetHover(Graphics g, float a, int[] net, int[] api,
-        float x0, float stepX, float top, float gh, float right, Func<int, float> Y)
-    {
-        var m = WidgetInput.Mouse;
-        if (!WidgetInput.Over || m.X < x0 - 9 || m.X > right + 6 || m.Y < top - 10 || m.Y > top + gh + 10)
-            return;
-        int idx = Math.Clamp((int)MathF.Round((m.X - x0) / stepX), 0, net.Length - 1);
-        int vN = net[idx], vA = api[idx];
-        if (vN == NetMon.Empty && vA == NetMon.Empty) return;
-
-        float gx = x0 + idx * stepX;
-        using (var guide = new Pen(Mul(White, a * 0.35f), 1f) { DashStyle = DashStyle.Dot })
-            g.DrawLine(guide, gx, top - 3, gx, top + gh);
-        void Mark(int v, Color col)
-        {
-            if (v == NetMon.Empty) return;
-            using var hb = new SolidBrush(Mul(v == NetMon.Lost ? Red : col, a));
-            g.FillEllipse(hb, gx - 2.5f, (v == NetMon.Lost ? top : Y(v)) - 2.5f, 5.5f, 5.5f);
-        }
-        Mark(vN, Green); Mark(vA, Blue);
-
-        int lostN = 0, cntN = 0, lostA = 0, cntA = 0;
-        for (int i = 0; i < net.Length; i++)
-        {
-            if (net[i] != NetMon.Empty) { cntN++; if (net[i] == NetMon.Lost) lostN++; }
-            if (api[i] != NetMon.Empty) { cntA++; if (api[i] == NetMon.Lost) lostA++; }
-        }
-        string F(int v) => v == NetMon.Lost ? ":(" : v == NetMon.Empty ? "–" : $"{v} ms";
-        var lines = new List<(string t, Color c)>
-        {
-            ($"{Fx.NetLabel} {F(vN)}   {Fx.ApiLabel} {F(vA)}", White),
-            ($"{Fx.LossLabel}  {Fx.NetLabel} {lostN}/{cntN}  ·  {Fx.ApiLabel} {lostA}/{cntA}", Dim),
-            ("google.com  ·  api.anthropic.com", Dim),
-        };
-        if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
-        else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));
-
-        using var f2 = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
-        float bw2 = 0;
-        foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
-        bw2 += 16;
-        float bh2 = lines.Count * 14 + 10;
-        float bx = Math.Min(gx + 8, right - bw2), by = top + gh + 8;
-        using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
-        {
-            using (var bg = new SolidBrush(Mul(Color.FromArgb(232, 20, 20, 22), a))) g.FillPath(bg, path);
-            using (var pen = new Pen(Mul(Track, a), 1f)) g.DrawPath(pen, path);
-        }
-        for (int i = 0; i < lines.Count; i++)
-            using (var b = new SolidBrush(Mul(lines[i].c, a)))
-                g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 14);
-    }
-
     // in front of the title, where the lamp used to be
-    private static RectangleF CancelRect(int w, int h) => new(Pad - 4, 16, 34, 34);
+    // clear of the pushpin the controller paints at (9,4,24,24) - the two were overlapping, so a press
+    // meant for one landed on the other
+    private static RectangleF CancelRect(int w, int h) => new(42, 16, 34, 34);
 
     // bottom-right of the band, right-aligned to the panel's padding
     private static RectangleF RefreshRect(int w, int h) => new(RightEdge - 210, 22, 210, 20);
@@ -688,11 +825,20 @@ internal sealed class ClaudeCodeWidget : IWidget
         : $"{(int)d.TotalDays}d ago";
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
-        => new[]
+    {
+        var list = new List<(RectangleF, Action<PointF>)>
         {
-            (CancelRect(w, h), (Action<PointF>)(_ => { if (CanCancel) _cancel(); })),
-            (RefreshRect(w, h), (Action<PointF>)(_ => Limits.ForceRefresh())),
+            (CancelRect(w, h), _ => { if (CanCancel) _cancel(); }),
+            (RefreshRect(w, h), _ => Limits.ForceRefresh()),
         };
+        // The dns row is only pressable when it is on screen, and it moves: how many rows sit above it
+        // depends on whether the exits have split. So DrawExit records where it actually put the row and
+        // this hands back that exact rect - a hit area derived a second time from the same row index would
+        // be one more thing to keep in step, and the cursor reads this list too.
+        if (ExitBlock.DnsRowRect != RectangleF.Empty)
+            list.Add((ExitBlock.DnsRowRect, _ => DnsLeak.Retest()));
+        return list;
+    }
 
     private static void DrawBar(Graphics g, float x, float y, float w, string label, string value,
         double frac, Color fill, float a, Font labelFont, Font valueFont)
@@ -741,6 +887,31 @@ internal sealed class ClaudeCodeWidget : IWidget
         return Math.Clamp((double)s.ContextUsed / s.ContextMax, 0, 1);
     }
 
+    // Everything the voice is allowed to know about this moment, and every part of it is already drawn
+    // somewhere on the panel: the turn clock, the context bar, the usage ring, the turn's own prompt
+    // size, how many tools it has reached for, and the wall clock. Built in one place so the collapsed
+    // pill and anything else that asks cannot disagree about what the situation is.
+    private MoodContext Mood(CcStatus? st) => new(
+        Running(st), (float)ContextFrac(st), UsageFrac(),
+        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour);
+
+    // Tool hand-offs inside the current turn, so the voice can notice a loop. Counted off the status the
+    // pill already reads per frame rather than plumbed through the hooks, and keyed by the turn's own
+    // startedAt, which resets it for free - a new turn always carries a new stamp. Idempotent within a
+    // frame: the second call of the same frame sees the same tool name and does not double-count.
+    private string? _runsTurn;
+    private string? _runsTool;
+    private int _runs;
+
+    private int ToolRuns(CcStatus? st)
+    {
+        var stamp = st?.StartedAt;
+        if (stamp != _runsTurn) { _runsTurn = stamp; _runsTool = null; _runs = 0; }
+        var tool = st?.CurrentTool;
+        if (!string.IsNullOrEmpty(tool) && tool != _runsTool) { _runsTool = tool; _runs++; }
+        return _runs;
+    }
+
     // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
     // it would vanish): green = running a tool, yellow = thinking / needs input, blue = compacting,
     // red = error, white = idle
@@ -750,14 +921,30 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static float UsageFrac()
         => Limits.FiveHour >= 0 ? Limits.FiveHour : Limits.Week >= 0 ? Limits.Week : 0f;
 
-    private static Color RingColor(CcStatus? st)
+    // What the ring MEANS. The three states whose colour is itself the message are exempt from any
+    // modulation below: an outage, a spent limit, and a running compact each own the pill's colour while
+    // they last, and warming them would be reinterpreting a fact.
+    private static bool RingIsTheMessage(CcStatus? st)
+        => NetMon.ApiDown || NetMon.NetDown || LimitHit || Compacting(st);
+
+    private static Color RingBase(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
                                             // activity and left the pill looking busy while it was waiting on a reset.
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
-         : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
+         : Shown(st) == "working" ? (string.IsNullOrEmpty(st?.CurrentTool) ? Amber : Green)
          : White;
+
+    // …and what it shows, which is that meaning ridden by the same situation the voice reads: warmer as
+    // the context or usage window tightens, a little warmer again on a turn that is dragging, quieter in
+    // the small hours. Instance rather than static because the situation includes ToolRuns, which is
+    // per-session state.
+    private Color RingColor(CcStatus? st)
+    {
+        var b = RingBase(st);
+        return RingIsTheMessage(st) ? b : Fx.MoodRing(b, Mood(st));
+    }
 
     private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
 
@@ -773,41 +960,8 @@ internal sealed class ClaudeCodeWidget : IWidget
     // the ramp is a design rule with a test on it, so it needs one seam out to the test assembly
     internal static Color UsageColorForTest(float f) => UsageColor(f);
 
-    private static Color UsageColor(float f) =>
-        f <= 0.5f ? Green
-        : f <= 0.75f ? HueLerp(Green, Amber, (f - 0.5f) / 0.25f)
-        : HueLerp(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
-
-    // interpolates in HSV along the shorter way round the wheel
-    private static Color HueLerp(Color a, Color b, float t)
-    {
-        var (h1, s1, v1) = ToHsv(a);
-        var (h2, s2, v2) = ToHsv(b);
-        float dh = h2 - h1;
-        if (dh > 180f) dh -= 360f;
-        else if (dh < -180f) dh += 360f;
-        return FromHsv((h1 + dh * t + 360f) % 360f, s1 + (s2 - s1) * t, v1 + (v2 - v1) * t);
-    }
-
-    private static (float h, float s, float v) ToHsv(Color c)
-    {
-        float r = c.R / 255f, g = c.G / 255f, b = c.B / 255f;
-        float max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b)), d = max - min;
-        float h = d == 0 ? 0
-            : max == r ? 60f * (((g - b) / d + 6f) % 6f)
-            : max == g ? 60f * ((b - r) / d + 2f)
-            : 60f * ((r - g) / d + 4f);
-        return (h, max == 0 ? 0 : d / max, max);
-    }
-
-    private static Color FromHsv(float h, float s, float v)
-    {
-        float c = v * s, x = c * (1 - Math.Abs(h / 60f % 2 - 1)), m = v - c;
-        (float r, float g, float b) p = h < 60 ? (c, x, 0) : h < 120 ? (x, c, 0) : h < 180 ? (0, c, x)
-            : h < 240 ? (0, x, c) : h < 300 ? (x, 0, c) : (c, 0, x);
-        return Color.FromArgb((int)Math.Round((p.r + m) * 255), (int)Math.Round((p.g + m) * 255),
-                              (int)Math.Round((p.b + m) * 255));
-    }
+    // one ramp for both panels, in Fx: they had drifted and the same figure wore two colours
+    private static Color UsageColor(float f) => Fx.UsageColor(f);
 
     private static string ResetIn(DateTimeOffset r)
     {
@@ -817,20 +971,6 @@ internal sealed class ClaudeCodeWidget : IWidget
         if (d.TotalDays >= 1) return $"{(int)d.TotalDays}d {d.Hours}h";
         if (d.TotalHours >= 1) return $"{(int)d.TotalHours}h {d.Minutes}m";
         return $"{d.Minutes}m";
-    }
-
-    private static string Activity(CcStatus? st)
-    {
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
-        {
-            "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
-            _ => IdleMood(st),
-        });
-        if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
-        var el = LimitHit ? LimitReset() : Elapsed(st);
-        return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
     }
 
     // account out of juice: the usage endpoint reports ~100%. Surface it in ANY state, not just
@@ -849,13 +989,19 @@ internal sealed class ClaudeCodeWidget : IWidget
         return r.Length > 0 ? "back in " + r : "";
     }
 
-    // minimal mood line when nothing is running
-    private static string IdleMood(CcStatus? st) =>
-        NetMon.NetDown ? "offline :("
-        : NetMon.ApiDown ? "api down :("
-        : JustCompacted(st) ? "compacted :)"
-        : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? "outta juice XD"
-        : "let's work :)";
+    // The part of the idle line that is actually news: offline, api down, out of juice, just compacted.
+    // Null when none of it applies, i.e. when the only thing left to say is that nothing is wrong.
+    private static string? Trouble(CcStatus? st) =>
+        NetMon.NetDown ? Moods.Line("offline")
+        : NetMon.ApiDown ? Moods.Line("apiDown")
+        : JustCompacted(st) ? Moods.Line("compacted")
+        : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? Moods.Line("outOfCredit")
+        : null;
+
+    // minimal mood line when nothing is running. The collapsed pill always needs SOMETHING under the icon
+    // - a blank pill reads as broken - and this is where the product keeps its voice. The expanded panel
+    // has no line of its own: the rings and the key rows are what it says instead.
+    private static string IdleMood(CcStatus? st, in MoodContext ctx) => Trouble(st) ?? Moods.Line("idle", ctx);
 
     private static bool JustCompacted(CcStatus? st) =>
         DateTimeOffset.TryParse(st?.CompactedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)
@@ -863,28 +1009,38 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     // an outage overrides whatever the verb was — even mid-work "writing…" becomes the error
     private static string? OutageText() =>
-        NetMon.NetDown ? "net error :(" : NetMon.ApiDown ? "api error :(" : null;
+        NetMon.NetDown ? Moods.Line("netError") : NetMon.ApiDown ? Moods.Line("apiError") : null;
 
-    private static string ToolVerb(string? tool) => tool switch
+    // the tool maps to a mood slot rather than straight to a string, so the wording can be rewritten
+    // without touching this table. An unrecognised tool keeps naming itself - there is no slot for
+    // "whatever that was", and inventing one would read worse than the tool's own name.
+    // The situation rides along so a slot with a set for it can switch to it - four minutes of the same
+    // word is not information any more, and neither is "reading…" while the context bar sits at 91%.
+    // Unrecognised tools keep naming themselves, which is the honest answer and needs no vocabulary.
+    private static string ToolVerb(string? tool, in MoodContext ctx) => tool switch
     {
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",
-        "Read" => "reading…",
-        "Bash" or "PowerShell" => "running…",
-        "Grep" or "Glob" => "digging…",
-        "WebFetch" => "fetching…",
-        "WebSearch" => "googling :P",
-        "Task" or "Agent" => "delegating…",
-        "TodoWrite" => "planning…",
-        "SlashCommand" or "Skill" => "using a skill…",
-        "AskUserQuestion" => "asking you :)",
-        null or "" => "hmm…",
+        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => Moods.Line("writing", ctx),
+        "Read" => Moods.Line("reading", ctx),
+        "Bash" or "PowerShell" => Moods.Line("running", ctx),
+        "Grep" or "Glob" => Moods.Line("digging", ctx),
+        "WebFetch" => Moods.Line("fetching", ctx),
+        "WebSearch" => Moods.Line("searching", ctx),
+        "Task" or "Agent" => Moods.Line("delegating", ctx),
+        "TodoWrite" => Moods.Line("planning", ctx),
+        "SlashCommand" or "Skill" => Moods.Line("skill", ctx),
+        "AskUserQuestion" => Moods.Line("asking", ctx),
+        null or "" => Moods.Line("unknown", ctx),
         _ => tool!.ToLowerInvariant() + "…",
     };
+
+    // how long the current turn has been going, as a span rather than the display string
+    private static TimeSpan? Running(CcStatus? st) =>
+        ParseTime(st?.StartedAt) is { } t ? DateTimeOffset.UtcNow - t : null;
 
     // how long the current turn (or compact) has been running
     private static string Elapsed(CcStatus? st)
     {
-        if ((st?.State != "working" && !Compacting(st)) || string.IsNullOrEmpty(st?.StartedAt)) return "";
+        if ((Shown(st) != "working" && !Compacting(st)) || string.IsNullOrEmpty(st?.StartedAt)) return "";
         if (!DateTimeOffset.TryParse(st.StartedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)) return "";
         var d = DateTimeOffset.UtcNow - t;
         if (d.TotalSeconds < 1) return "";

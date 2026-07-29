@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -117,7 +117,16 @@ internal sealed class NotchController
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
     private const int ExpandedW = 560, ExpandedH = 220, ExpandedR = 30;
     private const int TintDeskCollapsed = 255, TintDeskExpanded = 245;
-    private const int TintAppCollapsed = 120, TintAppExpanded = 60;
+    // 48 = the open panel over an app is ~81% window, and that transparency IS the glass. It also means a
+    // bright strip behind it (a message bar, a title bar) shows through as a pale block inside the panel.
+    // That was tried at 140, which measured better on the offending capture - band spread 13.7 -> 8.3,
+    // sharpest edge 1.64 -> 1.00 - and looked wrong: the glass stopped reading as glass. Reverted on that
+    // judgement. Frosting the backdrop (see LayeredNotch.Frost) stays and does what it can; more blur is
+    // NOT the answer, past ~1/14 the upscale rings and the edge comes back sharper. A near-black panel
+    // shows any light it lets through, so the ghost cannot reach zero while the pane stays this clear.
+    // This is the knob if that trade is ever revisited.
+    // collapsed stays at 120: the small pill has no room to lose contrast under its own content.
+    internal const int TintAppCollapsed = 120, TintAppExpanded = 48;
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f; // open snappier than close. slowed after
     // the _dt fix made these hit their real wall-clock duration (old timer cadence ran them ~2x slower).
     private const float HoldSeconds = 0.75f; // press-and-hold on the pill this long → drag-to-move engages
@@ -254,6 +263,7 @@ internal sealed class NotchController
     {
         _notch = notch;
         _notch.ClipboardImage += OnClipboardImage; // Windows won't deliver the snip toast → mirror it from the clipboard
+        _notch.WantsHandCursor = OverPressable;
         _claudeStore = new StatusStore();
         _codexStore = new CodexStatusStore();
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
@@ -491,11 +501,50 @@ internal sealed class NotchController
         CheckLimit("Codex", CodexLimits.FiveHour, CodexLimits.FiveHourReset, "primary");
         CheckLimit("Codex", CodexLimits.Week, CodexLimits.WeekReset, "weekly");
         CheckInternet();
+        CheckContext();
         CheckHourly();
+        Almanac.Poke();   // idempotent: arms the half-hourly weather refresh once, ~20s after launch
+    }
+
+    // Latched per session, not per edge: compacting drops the fraction, and a long session would
+    // otherwise re-warn every time it climbed back. A NEW session is not in the set, which is exactly the
+    // moment the warning becomes useful again.
+    private readonly HashSet<string> _ctxWarned = new(StringComparer.Ordinal);
+    private readonly List<string> _ctxLive = new();
+
+    private void CheckContext()
+    {
+        _ctxLive.Clear();
+        foreach (var widget in _widgets)
+        {
+            if (widget is not Widgets.ClaudeCodeWidget cc) continue;
+            var (id, frac) = cc.ContextState();
+            if (id is null) continue;
+            _ctxLive.Add(id);
+            if (frac < Widgets.ClaudeCodeWidget.ContextWarnAt)
+            {
+                _ctxWarned.Remove(id);  // compacted back down: arm it again
+                continue;
+            }
+            if (!_ctxWarned.Add(id)) continue;
+            _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+            {
+                App = "Claude", Title = $"Context {(int)(frac * 100)}% full",
+                Body = "Answers get vaguer from here — /compact when you can.",
+                Kind = "ctx-" + id, Duration = 8, Icon = LimitBadge(),
+            });
+        }
+        // a warned session that has since exited would otherwise sit in the set for the life of the
+        // process; nothing reads it again, but it is unbounded across a long uptime
+        if (_ctxWarned.Count > _ctxLive.Count) _ctxWarned.IntersectWith(_ctxLive);
     }
 
     // on the hour (2:00, 3:00 …) a small glance banner with the time. Init to the current hour so
     // launching mid-hour doesn't fire, and starting exactly at :00 chimes only once (hour-change guard).
+    // The time alone was the one thing the tray clock already says, so the banner carries the rest of the
+    // glance: the day, the date in whatever calendar the place keeps, and the place with its temperature
+    // (see Almanac), while the SKY rides in the badge rather than costing any of the line. Longer duration
+    // now that there is a second line to read.
     private int _chimedHour = DateTime.Now.Hour;
     private void CheckHourly()
     {
@@ -505,7 +554,8 @@ internal sealed class NotchController
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
             App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-            Kind = "hourly", Duration = 4, Icon = ClockBadge(),
+            Body = Almanac.Detail(t),
+            Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
         });
     }
 
@@ -541,10 +591,12 @@ internal sealed class NotchController
                     break;
                 case "clock": case "hour": case "hourly":
                     var t = int.TryParse(arg, out var hr) && hr is >= 0 and <= 23 ? DateTime.Today.AddHours(hr) : DateTime.Now;
+                    Almanac.Poke();   // so a demo fired early in a session still has a reading to show
                     _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
                     {
                         App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-                        Kind = "hourly", Duration = 5, Icon = ClockBadge(),
+                        Body = Almanac.Detail(t),
+                        Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
                     });
                     break;
             }
@@ -628,7 +680,7 @@ internal sealed class NotchController
         CheckAlerts();
         var notifStart = _notif; // an in-place banner swap (rapid language flip) must force a redraw
         var fg = Win32.GetForegroundWindow();
-        DetectCompactCancel(fg);
+        DetectAgentCancel(fg);
         DetectLanguageChange(fg);
         bool fullscreen = !_pinned && _notch.IsFullscreen(fg); // pinned: stay over games/movies
         var active = fullscreen ? [] : ActiveIndices();
@@ -1060,7 +1112,9 @@ internal sealed class NotchController
                 _notif.Copied = true;
                 _notifDeadline = Max(_notifDeadline, DateTime.UtcNow.AddSeconds(2)); // give a beat to see "Copied"
             }
-            else if (!_notifDetailOn && _notif.Body.Length > 0 && p.Y >= _ct + Sc(_curH - 22))
+            // same question the grabber bar asks itself — a strip that expands into nothing is worse than no
+            // strip, and the two must not be able to disagree about whether there is more to read
+            else if (!_notifDetailOn && NotifBanner.BodyOverflows(_notif) && p.Y >= _ct + Sc(_curH - 22))
             {
                 _notifDetailOn = true;
                 _notifDeadline = DateTime.MaxValue; // reading the long form — stays until dismissed
@@ -1186,6 +1240,37 @@ internal sealed class NotchController
     // A control drawn on the COLLAPSED pill (the download Stop). Same scaling dance as the expanded
     // buttons: widget rects are logical, the cursor is physical, so compare scaled and hand back logical.
     // Returns true when a button consumed the click, so the caller skips the swap-strip handling.
+    // Answers WM_SETCURSOR: is this screen point on something that would do anything if clicked? It walks
+    // the same rects the click dispatch walks, at the same scale, so the pointer can never promise a press
+    // the click path would not honour. Runs on the message pump, not the frame timer, so it stays cheap
+    // and swallows anything a widget's Buttons() throws rather than killing the window proc.
+    private bool OverPressable(Point p)
+    {
+        try
+        {
+            if (_empty || _primary < 0 || _primary >= _widgets.Length) return false;
+            if (_progress > 0.9f)
+            {
+                if (Contains(PinRect(ExpandedW, ExpandedH), _el, _et, p)) return true;
+                foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
+                    if (Contains(r, _el, _et, p)) return true;
+                return false;
+            }
+            if (_progress < 0.1f)
+                foreach (var (r, _) in _widgets[_primary].CollapsedButtons(CollapsedW, CollapsedH))
+                    if (Contains(r, _cl, _ct, p)) return true;
+            return false;
+        }
+        catch { return false; }
+    }
+
+    // widget rects are logical and the cursor is physical, the same conversion the click path does
+    private bool Contains(RectangleF r, int left, int top, Point p)
+    {
+        float bx = left + r.X * S, by = top + r.Y * S;
+        return p.X >= bx && p.X < bx + r.Width * S && p.Y >= by && p.Y < by + r.Height * S;
+    }
+
     private bool TryCollapsedButton(Win32.POINT p)
     {
         if (_primary < 0 || _primary >= _widgets.Length || _empty) return false;
@@ -1467,11 +1552,20 @@ internal sealed class NotchController
         if (hv > 0.02f) // hover: tiny English label to the right saying what each gesture does
         {
             using var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
-            using var b = new SolidBrush(Color.FromArgb((int)(200 * hv * a), 235, 235, 235));
-            using var sf = new StringFormat { LineAlignment = StringAlignment.Center };
             // only the tap is advertised. The hold gesture is deliberately unlabelled.
-            g.DrawString(_pinned ? "unpin" : "pin on top", f, b,
-                new RectangleF(r.Right + 6, r.Y, 120, r.Height), sf);
+            string label = _pinned ? "unpin" : "pin on top";
+            // On its own chip, because the space to the right of the pin is no longer empty - the agent
+            // panels put their stop button at x=42 and the bare text landed on top of it. A hover label
+            // that has to be read against whatever it happens to cover is not a label.
+            var sz = g.MeasureString(label, f);
+            var chip = new RectangleF(r.Right + 6, r.Y + (r.Height - 17) / 2f, sz.Width + 12, 17);
+            using (var bgb = new SolidBrush(Color.FromArgb((int)(215 * hv * a), 18, 18, 20)))
+            using (var chipPath = Fx.Rounded(chip, 6f))
+                g.FillPath(bgb, chipPath);
+            using var b = new SolidBrush(Color.FromArgb((int)(230 * hv * a), 235, 235, 235));
+            using var sf = new StringFormat(StringFormat.GenericTypographic)
+            { LineAlignment = StringAlignment.Center, Alignment = StringAlignment.Center };
+            g.DrawString(label, f, b, chip, sf);
         }
     }
 
@@ -1567,17 +1661,24 @@ internal sealed class NotchController
 
     private static float Toward(float v, float t, float step)
         => v < t ? Math.Min(t, v + step) : Math.Max(t, v - step);
-    // a compact cancelled with Esc fires no hook — watch for the keystroke ourselves while the
-    // agent's host window is foreground. Wrong guesses self-heal: post-compact still fires on a
-    // real completion and brings the "compacted :)" notice with it.
-    private void DetectCompactCancel(IntPtr fg)
+    // Neither a cancelled compact nor a cancelled TURN fires a hook — Claude Code writes status on
+    // lifecycle events and an interrupt is not one — so watch for the keystroke ourselves while the
+    // agent's host window is foreground. Wrong guesses self-heal: the next real event overwrites the
+    // latch, and both latches are keyed by the startedAt they belong to.
+    private void DetectAgentCancel(IntPtr fg)
     {
         if ((Win32.GetAsyncKeyState(Win32.VK_ESCAPE) & 0x8000) == 0) return;
-        bool claude = _claudeStore.Current?.State == "compacting";
-        bool codex = _codexStore.Current?.State == "compacting";
-        if (!claude && !codex || !ForegroundIsAgentHost(fg)) return;
-        if (claude) ClaudeCodeWidget.MarkCompactCancelled(_claudeStore.Current?.StartedAt);
-        if (codex) CodexWidget.MarkCompactCancelled(_codexStore.Current?.StartedAt);
+        if (!ForegroundIsAgentHost(fg)) return;
+        if (_claudeStore.Current?.State == "compacting")
+            ClaudeCodeWidget.MarkCompactCancelled(_claudeStore.Current?.StartedAt);
+        if (_codexStore.Current?.State == "compacting")
+            CodexWidget.MarkCompactCancelled(_codexStore.Current?.StartedAt);
+        // the turn case is what left the pill reading "hmm…" indefinitely: nothing else in the system
+        // ever learns that an in-flight turn stopped being in flight
+        if (_claudeStore.Current?.State == "working")
+            ClaudeCodeWidget.MarkTurnCancelled(_claudeStore.Current?.StartedAt);
+        if (_codexStore.Current?.State == "working")
+            CodexWidget.MarkTurnCancelled(_codexStore.Current?.StartedAt);
     }
 
     private static string ProcessNameOf(IntPtr hwnd)
@@ -1612,8 +1713,14 @@ internal sealed class NotchController
 
     private void CancelClaude(int slot)
     {
-        var pid = _claudeStore.SessionLive(slot)?.Pid ?? 0;
-        if (pid > 0) CcCancel.Request(pid);
+        var st = _claudeStore.SessionLive(slot);
+        var pid = st?.Pid ?? 0;
+        if (pid <= 0) return;
+        CcCancel.Request(pid);
+        // The button injects Esc, so it is the same interrupt the user could have typed — and just as
+        // silent. Latch it here too rather than leaning on the keystroke watcher, which only looks
+        // while the agent's window is foreground and it plainly is not when the pill was just clicked.
+        ClaudeCodeWidget.MarkTurnCancelled(st?.StartedAt);
     }
 
     private void CancelCodex(CodexSurface surface)
@@ -1623,6 +1730,11 @@ internal sealed class NotchController
             CcCancel.Request(snapshot.ConsolePid);
         else if (snapshot is { Source: CodexSurface.Desktop, State: "working" })
             _codexDesktopRuntime.TryCancel();
+        else return;
+        // same silence as the Claude twin: the cancel leaves no lifecycle event behind, so the only record
+        // that this turn ended is the latch. Not from the keystroke watcher, which only looks while the
+        // agent's window is foreground and it plainly is not when the pill was just clicked.
+        CodexWidget.MarkTurnCancelled(snapshot.StartedAt);
     }
 
     // a screenshot hit the clipboard (PrtSc / Win+Shift+S) — Windows never delivers that toast to any
@@ -1765,9 +1877,24 @@ internal sealed class NotchController
     private static Bitmap ShotBadge()    => LocalBadge(0xE722, 200, 28f);// Camera — blue
     private static Bitmap ClipBadge()    => LocalBadge(0xE8C8, 155, 28f);// Copy — teal
 
-    // dev-only: the generated notif badges in a row, for a tofu eyeball via --render-badges
+    // The hourly badge carries the sky, which is why the chime's text no longer has to. Falls back to the
+    // clock when there is no reading — a banner with no weather in it must not imply one.
+    private static Bitmap HourlyBadge()
+    {
+        if (Almanac.Latest is not { } wx) return ClockBadge();
+        var (glyph, hue) = Almanac.SkyBadge(wx.Code, wx.Day);
+        return LocalBadge(glyph, hue, 32f);
+    }
+
+    // dev-only: the generated notif badges in a row, for a tofu eyeball via --render-badges. The four sky
+    // tiles are listed by hand rather than through HourlyBadge(), which would only ever render today's
+    // weather — and the flake is the one glyph here that is a stand-in rather than the real thing.
     internal static Bitmap[] AllLocalBadges() => new[]
-        { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge() };
+    {
+        BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge(),
+        LocalBadge(0xE706, 30, 32f), LocalBadge(0xE708, 232, 32f),
+        LocalBadge(0xE753, 220, 32f), LocalBadge(0xEA38, 188, 32f),
+    };
 
     // dev-only: the banners Halo raises itself, for --render-local. They live here, beside the badge
     // factories and the real EnqueueLocal calls, because the alignment bug this hook exists to catch was
@@ -1791,6 +1918,14 @@ internal sealed class NotchController
         {
             App = "Claude", Title = "Claude usage 85%", Body = "You've used 85% of your weekly limit.",
             Icon = LimitBadge(),
+        },
+        // the chime, with a reading it will not have on a fresh process: this is the shape that has to be
+        // looked at, since the whole point of the rewrite was how crowded the line was
+        new Halo.Notifications.NotifItem
+        {
+            App = "Clock", Title = "1:00 AM",
+            Body = Almanac.Detail(DateTime.Now, "Tehran", new Almanac.Weather(27, 0), metric: true, jalali: true),
+            Icon = LocalBadge(0xE708, 232, 32f),
         },
     };
 

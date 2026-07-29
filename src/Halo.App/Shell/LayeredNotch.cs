@@ -209,7 +209,13 @@ internal sealed class LayeredNotch
     private void DoCapture(IntPtr behind)
     {
         if (!Win32.GetWindowRect(behind, out var wr)) return;
-        int nx = _workLeft + (_workWidth - CaptureW) / 2, ny = _workTop;
+        // + OffsetX, because the pill can be DRAGGED off centre and this grab could not. The window lands at
+        // (workLeft + (workWidth - winW)/2 + OffsetX); the composite then reads the middle of this strip,
+        // so the strip has to be centred on the pill and not on the screen. Without the offset the glass
+        // showed a faithful picture of whatever sat at the centre of the display - a rectangle of unrelated
+        // content floating inside the panel, which is exactly how it was reported. The pill's own width
+        // cancels out of that algebra, which is why only the offset is needed here.
+        int nx = _workLeft + (_workWidth - CaptureW) / 2 + (int)OffsetX, ny = _workTop;
         int sx = nx - wr.left, sy = ny - wr.top;
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         string how;
@@ -255,6 +261,26 @@ internal sealed class LayeredNotch
         }
 
         var blurred = BlurPyramid(raw);
+
+        // HALO_DUMP_GLASS=1 writes the raw grab and the blurred result next to the crash log, once every
+        // two seconds. The pill refuses to be screenshotted, so when the glass shows something wrong this is
+        // the only way to tell a bad CAPTURE from a bad composite - and they need completely different fixes.
+        if (GlassDump)
+        {
+            long nowMs = Environment.TickCount64;
+            if (nowMs - _lastDump > 2000)
+            {
+                _lastDump = nowMs;
+                try
+                {
+                    string dir = System.IO.Path.GetTempPath();
+                    raw.Save(System.IO.Path.Combine(dir, "halo-glass-raw.png"), ImageFormat.Png);
+                    blurred.Save(System.IO.Path.Combine(dir, "halo-glass-blur.png"), ImageFormat.Png);
+                }
+                catch { }
+            }
+        }
+
         raw.Dispose();
         lock (_bgLock) { var old = _bg; _bg = blurred; old?.Dispose(); }
         System.Threading.Interlocked.Increment(ref _captureVersion);
@@ -288,6 +314,10 @@ internal sealed class LayeredNotch
     private static readonly bool GlassDebug =
         Environment.GetEnvironmentVariable("HALO_GLASS_DEBUG") == "1";
     private static int _traceCount;
+
+    private static readonly bool GlassDump =
+        Environment.GetEnvironmentVariable("HALO_DUMP_GLASS") == "1";
+    private static long _lastDump;
 
     private static void GlassTrace(string how, double ms)
     {
@@ -466,31 +496,131 @@ internal sealed class LayeredNotch
     // makes the empty pill actually empty.
     internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass, float glassFade = 1f)
     {
+        lock (_bgLock) ShapeInto(g, w, h, radius, tintAlpha, glass ? _bg : null, glassFade);
+    }
+
+    // Two supersampled buffers, reused. The composite runs every frame the pill is on screen, and it used to
+    // allocate one of these per call; the single-mask fix needs a second, which at 1120x440 is the kind of
+    // per-frame churn this render path is not allowed to have. Only ever touched from the frame timer, and
+    // from the render hook, which is single-threaded - the lock is there so that stays true by construction
+    // rather than by luck.
+    private static readonly object _scratchLock = new();
+    private static Bitmap? _scratchA, _scratchB;
+
+    private static Bitmap Scratch(ref Bitmap? slot, int w, int h)
+    {
+        if (slot is { } b && b.Width == w && b.Height == h) return b;
+        slot?.Dispose();
+        slot = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        return slot;
+    }
+
+    private static Bitmap ScratchA(int w, int h) { lock (_scratchLock) return Scratch(ref _scratchA, w, h); }
+    private static Bitmap ScratchB(int w, int h) { lock (_scratchLock) return Scratch(ref _scratchB, w, h); }
+
+    // Blur alone does not make frosted glass. A blurred bright panel is still a bright panel, so a light
+    // strip in the window behind - a message bar, a title bar - came through as a hard-edged pale block
+    // sitting inside the pill, which is what "a white rectangle in the glass" turned out to be. Real frosted
+    // glass carries hue and movement and throws away legible detail, so the backdrop is desaturated toward
+    // its own luminance and its range squeezed into the lower half before the tint goes on. Bright content
+    // still shows as a lift, just no longer as a shape with edges you can read.
+    // Contrast went 0.58 -> 0.34 on a second look: 0.58 cut the offending band from a spread of 51.5 to
+    // 2.7, which sounds finished until you remember the panel around it sits near 8, so 2.7 was still a
+    // third of the local level and the eye reads relative differences in the dark, not absolute ones.
+    private const float FrostDesat = 0.40f, FrostContrast = 0.34f, FrostFloor = 0.05f;
+
+    private static ColorMatrix Frost(float alpha)
+    {
+        const float lr = 0.2126f, lg = 0.7152f, lb = 0.0722f;
+        float d = FrostDesat, c = FrostContrast;
+        return new ColorMatrix(new[]
+        {
+            new[] { ((1 - d) + lr * d) * c, lr * d * c,             lr * d * c,             0f, 0f },
+            new[] { lg * d * c,             ((1 - d) + lg * d) * c, lg * d * c,             0f, 0f },
+            new[] { lb * d * c,             lb * d * c,             ((1 - d) + lb * d) * c, 0f, 0f },
+            new[] { 0f,                     0f,                     0f,                     alpha, 0f },
+            new[] { FrostFloor,             FrostFloor,             FrostFloor,             0f, 1f },
+        });
+    }
+
+    // The composite itself, with the backdrop passed in rather than read off the field, so `--render-shape`
+    // can drive the REAL path with a known backdrop. The edge behaviour here has been wrong twice; it needs
+    // to be inspectable without a screenshot of a window that refuses to be screenshotted.
+    internal static void ShapeInto(Graphics g, int w, int h, int radius, int tintAlpha,
+                                   Bitmap? backdrop, float glassFade)
+    {
         const int ss = 2;
-        using var big = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
+
+        // The backdrop and the tint used to be filled through the SAME path, one after the other, and that
+        // is what produced the coloured frame. At a boundary pixel with partial coverage c, the tint's alpha
+        // is scaled by c as well - so it covers the backdrop *less* exactly where the backdrop is already
+        // there, and the rim comes out far more wallpaper than tint. Measured on a magenta backdrop: the
+        // outer ring reached 130 in red and blue against an interior of 27.
+        // Composite them on a FLAT rectangle first, so every pixel is already the finished glass colour, and
+        // mask the result once. One antialiased edge, and it only scales alpha - it cannot change the hue.
+        var content = ScratchA(w * ss, h * ss);
+        using (var cg = Graphics.FromImage(content))
+        {
+            cg.CompositingMode = CompositingMode.SourceCopy;   // reused buffer: overwrite, never blend onto
+            cg.Clear(Color.Transparent);
+            cg.CompositingMode = CompositingMode.SourceOver;
+            if (backdrop != null && glassFade > 0.004f)
+            {
+                int sx = (CaptureW - w) / 2;
+                cg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                cg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                using var ia = new ImageAttributes();
+                ia.SetColorMatrix(Frost(Math.Clamp(glassFade, 0f, 1f)));
+                cg.DrawImage(backdrop, new Rectangle(0, 0, w * ss, h * ss),
+                    sx, 0, w, h, GraphicsUnit.Pixel, ia);
+            }
+            using var tint = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8));
+            cg.FillRectangle(tint, 0, 0, w * ss, h * ss);
+
+            // What was learned the expensive way: transparency alone is not glass. Both fixes for the
+            // backdrop showing through as shapes - the tint, then FrostMix - work by REMOVING information,
+            // and with nothing put back the pane stopped reading as a material at all ("شیشه‌ای بودنش از بین
+            // رفت"). Frosted glass is a blurred backdrop PLUS a lit surface: a sheen down the face and a
+            // grain in the substrate. Those two are backdrop-independent, so they cost none of the ghost
+            // suppression back. The rim light is the third and has to follow the path, so it is below.
+            if (Sheen > 0.004f)
+            {
+                using var lg = new LinearGradientBrush(new Rectangle(0, -1, w * ss, h * ss + 2),
+                    Color.FromArgb((int)(255 * Sheen), 255, 255, 255), Color.FromArgb(0, 255, 255, 255),
+                    LinearGradientMode.Vertical)
+                { Blend = new Blend { Factors = new[] { 0f, 0.55f, 1f }, Positions = new[] { 0f, 0.30f, 1f } } };
+                cg.FillRectangle(lg, 0, 0, w * ss, h * ss);
+            }
+            // real frosted glass is a scattering medium, and the grain is most of why it reads as one. It
+            // also happens to break the banding the heavy blur leaves behind.
+            if (Grain > 0.004f)
+            {
+                using var noise = new TextureBrush(GrainTile(), WrapMode.Tile);
+                cg.FillRectangle(noise, 0, 0, w * ss, h * ss);
+            }
+        }
+
+        var big = ScratchB(w * ss, h * ss);
         using (var bg = Graphics.FromImage(big))
         {
             bg.SmoothingMode = SmoothingMode.AntiAlias;
             bg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            bg.CompositingMode = CompositingMode.SourceCopy;
             bg.Clear(Color.Transparent);
+            bg.CompositingMode = CompositingMode.SourceOver;
             using var path = PillPath(w * ss, h * ss, radius * ss);
-            lock (_bgLock)
+            using var mask = new TextureBrush(content) { WrapMode = WrapMode.Clamp };
+            bg.FillPath(mask, path);
+            // the edge is where a pane of glass announces itself - it catches light along its contour and
+            // that single hairline is the strongest "this is glass" cue there is. Drawn INSIDE the mask so
+            // it is shaped by the same path and cannot become the coloured frame all over again; inset by
+            // half the pen so it lands fully on covered pixels instead of riding the antialiased boundary.
+            if (RimLight > 0.004f)
             {
-                if (glass && _bg != null && glassFade > 0.004f)
-                {
-                    var clip = bg.Clip;
-                    bg.SetClip(path);
-                    int sx = (CaptureW - w) / 2;
-                    bg.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                    using var ia = new ImageAttributes();
-                    ia.SetColorMatrix(new ColorMatrix { Matrix33 = Math.Clamp(glassFade, 0f, 1f) });
-                    bg.DrawImage(_bg, new Rectangle(0, 0, w * ss, h * ss),
-                        sx, 0, w, h, GraphicsUnit.Pixel, ia);
-                    bg.Clip = clip;
-                }
+                using var rim = new Pen(Color.FromArgb((int)(255 * RimLight), 255, 255, 255), ss)
+                { Alignment = PenAlignment.Inset };
+                bg.DrawPath(rim, path);
             }
-            using var tint = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8));
-            bg.FillPath(tint, path);
         }
         // bilinear, NOT bicubic: bicubic's negative lobes undershoot at the shape's dark→transparent
         // premultiplied edge, leaving a thin dark rim ("خط سیاه") that shows over light content behind.
@@ -829,10 +959,13 @@ internal sealed class LayeredNotch
     // came from the double smoothing, not from passing through full size in between, so the chain runs
     // entirely small and expands exactly once at the end. Same result, roughly half the time, which is what
     // buys the higher capture rate that actually removes the visible lag.
-    private static Bitmap BlurPyramid(Bitmap src)
+    // 1/8 left the edges of things behind still readable as edges - a pale bar behind the pill arrived as a
+    // pale BAR. 1/14 is far enough down that a hard boundary comes back as a gradient, which is the other
+    // half of what stops background content reading as a shape inside the glass (Frost is the first half).
+    internal static Bitmap BlurPyramid(Bitmap src)
     {
         int w = src.Width, h = src.Height;
-        using var s1 = new Bitmap(Math.Max(1, w / 8), Math.Max(1, h / 8), PixelFormat.Format32bppPArgb);
+        using var s1 = new Bitmap(Math.Max(1, w / 14), Math.Max(1, h / 14), PixelFormat.Format32bppPArgb);
         using (var g = Graphics.FromImage(s1))
         {
             g.InterpolationMode = InterpolationMode.HighQualityBilinear;
@@ -849,10 +982,100 @@ internal sealed class LayeredNotch
         var big = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
         using (var g = Graphics.FromImage(big))
         {
+            // Blur shrinks what is behind, it does not stop it being a map of what is behind. A 90px block
+            // against the pill's left end is still 6px in the 1/14 thumbnail, and the upscale hands it back
+            // as a flat coloured slab - so the ends of the pill came out a different colour from the middle
+            // ("رنگ لبه‌ها فرق می‌کند"), which no amount of extra blur fixes because past ~1/14 the upscale
+            // rings instead. Frosted glass takes on the AVERAGE of its backdrop and keeps only a soft drift
+            // of it, so the plate is pulled toward its own mean. Hue and movement survive - the pane still
+            // shifts as the wallpaper does - but no region of it reads as a shape any more.
+            if (FrostMix > 0.004f)
+            {
+                using var wash = new SolidBrush(Mean(s1));   // s1, not s2: fewer pixels, same average
+                g.FillRectangle(wash, 0, 0, w, h);
+            }
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.DrawImage(s2, new Rectangle(0, 0, w, h), new Rectangle(0, 0, s2.Width, s2.Height), GraphicsUnit.Pixel);
+            using var ia = new ImageAttributes();
+            var m = new ColorMatrix { Matrix33 = 1f - FrostMix };
+            ia.SetColorMatrix(m);
+            g.DrawImage(s2, new Rectangle(0, 0, w, h),
+                0, 0, s2.Width, s2.Height, GraphicsUnit.Pixel, ia);
         }
         return big;
+    }
+
+    // how far the blurred plate is pulled toward its own average colour. 0 = the old behaviour (a blurred
+    // picture of the desktop), 1 = a single flat wash that only changes as the average behind it changes.
+    internal static float FrostMix = 0.55f;
+
+    // Sheen down the face, grain in the substrate, rim light along the contour - the three cues that make a
+    // pane read as a material rather than a colour, all backdrop-independent so they cost none of the ghost
+    // suppression back. Built, shipped at 0.09/0.06/0.17, looked at, and rejected on sight: off is the
+    // shipped state. The code stays because the reasoning still holds and `--render-shape mix,sheen,grain,
+    // rim` sweeps all four without a rebuild - at 0 every one of them is a branch that does not run.
+    internal static float Sheen = 0f, Grain = 0f, RimLight = 0f;
+
+    private static Bitmap? _grain;
+
+    // one tile, generated once. Deterministic seed: a grain that reshuffles per frame is a crawling fizz on
+    // a window that sits still, which is worse than no grain at all.
+    private static Bitmap GrainTile()
+    {
+        if (_grain is { } g0 && Math.Abs(_grainFor - Grain) < 0.0005f) return g0;
+        _grain?.Dispose();
+        const int n = 128;
+        var bmp = new Bitmap(n, n, PixelFormat.Format32bppPArgb);
+        var data = bmp.LockBits(new Rectangle(0, 0, n, n), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            var rnd = new Random(20260728);
+            int peak = (int)Math.Clamp(Grain * 255f, 0f, 255f);
+            unsafe
+            {
+                for (int y = 0; y < n; y++)
+                {
+                    byte* row = (byte*)data.Scan0 + y * data.Stride;
+                    for (int x = 0; x < n; x++)
+                    {
+                        // white, premultiplied: at alpha a the stored channels ARE a. A non-premultiplied
+                        // texture here is the documented way to spray white garbage onto a layered surface.
+                        byte a = (byte)rnd.Next(peak + 1);
+                        row[x * 4] = a; row[x * 4 + 1] = a; row[x * 4 + 2] = a; row[x * 4 + 3] = a;
+                    }
+                }
+            }
+        }
+        finally { bmp.UnlockBits(data); }
+        _grainFor = Grain;
+        return _grain = bmp;
+    }
+
+    private static float _grainFor = -1f;
+
+    // the mean of a thumbnail, done on the bits: a DrawImage down to 1x1 is a resample, not an average,
+    // and GDI+ does not promise box prefiltering at that ratio
+    private static Color Mean(Bitmap b)
+    {
+        var data = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly,
+                              PixelFormat.Format32bppPArgb);
+        try
+        {
+            long r = 0, g = 0, bl = 0;
+            int n = b.Width * b.Height;
+            unsafe
+            {
+                for (int y = 0; y < b.Height; y++)
+                {
+                    byte* row = (byte*)data.Scan0 + y * data.Stride;
+                    for (int x = 0; x < b.Width; x++)
+                    {
+                        bl += row[x * 4]; g += row[x * 4 + 1]; r += row[x * 4 + 2];
+                    }
+                }
+            }
+            return Color.FromArgb(255, (int)(r / n), (int)(g / n), (int)(bl / n));
+        }
+        finally { b.UnlockBits(data); }
     }
 
     private static Bitmap Blur(Bitmap src, int factor)
@@ -933,8 +1156,29 @@ internal sealed class LayeredNotch
         finally { Win32.CloseClipboard(); }
     }
 
+    // A layered popup tells Windows nothing about which parts of itself are pressable — the class cursor
+    // covers the whole window — so the arrow sat over the stop button exactly as it sat over dead space.
+    // The controller owns the hit-testing, so it hands over a screen-space predicate and this asks it.
+    public Func<Point, bool>? WantsHandCursor;
+    private static IntPtr _handCursor;
+
     private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        // WM_SETCURSOR fires before the class cursor is restored, and returning TRUE is what stops the
+        // default from overwriting the choice. Anything set outside this message lasts one mouse move.
+        if (msg == Win32.WM_SETCURSOR && WantsHandCursor is { } wantsHand)
+        {
+            try
+            {
+                if (Win32.GetCursorPos(out var cp) && wantsHand(new Point(cp.X, cp.Y)))
+                {
+                    if (_handCursor == IntPtr.Zero) _handCursor = Win32.LoadCursor(IntPtr.Zero, Win32.IDC_HAND);
+                    Win32.SetCursor(_handCursor);
+                    return new IntPtr(1);
+                }
+            }
+            catch { }
+        }
         if (msg == Win32.WM_DESTROY)
         {
             Win32.PostQuitMessage(0);

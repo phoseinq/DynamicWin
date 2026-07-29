@@ -81,8 +81,15 @@ internal static class Win32
     public static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
 
     public static readonly IntPtr IDC_ARROW = new(32512);
+    public static readonly IntPtr IDC_HAND = new(32649);
+    public const uint WM_SETCURSOR = 0x0020;
     [DllImport("user32.dll")]
     public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+
+    // system cursors are owned by the OS: the handle needs no freeing, and SetCursor only lasts until the
+    // next WM_SETCURSOR, which is exactly why the pointer shape has to be answered from that message
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style,

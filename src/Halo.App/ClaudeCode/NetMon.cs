@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -193,6 +194,211 @@ internal static class NetMon
 
 // Faint flag of the country the current (exit) IP sits in — shown next to the panel title.
 // One geo lookup every 5 min (no spam); the flag bitmap only changes when the IP does.
+// What the rest of the internet thinks of the exit, asked only when the user points at the block.
+// ipapi.is is the one free endpoint serving the flags that matter here - datacenter / vpn / proxy / tor
+// / abuser - over HTTPS and without a key. ip-api.com carries the same flags but its free tier is
+// plaintext HTTP, and asking "is my exit private" over a channel the local network can read and rewrite
+// is the wrong trade. Every figure below is theirs; none of it is computed here, because a reputation
+// score is not something this machine can measure about itself.
+internal static class IpRep
+{
+    public static volatile string? ForIp;    // the address the verdict below belongs to
+    public static volatile string? Verdict;  // "residential" / "datacenter" / "vpn exit" / "flagged: tor"
+    public static volatile string? Abuse;    // their abuse label for the operator, lowercased
+    public static volatile int Sev;          // 0 clean · 1 datacenter · 2 proxy/vpn seen · 3 flagged
+    // kept so the mark can be recomputed the moment the dns test lands, without asking them again
+    public static volatile bool Tor, Abuser, Bogon, Vpn, Proxy, Datacenter;
+
+    private static int _busy;
+    private static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(8) };
+
+    // Lazy and idempotent: hovering holds this at one in-flight request per address, and a result is kept
+    // until the exit itself changes. A hover is a question, so it costs exactly one lookup to answer.
+    public static void Want(string? ip)
+    {
+        if (string.IsNullOrEmpty(ip)) return;
+        if (string.Equals(ForIp, ip, StringComparison.Ordinal)) return;
+        if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try { Fetch(ip); } catch { } finally { Volatile.Write(ref _busy, 0); }
+        });
+    }
+
+    // Their wording, not their number: the scale behind abuser_score is undocumented, and printing
+    // "0.0586" beside their own label of "High" would read as a percentage and mislead. The field arrives
+    // as "0.0586 (High)", so the parenthetical is the whole useful part.
+    internal static string? AbuseLabel(string? raw)
+    {
+        if (raw is not { Length: > 0 }) return null;
+        int open = raw.IndexOf('('), close = open < 0 ? -1 : raw.IndexOf(')', open);
+        if (open < 0 || close <= open) return null;
+        string s = raw.Substring(open + 1, close - open - 1).Trim().ToLowerInvariant();
+        return s.Length == 0 ? null : s;
+    }
+
+    // Ordered by what actually gets you blocked: a flagged address is refused outright, a recognised vpn
+    // draws captchas, a plain datacenter is merely noticed, residential passes. Pure so the ordering is a
+    // test rather than something to re-derive by hovering an uncapturable window.
+    internal static (string verdict, int sev) Classify(bool tor, bool abuser, bool bogon, bool vpn,
+        bool proxy, bool datacenter, bool mobile, string? abuse)
+    {
+        var (verdict, sev) =
+              tor ? ("flagged: tor", 3)
+            : abuser ? ("flagged: abuse", 3)
+            : bogon ? ("flagged: bogon", 3)
+            : vpn ? ("vpn, recognised", 2)
+            : proxy ? ("proxy, recognised", 2)
+            : datacenter ? ("datacenter", 1)
+            : mobile ? ("mobile", 0)
+            : ("residential", 0);
+
+        // an operator their own data calls a high abuser is the difference between "a datacenter, fine"
+        // and "expect captchas", so it lifts a merely-noticed exit into the warning band
+        if (sev < 2 && abuse is "high" or "very high") sev = 2;
+        return (verdict, sev);
+    }
+
+    // The one number here that is OURS. Every input is a real flag from a real lookup, but the weights are
+    // a house opinion about what actually gets an address refused, and nothing measures that. So it is
+    // presented as a mark out of 100 and never as a percentage of anything, and the line beside it always
+    // names the findings that took the points off - a bare score you cannot audit is a magic number.
+    internal static int Score(bool tor, bool abuser, bool bogon, bool vpn, bool proxy, bool datacenter,
+                              string? abuse, bool split, bool dnsLeak)
+    {
+        int s = 100;
+        if (tor) s -= 55;
+        if (abuser) s -= 45;
+        if (bogon) s -= 45;
+        if (vpn || proxy) s -= 22;          // recognised either way: to a site it is the same fact
+        if (datacenter) s -= 14;
+        if (abuse == "very high") s -= 22;
+        else if (abuse == "high") s -= 14;
+        if (split) s -= 12;                 // measured here, not bought: the API leaves by a different door
+        if (dnsLeak) s -= 20;               // also measured: resolvers answering from outside the exit
+        return Math.Clamp(s, 0, 100);
+    }
+
+    private static void Fetch(string ip)
+    {
+        string body;
+        try { body = Http.GetStringAsync("https://api.ipapi.is/?q=" + Uri.EscapeDataString(ip)).Result; }
+        catch { return; }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var r = doc.RootElement;
+            bool Flag(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.True;
+
+            string? abuse = AbuseLabel(
+                r.TryGetProperty("company", out var co)
+                && co.TryGetProperty("abuser_score", out var sc) ? sc.GetString() : null);
+
+            bool tor = Flag("is_tor"), abuser = Flag("is_abuser"), bogon = Flag("is_bogon");
+            bool vpn = Flag("is_vpn"), proxy = Flag("is_proxy"), dc = Flag("is_datacenter");
+            var (verdict, sev) = Classify(tor, abuser, bogon, vpn, proxy, dc, Flag("is_mobile"), abuse);
+            Tor = tor; Abuser = abuser; Bogon = bogon; Vpn = vpn; Proxy = proxy; Datacenter = dc;
+
+            Verdict = verdict;
+            Abuse = abuse;
+            Sev = sev;
+            ForIp = ip;
+            Interlocked.Increment(ref NetMon.Version); // the panel is open and hovering: repaint once
+        }
+        catch { }
+    }
+}
+
+// Whether name lookups are leaving by the same door as the traffic. This cannot be measured locally -
+// the only way to see which resolver actually asked is to have an authoritative server watch for it - so
+// it uses bash.ws, which hands out an id, watches for lookups of <n>.<id>.bash.ws, and reports the
+// resolvers that came asking. Run ONLY when the exit block is hovered, once per address, because it is a
+// bigger disclosure than the plain IP lookup: it tells a third party who resolves your names.
+internal static class DnsLeak
+{
+    public static volatile string? ForIp;    // the exit this result belongs to
+    public static volatile bool Running;
+    public static volatile bool Done;
+    public static volatile int Resolvers;    // distinct resolvers that answered
+    public static volatile string? Where;    // the country codes they sat in, e.g. "TR" or "TR, DE"
+    public static volatile bool Leaking;     // at least one resolver outside the exit's own country
+
+    private static int _busy;
+    private static readonly System.Net.Http.HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    // Forget the cached answer so the next hover frame runs the test again. The previous verdict is left
+    // in place: the row keeps showing it, dimmed, while "testing dns\u2026" is up, which is easier to read
+    // than a row that blanks and then fills. An in-flight test is not interrupted - _busy sees to that, and
+    // a second press while one is running is a no-op rather than a second round of lookups.
+    public static void Retest()
+    {
+        ForIp = null;
+        Done = false;
+        Interlocked.Increment(ref NetMon.Version);
+    }
+
+    public static void Want(string? exitIp, string? exitCc)
+    {
+        if (string.IsNullOrEmpty(exitIp) || string.IsNullOrEmpty(exitCc)) return;
+        if (string.Equals(ForIp, exitIp, StringComparison.Ordinal)) return;
+        if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        Running = true;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try { Run(exitIp!, exitCc!); }
+            catch { }
+            finally { Running = false; Volatile.Write(ref _busy, 0); }
+        });
+    }
+
+    private static void Run(string exitIp, string exitCc)
+    {
+        string id;
+        try { id = Http.GetStringAsync("https://bash.ws/id").Result.Trim(); }
+        catch { return; }
+        if (id.Length == 0) return;
+
+        // Each lookup is expected to fail: the names do not resolve to anything. The POINT is the query
+        // reaching their authoritative server, which is what identifies the resolver that forwarded it.
+        for (int i = 1; i <= 6; i++)
+        {
+            try { System.Net.Dns.GetHostEntry($"{i}.{id}.bash.ws"); }
+            catch { }
+        }
+
+        string body;
+        try { body = Http.GetStringAsync($"https://bash.ws/dnsleak/test/{id}?json").Result; }
+        catch { return; }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var seen = new List<string>();
+            int count = 0;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (!e.TryGetProperty("type", out var t) || t.GetString() != "dns") continue;
+                count++;
+                var cc = (e.TryGetProperty("country", out var c) ? c.GetString() : null)?.ToUpperInvariant();
+                if (cc is { Length: > 0 } && !seen.Contains(cc)) seen.Add(cc);
+            }
+            if (count == 0) return;   // nothing observed: report nothing rather than a clean bill
+
+            Resolvers = count;
+            Where = string.Join(", ", seen);
+            // Their own "conclusion" field calls any resolver on a different ASN a leak, which flags simply
+            // choosing Cloudflare DNS. The question that matters is whether a lookup left the tunnel, so the
+            // test here is the resolver's COUNTRY against the exit's.
+            Leaking = seen.Count > 0 && seen.Exists(c => !string.Equals(c, exitCc, StringComparison.OrdinalIgnoreCase));
+            Done = true;
+            ForIp = exitIp;
+            Interlocked.Increment(ref NetMon.Version);
+        }
+        catch { }
+    }
+}
+
 internal static class IpCountry
 {
     public static volatile System.Drawing.Bitmap? Flag;
@@ -274,7 +480,9 @@ internal static class IpCountry
         {
             try
             {
-                var png = Http.GetByteArrayAsync($"https://flagcdn.com/w80/{d.cc.ToLowerInvariant()}.png").Result;
+                // w80 was barely above the drawn size, so the panel's own supersampling had nothing spare
+                // and detail like the TR star came out mushy. w320 leaves headroom for a resized pill too.
+                var png = Http.GetByteArrayAsync($"https://flagcdn.com/w320/{d.cc.ToLowerInvariant()}.png").Result;
                 Flag = new System.Drawing.Bitmap(new System.IO.MemoryStream(png));
             }
             catch { }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using Halo.Interop;
 using Halo.Shell;
@@ -14,7 +14,7 @@ internal static class Program
         // uninstall/disable hook: restore every app's native banner that Halo silenced, apply it live, and
         // forget the learned set. Run this from the uninstaller (or by hand) to leave the machine as found.
         if (args.Length >= 1 && args[0] == "--restore-notifications") { Halo.Notifications.BannerGate.Uninstall(); return; }
-        // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|claude-idle|codex|download] [scale] [x,y]`
+        // dev hook: `Halo.App --render-widget <out.png> [media|claude|claude-demo|claude-idle|claude-hot|codex|codex-demo|download] [scale] [x,y]`
         // the optional x,y parks the cursor there, so hover states can be rendered too
         // claude-demo / claude-idle render a synthetic session instead of the live one — for docs and blog images, where
         // the author's real context and real spend have no business appearing.
@@ -22,6 +22,24 @@ internal static class Program
         {
             RenderWidget(args[1], args.Length > 2 ? args[2] : "media",
                 args.Length > 3 && int.TryParse(args[3], out int sc) ? sc : 1, args);
+            return;
+        }
+        // dev hook: `Halo.App --render-pill <out.png>` — the COLLAPSED pill, one row per situation. Every
+        // other hook renders an expanded panel, but the status ring and the voice both live on the 220x40
+        // pill, and how they read TOGETHER as a session tightens is the whole point of both.
+        if (args.Length >= 2 && args[0] == "--render-pill") { RenderPill(args[1]); return; }
+        // dev hook: `Halo.App --probe-almanac` — the hourly banner's second line, for real: which city the
+        // timezone resolves to, what Open-Meteo answered, and the assembled line. The unit tests pin the
+        // shape from known parts; this is the only thing that exercises the two live fetches.
+        if (args.Length >= 1 && args[0] == "--probe-almanac")
+        {
+            Console.WriteLine($"zone     {TimeZoneInfo.Local.Id}");
+            Console.WriteLine($"place    {Almanac.Place ?? "(none - offset-only zone)"}");
+            Almanac.Poke();
+            for (int i = 0; i < 60 && Almanac.Latest is null; i++) System.Threading.Thread.Sleep(500);
+            Console.WriteLine($"weather  {(Almanac.Latest is { } wx ? $"{wx.TempC}C code {wx.Code} = {Almanac.Sky(wx.Code)}" : "(no reading)")}");
+            Console.WriteLine($"country  {Almanac.PlaceCountry ?? "(not geocoded)"}   metric {Almanac.Metric}   solar hijri {Almanac.SolarHijri}");
+            Console.WriteLine($"line     {Almanac.Detail(DateTime.Now)}");
             return;
         }
         // dev hook: `Halo.App --render-pin <out.png>` — the pushpin states in isolation
@@ -48,6 +66,83 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--probe-icon") { ProbeIcon(args[1]); return; }
         // dev hook: `Halo.App --probe-tree <pid>` — the process's ancestor chain via Toolhelp
         if (args.Length >= 2 && args[0] == "--probe-tree") { ProbeTree(int.Parse(args[1])); return; }
+        // dev hook: `Halo.App --render-shape <png>` — the pill's own glass composite over a flat magenta
+        // backdrop. The window cannot be screenshotted, and the edge is where this has gone wrong before:
+        // any magenta surviving at the rim is backdrop escaping from under the tint.
+        if (args.Length >= 2 && args[0] == "--render-shape")
+        {
+            // optional 4th arg sweeps the frost mix without a rebuild — the only way to pick that number is
+            // to look at three of them side by side
+            // "mix,sheen,grain,rim" — any prefix of it; the rest keep their defaults
+            if (args.Length >= 4)
+            {
+                var parts = args[3].Split(',');
+                float P(int i, float dflt) => i < parts.Length && float.TryParse(parts[i],
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : dflt;
+                Halo.Shell.LayeredNotch.FrostMix = P(0, Halo.Shell.LayeredNotch.FrostMix);
+                Halo.Shell.LayeredNotch.Sheen = P(1, Halo.Shell.LayeredNotch.Sheen);
+                Halo.Shell.LayeredNotch.Grain = P(2, Halo.Shell.LayeredNotch.Grain);
+                Halo.Shell.LayeredNotch.RimLight = P(3, Halo.Shell.LayeredNotch.RimLight);
+            }
+            // an optional third argument feeds it a REAL captured backdrop (see HALO_DUMP_GLASS), which is
+            // the only way to check the frosting against the kind of content that showed through wrong
+            System.Drawing.Bitmap back;
+            if (args.Length >= 3 && System.IO.File.Exists(args[2]))
+            {
+                using var src0 = new System.Drawing.Bitmap(args[2]);
+                using var fit0 = new System.Drawing.Bitmap(560, 220, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                using (var bgg0 = System.Drawing.Graphics.FromImage(fit0))
+                    bgg0.DrawImage(src0, new System.Drawing.Rectangle(0, 0, 560, 220));
+                // through the same blur the live path uses, so feeding it a RAW grab measures the whole
+                // pipeline and not just the tint
+                back = Halo.Shell.LayeredNotch.BlurPyramid(fit0);
+            }
+            else
+            {
+                back = new System.Drawing.Bitmap(560, 220, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+                using var bgg = System.Drawing.Graphics.FromImage(back);
+                bgg.Clear(System.Drawing.Color.Magenta);
+            }
+            using var _back = back;
+            using var shot = new System.Drawing.Bitmap(560, 220, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var sg = System.Drawing.Graphics.FromImage(shot))
+            {
+                sg.Clear(System.Drawing.Color.Transparent);
+                Halo.Shell.LayeredNotch.ShapeInto(sg, 560, 220, 30, NotchController.TintAppExpanded, back, 1f);
+            }
+            shot.Save(args[1], System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine("wrote " + args[1]);
+            return;
+        }
+        // dev hook: `Halo.App --probe-ip` — the exit as both providers see it, which is the only way to
+        // check the reputation parse without hovering an uncapturable window
+        if (args.Length >= 1 && args[0] == "--probe-ip")
+        {
+            Halo.ClaudeCode.IpCountry.Poke();
+            System.Threading.Thread.Sleep(5000);
+            Console.WriteLine($"ip={Halo.ClaudeCode.IpCountry.Ip} cc={Halo.ClaudeCode.IpCountry.Cc} "
+                + $"isp={Halo.ClaudeCode.IpCountry.Isp} asn={Halo.ClaudeCode.IpCountry.Asn}");
+            Console.WriteLine($"apiIp={Halo.ClaudeCode.IpCountry.ApiIp} apiCc={Halo.ClaudeCode.IpCountry.ApiCc} "
+                + $"split={Halo.ClaudeCode.IpCountry.Split}");
+            string? scored = Halo.ClaudeCode.IpCountry.Split
+                ? Halo.ClaudeCode.IpCountry.ApiIp : Halo.ClaudeCode.IpCountry.Ip;
+            Halo.ClaudeCode.IpRep.Want(scored);
+            System.Threading.Thread.Sleep(5000);
+            Console.WriteLine($"scored={scored} forIp={Halo.ClaudeCode.IpRep.ForIp} "
+                + $"verdict={Halo.ClaudeCode.IpRep.Verdict} abuse={Halo.ClaudeCode.IpRep.Abuse} "
+                + $"sev={Halo.ClaudeCode.IpRep.Sev}");
+            Halo.ClaudeCode.DnsLeak.Want(scored,
+                Halo.ClaudeCode.IpCountry.Split ? Halo.ClaudeCode.IpCountry.ApiCc : Halo.ClaudeCode.IpCountry.Cc);
+            for (int i = 0; i < 40 && !Halo.ClaudeCode.DnsLeak.Done; i++) System.Threading.Thread.Sleep(500);
+            Console.WriteLine($"dns done={Halo.ClaudeCode.DnsLeak.Done} resolvers={Halo.ClaudeCode.DnsLeak.Resolvers} "
+                + $"where={Halo.ClaudeCode.DnsLeak.Where} leaking={Halo.ClaudeCode.DnsLeak.Leaking}");
+            Console.WriteLine("mark=" + Halo.ClaudeCode.IpRep.Score(
+                Halo.ClaudeCode.IpRep.Tor, Halo.ClaudeCode.IpRep.Abuser, Halo.ClaudeCode.IpRep.Bogon,
+                Halo.ClaudeCode.IpRep.Vpn, Halo.ClaudeCode.IpRep.Proxy, Halo.ClaudeCode.IpRep.Datacenter,
+                Halo.ClaudeCode.IpRep.Abuse, Halo.ClaudeCode.IpCountry.Split, Halo.ClaudeCode.DnsLeak.Leaking));
+            return;
+        }
         // dev hook: `Halo.App --probe-spectrum` — 6s of loopback band values (play audio meanwhile)
         if (args.Length >= 1 && args[0] == "--probe-spectrum")
         {
@@ -60,6 +155,10 @@ internal static class Program
             }
             return;
         }
+        // dev hook: `Halo.App --moods` — the whole vocabulary, one line per key. These reach the screen
+        // one at a time, weeks apart, in a window that cannot be screenshotted, so printing the table is
+        // the only way to read what the pill can actually say.
+        if (args.Length >= 1 && args[0] == "--moods") { Moods(); return; }
 
         using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
         if (!created) return;
@@ -83,6 +182,20 @@ internal static class Program
                 ex.ToString());
             throw;
         }
+    }
+
+    // `--moods` prints the whole table: every key, how many lines it has, and the lines themselves.
+    private static void Moods()
+    {
+        int keys = 0, lines = 0;
+        foreach (var key in Halo.Agents.Moods.Keys)
+        {
+            var set = Halo.Agents.Moods.Set(key);
+            keys++; lines += set.Length;
+            Console.WriteLine($"{key,-18} {set.Length,2}  {string.Join("  ·  ", set)}");
+        }
+        Console.WriteLine();
+        Console.WriteLine($"{keys} keys, {lines} lines, none of them generated at runtime.");
     }
 
     private static void ProbeTree(int pid)
@@ -167,6 +280,99 @@ internal static class Program
     }
 
     // dev-only: draw the pushpin (pinned / unpinned / unpinned-hover) big on a dark bg to eyeball it
+    // The collapsed pill, one row per situation, at 2x with the situation named beside it. The ring and the
+    // line are both driven by the SAME MoodContext now, so the thing that has to be judged is whether they
+    // agree: a ring warming while the words say "no room to work…" is the design, a ring warming while the
+    // words still say "writing…" is a bug. Neither is visible to a unit test, and the live window carries
+    // WDA_EXCLUDEFROMCAPTURE, so this is the only way to look at it.
+    private static void RenderPill(string outPath)
+    {
+        var t = new System.Threading.Thread(() =>
+        {
+            // (label, state, tool, minutes in, context used of 1M, 5-hour usage)
+            (string label, string state, string? tool, int agoMin, long ctxUsed, float usage)[] rows =
+            {
+                ("idle", "idle", null, 0, 120_000, 0.30f),
+                ("on a tool", "working", "Edit", 0, 120_000, 0.30f),
+                ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f),
+                ("context 92%", "working", "Bash", 1, 920_000, 0.30f),
+                ("usage 96%", "working", "Bash", 1, 120_000, 0.96f),
+                ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f),
+            };
+            const int pw = 220, ph = 40, gap = 12, labelW = 168, scale = 2;
+            int width = labelW + pw + 20, height = rows.Length * (ph + gap) + gap;
+            using var bmp = new System.Drawing.Bitmap(width * scale, height * scale,
+                System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using var g = System.Drawing.Graphics.FromImage(bmp);
+            g.Clear(System.Drawing.Color.FromArgb(255, 30, 30, 34));
+            g.ScaleTransform(scale, scale);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            using var lf = new System.Drawing.Font("Segoe UI", 11f);
+            using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(180, 235, 235, 235));
+
+            var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-pill-demo");
+            System.IO.Directory.CreateDirectory(root);
+            float y = gap;
+            int n = 0;
+            foreach (var (label, state, tool, agoMin, ctxUsed, usage) in rows)
+            {
+                var now = DateTimeOffset.UtcNow;
+                // one file and one widget PER ROW: the tool-run counter is per-widget state, and a shared
+                // store would carry one row's turn into the next
+                var path = System.IO.Path.Combine(root, $"status-{n++}.json");
+                System.IO.File.WriteAllText(path, $$"""
+                {
+                  "pid": {{System.Environment.ProcessId}},
+                  "sessionId": "pill",
+                  "state": "{{state}}",
+                  "consolePid": {{System.Environment.ProcessId}},
+                  "updatedAt": "{{now:o}}",
+                  "startedAt": "{{now.AddMinutes(-agoMin):o}}",
+                  {{(tool is null ? "" : $"\"currentTool\": \"{tool}\",")}}
+                  "session": { "contextUsed": {{ctxUsed}}, "contextMax": 1000000, "promptTokens": 12000 }
+                }
+                """);
+                IWidget w = new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(path,
+                    _ => DateTimeOffset.UtcNow.AddMinutes(-agoMin), watchFiles: false), 0, () => { });
+                for (int i = 0; i < 60 && !w.IsActive; i++) System.Threading.Thread.Sleep(50);
+                // the usage fraction is a static, so it goes in per row immediately before the draw
+                Halo.ClaudeCode.Limits.FiveHour = usage;
+                Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2);
+                Halo.ClaudeCode.Limits.CreditsUsed = 0;
+
+                // The line fades IN over frames (_appear, eased), so a single-frame render draws it at
+                // alpha 0 - the first pass of this hook produced six pills with rings and no words on them.
+                // Warm up on a throwaway surface, because drawing repeatedly onto the real one would
+                // composite the glow six times over.
+                using (var warm = new System.Drawing.Bitmap(pw, ph,
+                    System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
+                using (var wg = System.Drawing.Graphics.FromImage(warm))
+                    for (int f = 0; f < 14; f++) w.DrawCollapsed(wg, pw, ph, 1f);
+
+                using var pill = new System.Drawing.Bitmap(pw, ph,
+                    System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+                using (var pg = System.Drawing.Graphics.FromImage(pill))
+                {
+                    pg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    // the pill's own plate, because the ring is judged against what sits behind it live
+                    using (var plate = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(236, 16, 16, 18)))
+                    using (var pp = Fx.PillPath(pw, ph, ph / 2f))
+                        pg.FillPath(plate, pp);
+                    w.DrawCollapsed(pg, pw, ph, 1f);
+                }
+                g.DrawString(label, lf, lb, new System.Drawing.RectangleF(12, y + 10, labelW - 20, ph));
+                g.DrawImage(pill, labelW, y);
+                y += ph + gap;
+            }
+            bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine(outPath);
+        });
+        t.SetApartmentState(System.Threading.ApartmentState.STA);
+        t.Start();
+        t.Join();
+    }
+
     private static void RenderPin(string outPath)
     {
         // Five cells now, because the pushpin carries two settings and the only way a user can tell them
@@ -202,14 +408,17 @@ internal static class Program
     // colourful backdrop, so any edge fringe and the Persian/English text rendering are visible.
     private static void RenderNotif(string outPath)
     {
+        // TWO banners: a body longer than the summary can hold, and a short one. The grabber bar belongs to
+        // the first and must be absent from the second — it promises "drag me, there is more", and for every
+        // short message it used to promise it falsely. One image is the only way to check that by eye.
         int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 24;
-        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H + pad * 2);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H * 2 + pad * 3);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
-                new System.Drawing.Rectangle(0, 0, W + pad * 2, H + pad * 2),
+                new System.Drawing.Rectangle(0, 0, W + pad * 2, H * 2 + pad * 3),
                 System.Drawing.Color.FromArgb(70, 150, 210), System.Drawing.Color.FromArgb(210, 110, 70), 35f))
-                g.FillRectangle(lg, 0, 0, W + pad * 2, H + pad * 2);
+                g.FillRectangle(lg, 0, 0, W + pad * 2, H * 2 + pad * 3);
             g.TranslateTransform(pad, pad);
             // a round-ish test icon so accent/glow kick in
             using var icon = new System.Drawing.Bitmap(64, 64);
@@ -248,6 +457,19 @@ internal static class Program
                 Preview = shot,
             };
             Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, n, 0f, false);
+
+            // the short one, mixed FA+EN so the RTL path is exercised on the same image
+            g.TranslateTransform(0, H + pad);
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, H, 26, 245, glass: false);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            Halo.Widgets.NotifBanner.Draw(g, W, H, 1f, new Halo.Notifications.NotifItem
+            {
+                Icon = icon,
+                App = "Telegram",
+                Title = "سلام",
+                Body = "بزن بریم",
+            }, 0f, false);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
@@ -401,7 +623,37 @@ internal static class Program
             // and real dollars — fine for eyeballing a layout, not for a public page. Credits are left
             // unset so the money line does not render at all, rather than rendering an invented figure.
             string demoRoot = "";
-            if (which is "claude-demo" or "claude-idle")
+            // codex-demo: the Codex twin of claude-demo. Its panel is a ring cluster now, and the ring
+            // cluster is the part that cannot be checked any other way - the window it lives in carries
+            // WDA_EXCLUDEFROMCAPTURE, so a screenshot of the running pill shows whatever is behind it.
+            string codexRoot = "";
+            if (which == "codex-demo")
+            {
+                codexRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-codex-demo");
+                System.IO.Directory.CreateDirectory(codexRoot);
+                var cnow = DateTimeOffset.UtcNow;
+                System.IO.File.WriteAllText(System.IO.Path.Combine(codexRoot, "cli.json"), $$"""
+                {
+                  "pid": {{System.Environment.ProcessId}},
+                  "source": "cli",
+                  "state": "working",
+                  "consolePid": {{System.Environment.ProcessId}},
+                  "updatedAt": "{{cnow:o}}",
+                  "startedAt": "{{cnow.AddMinutes(-4):o}}",
+                  "currentTool": "apply_patch",
+                  "contextUsed": 712000,
+                  "contextMax": 1000000,
+                  "primaryLimit": { "usedPercent": 61, "windowMinutes": 300, "resetsAt": "{{cnow.AddHours(1).AddMinutes(52):o}}" },
+                  "secondaryLimit": { "usedPercent": 34, "windowMinutes": 10080, "resetsAt": "{{cnow.AddDays(4):o}}" }
+                }
+                """);
+            }
+            bool demo = which is "claude-demo" or "claude-idle" or "claude-hot";
+            // claude-hot is the same synthetic session wound up to where the warning colours live: the
+            // context ring and its figure only disagree once the band flips, so a demo parked at 34%
+            // could never have shown the bug that was reported at 86%.
+            bool hot = which == "claude-hot";
+            if (demo)
             {
                 demoRoot = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "halo-claude-demo");
                 System.IO.Directory.CreateDirectory(demoRoot);
@@ -409,6 +661,7 @@ internal static class Program
                 // the lamp that replaces the stop button when nothing can be interrupted is what the
                 // panel shows most of the time, so it needs to be renderable too
                 var demoState = which == "claude-idle" ? "idle" : "working";
+                long ctxUsed = hot ? 862_000 : 341_000;
                 System.IO.File.WriteAllText(System.IO.Path.Combine(demoRoot, "status.json"), $$"""
                 {
                   "pid": {{System.Environment.ProcessId}},
@@ -419,19 +672,22 @@ internal static class Program
                   "updatedAt": "{{now:o}}",
                   "startedAt": "{{now.AddMinutes(-12):o}}",
                   "currentTool": "Edit",
-                  "session": { "contextUsed": 341000, "contextMax": 1000000, "promptTokens": 48200 }
+                  "session": { "contextUsed": {{ctxUsed}}, "contextMax": 1000000, "promptTokens": 48200 }
                 }
                 """);
-                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHour = hot ? 0.93f : 0.42f;
                 Halo.ClaudeCode.Limits.FiveHourReset = now.AddHours(2).AddMinutes(48);
             }
 
             IWidget w = which switch
             {
-                "claude-demo" or "claude-idle" => new ClaudeCodeWidget(
+                "claude-demo" or "claude-idle" or "claude-hot" => new ClaudeCodeWidget(
                     new Halo.ClaudeCode.StatusStore(System.IO.Path.Combine(demoRoot, "status.json"),
                         _ => DateTimeOffset.UtcNow.AddMinutes(-12), watchFiles: false), 0, () => { }),
                 "claude" => new ClaudeCodeWidget(new Halo.ClaudeCode.StatusStore(), 0, () => { }),
+                "codex-demo" => new CodexWidget(
+                    new Halo.Codex.CodexStatusStore(codexRoot, codexRoot, _ => true, watchFiles: false),
+                    Halo.Codex.CodexSurface.Cli, () => { }, observeLimits: _ => { }),
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 "download" => new DownloadWidget(),
                 _ => new MediaWidget(new MediaSessions(), 0),
@@ -439,7 +695,7 @@ internal static class Program
             for (int i = 0; i < 100 && !w.IsActive; i++)
                 System.Threading.Thread.Sleep(100);
             scale = Math.Clamp(scale, 1, 6);
-            if (which is "claude-demo" or "claude-idle")
+            if (demo || which == "codex-demo")
             {
                 // Drawing the panel is what calls Limits.OnPanelOpen(), which goes and refetches — and the
                 // synthetic figures set above are gone by the time the real draw happens, leaving a blank
@@ -452,19 +708,54 @@ internal static class Program
             // The warm draw above opened NetMon's fast-sampling window; without a pause the ring buffer is
             // still empty and the connection graph renders its "sampling…" state every time — so the one
             // part of the panel that is a chart could never actually be eyeballed as a chart.
-            if (which is "claude" or "claude-demo" or "claude-idle" or "codex")
+            if (which is "claude" or "codex" or "codex-demo" || demo)
                 System.Threading.Thread.Sleep(8000); // Poke opens an 8s fast-sample window; use all of it
             // Demo figures go in LAST, after that wait: the refetch the warm draw kicked off is asynchronous,
             // and setting them before the sleep let the real answer land on top — the saved frame then showed
             // the author's actual usage and dollar spend, which is the exact thing this mode exists to avoid.
-            if (which is "claude-demo" or "claude-idle")
+            if (demo || which == "codex-demo")
             {
-                Halo.ClaudeCode.Limits.FiveHour = 0.42f;
+                Halo.ClaudeCode.Limits.FiveHour = hot ? 0.93f : 0.42f;
                 Halo.ClaudeCode.Limits.FiveHourReset = DateTimeOffset.UtcNow.AddHours(2).AddMinutes(48);
-                Halo.ClaudeCode.Limits.Week = 0.61f;
+                Halo.ClaudeCode.Limits.Week = hot ? 0.78f : 0.61f;
                 Halo.ClaudeCode.Limits.WeekReset = DateTimeOffset.UtcNow.AddDays(3).AddHours(5);
                 Halo.ClaudeCode.Limits.CreditsUsed = 0;   // no invented dollars on a public image
                 Halo.ClaudeCode.Limits.LastSuccess = DateTime.UtcNow.AddMinutes(-2);
+
+                // The exit block has the same problem as the money line, only worse: on this machine it
+                // renders the author's real address, ISP and ASN. RFC 5737 TEST-NET-3 and an RFC 5398
+                // documentation ASN read as a real exit and can never BE anyone's. Setting ForIp on both
+                // probes is the load-bearing part — Want() early-returns when it already holds that ip, so
+                // the draw-time calls at the bottom of the panel never go out and never overwrite these.
+                const string demoIp = "203.0.113.24";
+                Halo.ClaudeCode.IpCountry.Ip = demoIp;
+                Halo.ClaudeCode.IpCountry.ApiIp = null;   // Split is Ip != ApiIp, so this keeps it one row
+                Halo.ClaudeCode.IpCountry.Cc = "NL";
+                Halo.ClaudeCode.IpCountry.Isp = "Example ISP";   // longer and the column ellipsises it
+                Halo.ClaudeCode.IpCountry.Asn = "AS64496";
+                try
+                {
+                    using var flagHttp = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+                    Halo.ClaudeCode.IpCountry.Flag = new System.Drawing.Bitmap(new System.IO.MemoryStream(
+                        flagHttp.GetByteArrayAsync("https://flagcdn.com/w320/nl.png").Result));
+                }
+                catch { }
+                Halo.ClaudeCode.IpRep.ForIp = demoIp;
+                Halo.ClaudeCode.IpRep.Verdict = "residential";
+                Halo.ClaudeCode.IpRep.Abuse = null;
+                Halo.ClaudeCode.IpRep.Sev = 0;
+                Halo.ClaudeCode.IpRep.Tor = false;
+                Halo.ClaudeCode.IpRep.Abuser = false;
+                Halo.ClaudeCode.IpRep.Bogon = false;
+                Halo.ClaudeCode.IpRep.Vpn = false;
+                Halo.ClaudeCode.IpRep.Proxy = false;
+                Halo.ClaudeCode.IpRep.Datacenter = false;
+                Halo.ClaudeCode.DnsLeak.ForIp = demoIp;
+                Halo.ClaudeCode.DnsLeak.Running = false;
+                Halo.ClaudeCode.DnsLeak.Done = true;
+                Halo.ClaudeCode.DnsLeak.Resolvers = 3;
+                Halo.ClaudeCode.DnsLeak.Where = "NL";
+                Halo.ClaudeCode.DnsLeak.Leaking = false;
             }
             // hover states are half the panel's behaviour (the graph tooltip, the exact-reset swap, the
             // route readout) and none of it could be rendered - so a 5th argument parks the cursor.
@@ -476,6 +767,19 @@ internal static class Program
                     Halo.Widgets.WidgetInput.Mouse = new System.Drawing.PointF(mx, my);
                     Halo.Widgets.WidgetInput.Over = true;
                 }
+            }
+            // HALO_RENDER_NET=1 pays a few seconds to let the exit probes land, so the block renders what it
+            // will really say. Off by default: every other render wants to be instant.
+            if (Environment.GetEnvironmentVariable("HALO_RENDER_NET") == "1")
+            {
+                Halo.ClaudeCode.IpCountry.Poke();
+                System.Threading.Thread.Sleep(5000);
+                string? exit = Halo.ClaudeCode.IpCountry.Split
+                    ? Halo.ClaudeCode.IpCountry.ApiIp : Halo.ClaudeCode.IpCountry.Ip;
+                Halo.ClaudeCode.IpRep.Want(exit);
+                Halo.ClaudeCode.DnsLeak.Want(exit,
+                    Halo.ClaudeCode.IpCountry.Split ? Halo.ClaudeCode.IpCountry.ApiCc : Halo.ClaudeCode.IpCountry.Cc);
+                for (int i = 0; i < 40 && !Halo.ClaudeCode.DnsLeak.Done; i++) System.Threading.Thread.Sleep(500);
             }
             using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))

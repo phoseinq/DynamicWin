@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -572,4 +572,87 @@ internal static class Fx
         p.CloseFigure();
         return p;
     }
+    // How spent a usage window is, as a colour. Lives here because both agent panels draw the same
+    // meaning and they had drifted: Claude ramped green->amber->red THROUGH HUE, Codex lerped
+    // blue->amber in RGB, which passes through grey - so a Codex window at 61% rendered as a dead
+    // grey ring while the same 61% on the Claude panel was clearly amber. Interpolating hue keeps
+    // every value on the scale legible; a straight RGB lerp between opposing hues does not.
+    internal static Color UsageColor(float f) =>
+        f <= 0.5f ? UsageGreen
+        : f <= 0.75f ? HueLerp(UsageGreen, UsageAmber, (f - 0.5f) / 0.25f)
+        : HueLerp(UsageAmber, UsageRed, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+
+    private static readonly Color UsageGreen = Color.FromArgb(62, 207, 92);
+    private static readonly Color UsageAmber = Color.FromArgb(255, 176, 32);
+    private static readonly Color UsageRed = Color.FromArgb(229, 72, 77);
+
+    // The warm end of the status ring. Deliberately an orange and NOT UsageRed: red on that ring means a
+    // failure, and a session merely under pressure must never be able to arrive at it.
+    private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
+
+    /// <summary>
+    /// The status ring, modulated by the situation it sits in. The ring was four flat colours while what
+    /// it describes is a continuum - a context window filling up, a usage window emptying, a turn dragging
+    /// on - so the state keeps setting the hue family (green on a tool, amber thinking, white idle) and
+    /// pressure warms it from there. Everything here is a lerp, so it drifts over minutes rather than
+    /// snapping between more colours you would have to learn; the caller is expected to keep the states
+    /// whose colour IS the message (an outage, a spent limit, a running compact) out of it.
+    /// </summary>
+    internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx)
+    {
+        // each pressure ramps only across the band where it starts to matter: 0 below it, 1 at the top
+        float squeeze = MathF.Max(Ramp(ctx.ContextFrac, 0.55f, 0.95f), Ramp(ctx.UsageFrac, 0.70f, 0.98f));
+        float drag = ctx.Running is { } r ? Ramp((float)r.TotalMinutes, 2f, 12f) : 0f;
+        // where "warm" is for this much pressure, and then how far the state's own colour travels toward
+        // it. Chaining two lerps off the state colour instead landed a squeezed green ring on YELLOW - the
+        // first hop had already carried the hue most of the way, so the second had little left to move.
+        var target = HueLerp(UsageAmber, RingHot, squeeze);
+        // a dragging turn warms a little, but yields to a squeeze: two signals pulling the same way would
+        // double up and read as "hot" for a turn that is merely slow
+        float pull = MathF.Max(0.85f * squeeze, 0.25f * drag * (1f - squeeze));
+        var c = HueLerp(state, target, pull);
+        // the small hours get a quieter ring. Any more than this reads as a rendering fault rather than as
+        // the time of night.
+        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.86f);
+        // hsv carries no alpha, and the idle ring is deliberately not fully opaque (238) - without this the
+        // ring got BRIGHTER as the session tightened, which is not what any of the above is saying
+        return Color.FromArgb(state.A, c.R, c.G, c.B);
+    }
+
+    private static float Ramp(float v, float from, float to)
+        => to <= from ? 0f : Math.Clamp((v - from) / (to - from), 0f, 1f);
+
+    private static Color Scale(Color c, float k) => Color.FromArgb(
+        c.A, (int)Math.Clamp(c.R * k, 0, 255), (int)Math.Clamp(c.G * k, 0, 255), (int)Math.Clamp(c.B * k, 0, 255));
+
+    private static Color HueLerp(Color a, Color b, float t)
+    {
+        var (h1, s1, v1) = ToHsv(a);
+        var (h2, s2, v2) = ToHsv(b);
+        float dh = h2 - h1;
+        if (dh > 180) dh -= 360; else if (dh < -180) dh += 360;
+        return FromHsv(h1 + dh * t, s1 + (s2 - s1) * t, v1 + (v2 - v1) * t);
+    }
+
+    private static (float h, float s, float v) ToHsv(Color c)
+    {
+        float r = c.R / 255f, g2 = c.G / 255f, b = c.B / 255f;
+        float max = Math.Max(r, Math.Max(g2, b)), min = Math.Min(r, Math.Min(g2, b)), d = max - min;
+        float h = d == 0 ? 0
+            : max == r ? 60 * (((g2 - b) / d) % 6)
+            : max == g2 ? 60 * ((b - r) / d + 2)
+            : 60 * ((r - g2) / d + 4);
+        if (h < 0) h += 360;
+        return (h, max == 0 ? 0 : d / max, max);
+    }
+
+    private static Color FromHsv(float h, float s, float v)
+    {
+        h = (h % 360 + 360) % 360;
+        float c = v * s, x = c * (1 - MathF.Abs((h / 60) % 2 - 1)), m = v - c;
+        var (r, g2, b) = h < 60 ? (c, x, 0f) : h < 120 ? (x, c, 0f) : h < 180 ? (0f, c, x)
+            : h < 240 ? (0f, x, c) : h < 300 ? (x, 0f, c) : (c, 0f, x);
+        return Color.FromArgb(255, (int)((r + m) * 255), (int)((g2 + m) * 255), (int)((b + m) * 255));
+    }
+
 }
