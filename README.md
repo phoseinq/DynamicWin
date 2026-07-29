@@ -45,7 +45,7 @@ folds away when there is not. No app to open, nothing covering your work.
 
 ### [⬇️ Download for Windows](https://github.com/phoseinq/DynamicWin/releases/latest)
 
-<sub>Windows 11 · x64 · per-user, no admin prompt · updates itself quietly</sub>
+<sub>Windows 11 · x64</sub>
 
 <sub>Take `DynamicWinSetup.exe` to install it, or `DynamicWinPortable.zip` to just run it.</sub>
 
