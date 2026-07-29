@@ -37,21 +37,19 @@
 یک تکه شیشه بالای صفحه. وقتی حرفی برای گفتن هست جلو می‌آید و وقتی نیست جمع می‌شود. نه اپی برای
 بازکردن، نه چیزی جلوی کارت.
 
-<br />
-
 <h2 align="center">⬇️ نصب</h2>
 
 <div align="center">
 
-### [⬇️ DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)
+### آخرین نسخه را از صفحهٔ **Releases** دانلود کنید
 
-<sub>ویندوز ۱۱ · x64 · برای همین کاربر، بدونِ پرامپتِ ادمین · خودش بی‌صدا آپدیت می‌شود</sub>
+### 👉 [مشاهدهٔ آخرین انتشار](https://github.com/phoseinq/DynamicWin/releases/latest)
 
-<sub>نسخهٔ پرتابل در [صفحهٔ ریلیزها](https://github.com/phoseinq/DynamicWin/releases/latest) هست.</sub>
+<sub>ویندوز ۱۱ · x64 · برای همین کاربر · بدونِ پرامپتِ ادمین · آپدیتِ بی‌صدا</sub>
+
+<sub>فایل نصاب (Installer) و نسخهٔ پرتابل (ZIP) در صفحهٔ Releases قرار دارند.</sub>
 
 </div>
-
-<br />
 
 <h2 align="center">🎵 مدیا</h2>
 
