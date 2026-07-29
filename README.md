@@ -44,7 +44,7 @@ A pill of glass at the top of your screen. It comes forward when there is someth
 
 ### Get the latest version from the **Releases** page
 
-### ➜ https://github.com/phoseinq/DynamicWin/releases/latest
+### 👉 [View the latest release](https://github.com/phoseinq/DynamicWin/releases/latest)
 
 <sub>Windows 11 · x64 · per-user · no admin prompt · silent updates.</sub>
 
