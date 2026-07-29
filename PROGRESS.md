@@ -2,7 +2,7 @@
 
 ## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
 
-Release 0 warnings / 0 errors, **310 tests** (up from 259; three new test files). Deployed by DLL hot-swap
+Release 0 warnings / 0 errors, **343 tests** (up from 259; four new test files). Deployed by DLL hot-swap
 and relaunched. **Mirror published to `origin/V3`.**
 
 ### "still cooking…" forever — the bug under the feature request
@@ -33,30 +33,73 @@ finds a set the slot actually has, so a slot needs only the situations worth wor
 The voice itself moved to hands-on work — a kitchen, a toolbox, a job on the bench — because a metaphor
 carries information a synonym does not: "kettle's on…" tells you to go away for a minute, "still
 running…" does not. `@tight` is the bench being covered, `@thin` is rationing, `@again` is the same
-drill. **83 keys** now.
+drill. Half of `unknown` is now just the noise a person makes while thinking, which is the honest content
+of a state that has nothing to report — and the hmm gains an *m* per duration band ("hmm…" → "hmmm…" →
+"hmmmm…"), which is length as information and the one joke here that survives being read twice.
+**78 keys.**
 
-### The ring stopped being four flat colours
-`Fx.MoodRing(state, ctx)`: the state still sets the hue family (green on a tool, amber thinking, white
-idle) and the same situation the words read warms it from there — up as the context or usage window
-tightens, a little more on a turn that is dragging, quieter in the small hours. Two rules keep it
-legible: the warm end is an **orange**, never the error red, so red still means only "broken"; and it is
-all lerps, so it drifts over minutes instead of teaching you more colours. The states whose colour *is*
-the message — outage, spent limit, running compact — are exempt.
+### One mapping for the words and the colour
+`ToolSlot(tool)` is now the single place a tool becomes a slot, on both widgets, and **both** the wording
+and the ring's colour come off it — so the pill cannot say "delegating…" in the green of a shell command.
+That refactor is what made the rest of this possible, and it deleted a duplicated switch.
 
-Two bugs the tests caught before the screen did: chaining two lerps off the state colour landed a
-squeezed green ring on **yellow** (the first hop had already moved the hue, leaving the second nothing to
-do — it now lerps once toward a target that is itself a function of pressure), and the HSV round trip
-**dropped alpha**, so the deliberately-not-opaque idle ring got *brighter* as the session tightened.
+Slots added because the pill was printing raw tool names for them: **watching** (`Monitor`, `BashOutput`),
+**reviewing** (`ReportFindings`), **publishing** (`Artifact`, `SendUserFile`), **consulting** (any
+`mcp__*` tool), **peeking** (Codex's `view_image`, which was a bare literal). A state the product can
+*name* is one it can also colour and time, which the fallback never could.
+
+`Moods.PrettyTool` for what is left: an MCP tool arrived on the pill as `mcp__serena__find_symbol…` —
+26 characters of punctuation — and now arrives as **`serena…`**, because the server is the half that
+answers "who is doing this". Underscores become spaces and the whole thing is cut to the pill's ceiling
+rather than clipped mid-word by the renderer, which reads as a rendering fault.
+
+### The ring is a palette now, and pressure is not allowed to lie with it
+`Fx.SlotColor` gives seven activity families — green shell, cyan taking-in, violet putting-out, lime
+surveying, deep magenta somebody-else's-turn, pink **your** turn, amber thinking — plus the four whose
+colour *is* the message and are exempt from any modulation: red outage, white spent-limit, blue running
+compact, and a new **mint** for the twenty seconds after a compact, which used to look idle.
+
+Getting pressure to coexist with that took three tries, and each failure was a different kind of lie:
+
+1. **0.85 pull toward orange** — every slot arrived at the *same* orange, so warmth erased the thing it
+   was annotating.
+2. **0.6 pull** — a squeezed green landed on **lime**, which is the colour of surveying. Worse than
+   erasing a state: impersonating one.
+3. **Hue for everyone, softly** — still drifted, and the *night dim* turned out to move a colour about as
+   far as the gap between two neighbouring hues (a dimmed violet came out nearer the magenta than its own
+   daytime self).
+
+The rule that holds: **a hue that says which activity this is may not be repurposed; the two that say
+nothing may be.** `hueIsFree` is true for exactly thinking (amber = "no news") and idle (white = nothing),
+and those two get the full warm lerp — which is where it is most wanted anyway, since an idle pill on a
+nearly-full context is exactly when you want the ring to catch your eye. Everyone else gets pressure as
+saturation and value: the same lamp turned up, never a different lamp.
+
+`SlotColorTests.AWarmedSlotNeverLooksLikeADifferentSlot` is the invariant, at five pressures × two times
+of day: however lit it gets, a slot must stay nearer its own calm colour than anyone else's. It is also
+what forced the palette down from thirteen hues to seven — thirteen is 27° apart, and reading-cyan and
+fetching-teal were one colour on a 2px ring. A ninth hue would have had to be squeezed between two
+neighbours; a seventh family did not.
+
+Two more bugs the tests caught before the screen did: chaining two lerps off the state colour landed a
+squeezed green on **yellow**, and the HSV round trip **dropped alpha**, so the deliberately-not-opaque
+idle ring got *brighter* as the session tightened.
 
 ### `--render-pill`, because this is the part that cannot be screenshotted
-Every other hook renders an expanded panel; the ring and the voice both live on the 220×40 pill. Six
-rows, one per situation, at 2× with the situation named beside it. It immediately earned itself: the
-first pass produced six pills with rings and **no words**, because the line fades in over frames
-(`_appear`) and a single-frame render draws it at alpha 0 — it now warms up on a throwaway surface.
-The strip reads: idle → "night shift" (white, dimmed, it was 00:59); on a tool → "one more then bed…"
-(green); thinking 10 min → "deep in thought…" (amber); context 92% → "no room to work…" (amber-orange);
-usage 96% → "coasting…"; both and dragging → "bench is full…" (hottest). Ring and words agree in every
-row, which is the thing being judged.
+Every other hook renders an expanded panel; the ring and the voice both live on the 220×40 pill. Fourteen
+rows at 2× with the situation named beside each: one per colour family first, so they can be compared
+side by side (the only way to tell whether they are distinguishable at 20px), then the same shell command
+under rising pressure. It immediately earned itself: the first pass produced pills with rings and **no
+words**, because the line fades in over frames (`_appear`) and a single-frame render draws it at alpha 0 —
+it now warms up on a throwaway surface.
+
+Rendered at 01:15, which is why the time-of-day band is all over it: idle → "night shift" (white);
+thinking → "night thoughts…" (amber); shell → "the night shift…" (green); reading → "eyeing the wiring…"
+(cyan); writing → "by lamplight…" (violet); surveying → "on the trail…" (lime); subagent → "passing it
+on…" (magenta); an MCP tool → "calling the desk…"; an unmapped tool → "someothertool…" (green); waiting →
+"your move ;)" (pink); 10 minutes of thinking → "deep in thought…"; context 92% → "elbows in…"; usage 96%
+→ "on fumes…"; both and dragging → "nowhere to put it…". Ring and words agree in every row, which is the
+thing being judged.
 
 ### The Codex `TurnOver` twin — owed since yesterday, paid
 Same hole, same reason: an interrupt is not a lifecycle event, so nothing writes a status and a
@@ -75,13 +118,16 @@ It said the time, which is the one thing the tray clock already tells you. `Shel
 rest of the glance.
 
 **First cut was too crowded** — "Thursday 30 Jul · 8 Mordad · Tehran · 27°C clear" is four fields, three
-separators, the same day said twice, and a word for something a picture does better. The shipped version
-is:
+separators, the same day said twice, and a word for something a picture does better. The banner has
+**three rows** and the chime was only using two of them; the facts fit the rows exactly:
 
 ```
-[🌙 indigo tile]   1:00 AM
-                   Thursday, 8 Mordad · Tehran 27°
+[🌙 indigo tile]   TEHRAN               <- the place. Constant, so it belongs where the app name goes
+                   1:00 AM · 27°        <- the two numbers you came for
+                   Thursday, 8 Mordad   <- the date, in the one calendar the place keeps
 ```
+
+Nothing was dropped and one separator survives out of three.
 
 - **The sky moved into the badge.** The banner already carries an icon and its hue already feeds the
   banner's glow, so `Almanac.SkyBadge(code, day)` returns a glyph and a hue: sun, moon, cloud, or a flake.

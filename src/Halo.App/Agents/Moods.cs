@@ -131,6 +131,7 @@ internal static class Moods
             "digging…", "rummaging…", "spelunking…", "sifting…", "prospecting…", "foraging…",
             "poking around…", "on the trail…", "combing code…", "raking through…",
             "torch and gloves…", "under the floor…", "behind the panel…", "hood's up…",
+            "hmm, where…", "it's in here…",
         },
         ["fetching"] = new[]
         {
@@ -166,12 +167,16 @@ internal static class Moods
             "asking you :)", "your turn", "your move", "over to you", "needs a call",
             "a question", "wants a word", "your say-so", "needs a hand", "hold this?",
         },
+        // half of these are just the noise a person makes while thinking, which is the honest content of
+        // this state: there is nothing to report yet. The hmm gets an extra m per duration band below -
+        // length as information, and the one joke in here that survives being read twice.
         ["unknown"] = new[]
         {
             "hmm…", "thinking…", "considering…", "mulling it…", "chewing on it…",
             "figuring it out…", "reasoning…", "weighing it up…", "deliberating…", "sizing it up…",
             "having a think…", "turning it over…",
             "measuring up…", "eyeing it up…", "head-scratching…",
+            "hmm, ok…", "erm…", "uhh…", "let's see…", "right then…", "so…",
         },
         ["compacting"] = new[]
         {
@@ -188,6 +193,32 @@ internal static class Moods
         {
             "plotting…", "replanning…", "revising…", "reordering…", "re-scoping…",
             "shuffling tasks…", "redrawing it…", "new blueprint…",
+        },
+
+        // ---- slots added because the pill was printing raw tool names for them. A state the product can
+        // NAME is a state it can also colour and time, so each of these is worth more than the fallback.
+        ["watching"] = new[]
+        {
+            "watching…", "keeping an eye…", "on the dial…", "waiting on it…",
+            "watching the pot…", "tailing it…",
+        },
+        ["reviewing"] = new[]
+        {
+            "reviewing…", "checking the work…", "inspecting…", "snagging…", "second look…",
+            "going over it…",
+        },
+        ["publishing"] = new[]
+        {
+            "publishing…", "shipping it…", "out the door…", "posting it…", "handing it over…",
+        },
+        ["consulting"] = new[]
+        {
+            "consulting…", "asking a tool…", "asking next door…", "phoning a friend…",
+            "calling the desk…",
+        },
+        ["peeking"] = new[]
+        {
+            "peeking o.o", "having a peek…", "eyes on the shot…", "taking a look…",
         },
 
         // ---- the same situations once they have been going a couple of minutes ----
@@ -233,6 +264,7 @@ internal static class Moods
         ["unknown" + LongSuffix] = new[]
         {
             "still thinking…", "deep thought…", "long think…", "cogitating…", "one minute…",
+            "hmmm…", "hmm, tricky…", "erm, hang on…",
         },
         ["compacting" + LongSuffix] = new[]
         {
@@ -288,6 +320,7 @@ internal static class Moods
         ["unknown" + AgesSuffix] = new[]
         {
             "deep in thought…", "still cooking…", "hard problem…",
+            "hmmmm…", "well, hmm…", "still erm-ing…",
         },
         ["compacting" + AgesSuffix] = new[]
         {
@@ -311,7 +344,7 @@ internal static class Moods
         },
         ["unknown" + TightSuffix] = new[]
         {
-            "no room to think…", "desk is buried…", "bench is covered…",
+            "no room to think…", "desk is buried…", "bench is covered…", "hmm, no room…",
         },
         ["running" + TightSuffix] = new[]
         {
@@ -353,7 +386,7 @@ internal static class Moods
         // a number, because the count the pill can see is tool hand-offs, not attempts at the same thing.
         ["unknown" + AgainSuffix] = new[]
         {
-            "same drill…", "on repeat…",
+            "same drill…", "on repeat…", "hmm, again…",
         },
         ["running" + AgainSuffix] = new[]
         {
@@ -525,6 +558,28 @@ internal static class Moods
         var picked = Pick(key, stale);
         lock (Gate) Held[key] = (picked, now);
         return picked;
+    }
+
+    /// <summary>
+    /// A tool with no slot names itself, so the name has to be worth reading. MCP tools arrive as
+    /// <c>mcp__serena__find_symbol</c>, which is 26 characters of punctuation on a 220px pill — and the
+    /// half of it that answers "who is doing this" is the server, so that is what survives. Underscores
+    /// become spaces, and the whole thing is cut to the pill's ceiling rather than clipped mid-word by the
+    /// renderer, which reads as a rendering fault rather than as a long name.
+    /// </summary>
+    internal static string PrettyTool(string? tool)
+    {
+        var t = (tool ?? "").Trim();
+        if (t.Length == 0) return Fixed("unknown");
+        if (t.StartsWith("mcp__", StringComparison.Ordinal))
+        {
+            var parts = t.Split("__", StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2) t = parts[1];
+        }
+        t = t.Replace('_', ' ').Replace('-', ' ').Trim().ToLowerInvariant();
+        if (t.Length == 0) return Fixed("unknown");
+        if (t.Length > MaxWidth - 1) t = t.Substring(0, MaxWidth - 1).TrimEnd();
+        return t + "…";
     }
 
     /// <summary>

@@ -15,6 +15,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static readonly Color Green = Color.FromArgb(62, 207, 92);
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
     private static readonly Color Red = Color.FromArgb(229, 72, 77);
+    private static readonly Color Mint = Color.FromArgb(82, 224, 163);   // just compacted: there is room again
     private static readonly Color Track = Color.FromArgb(38, 255, 255, 255);
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
@@ -927,13 +928,18 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static bool RingIsTheMessage(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown || LimitHit || Compacting(st);
 
+    // The ring's colour comes from the same slot the words do (Fx.SlotColor), so a dozen states each get
+    // their own hue instead of everything busy being green. waiting_input is the one state that reads as
+    // urgent rather than as activity, so it takes the pink that means "this one is addressed to you" -
+    // sharing amber with "thinking" hid the only state that is actually waiting on a human.
     private static Color RingBase(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
                                             // activity and left the pill looking busy while it was waiting on a reset.
-         : st?.State == "waiting_input" ? Amber
+         : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
-         : Shown(st) == "working" ? (string.IsNullOrEmpty(st?.CurrentTool) ? Amber : Green)
+         : JustCompacted(st) ? Mint         // 20 seconds of "there is room again", which used to look idle
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
          : White;
 
     // …and what it shows, which is that meaning ridden by the same situation the voice reads: warmer as
@@ -943,7 +949,12 @@ internal sealed class ClaudeCodeWidget : IWidget
     private Color RingColor(CcStatus? st)
     {
         var b = RingBase(st);
-        return RingIsTheMessage(st) ? b : Fx.MoodRing(b, Mood(st));
+        if (RingIsTheMessage(st)) return b;
+        // only thinking and idle hand their hue over to pressure: the tool hues are carrying which activity
+        // this is, and waiting_input's pink is carrying that it is your turn (see Fx.MoodRing)
+        bool hueIsFree = st?.State != "waiting_input"
+            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+        return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 
     private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
@@ -1014,24 +1025,38 @@ internal sealed class ClaudeCodeWidget : IWidget
     // the tool maps to a mood slot rather than straight to a string, so the wording can be rewritten
     // without touching this table. An unrecognised tool keeps naming itself - there is no slot for
     // "whatever that was", and inventing one would read worse than the tool's own name.
+    /// <summary>
+    /// Which mood slot a tool belongs to, or null for one with no vocabulary. This is now the ONE place
+    /// the mapping lives: the words come from the slot and so does the ring's colour, so the pill cannot
+    /// end up saying "delegating…" in the green of a shell command. Null means the tool names itself.
+    /// </summary>
+    internal static string? ToolSlot(string? tool) => tool switch
+    {
+        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing",
+        "Read" => "reading",
+        "Bash" or "PowerShell" or "KillShell" => "running",
+        "BashOutput" or "Monitor" => "watching",
+        "Grep" or "Glob" or "ToolSearch" => "digging",
+        "WebFetch" => "fetching",
+        "WebSearch" => "searching",
+        "Task" or "Agent" or "SendMessage" => "delegating",
+        "TodoWrite" or "TaskCreate" or "TaskUpdate" or "ExitPlanMode" or "EnterPlanMode"
+            or "ScheduleWakeup" or "CronCreate" => "planning",
+        "SlashCommand" or "Skill" => "skill",
+        "AskUserQuestion" => "asking",
+        "ReportFindings" => "reviewing",
+        "Artifact" or "SendUserFile" => "publishing",
+        null or "" => "unknown",
+        // an mcp tool is Halo asking somebody else's server, which is a state of its own and used to
+        // arrive on the pill as raw punctuation
+        _ when tool.StartsWith("mcp__", StringComparison.Ordinal) => "consulting",
+        _ => null,
+    };
+
     // The situation rides along so a slot with a set for it can switch to it - four minutes of the same
     // word is not information any more, and neither is "reading…" while the context bar sits at 91%.
-    // Unrecognised tools keep naming themselves, which is the honest answer and needs no vocabulary.
-    private static string ToolVerb(string? tool, in MoodContext ctx) => tool switch
-    {
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => Moods.Line("writing", ctx),
-        "Read" => Moods.Line("reading", ctx),
-        "Bash" or "PowerShell" => Moods.Line("running", ctx),
-        "Grep" or "Glob" => Moods.Line("digging", ctx),
-        "WebFetch" => Moods.Line("fetching", ctx),
-        "WebSearch" => Moods.Line("searching", ctx),
-        "Task" or "Agent" => Moods.Line("delegating", ctx),
-        "TodoWrite" => Moods.Line("planning", ctx),
-        "SlashCommand" or "Skill" => Moods.Line("skill", ctx),
-        "AskUserQuestion" => Moods.Line("asking", ctx),
-        null or "" => Moods.Line("unknown", ctx),
-        _ => tool!.ToLowerInvariant() + "…",
-    };
+    private static string ToolVerb(string? tool, in MoodContext ctx)
+        => ToolSlot(tool) is { } slot ? Moods.Line(slot, ctx) : Moods.PrettyTool(tool);
 
     // how long the current turn has been going, as a span rather than the display string
     private static TimeSpan? Running(CcStatus? st) =>

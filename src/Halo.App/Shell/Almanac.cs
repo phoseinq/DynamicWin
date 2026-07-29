@@ -202,28 +202,39 @@ internal static class Almanac
     private static string Temp(int c, bool metric)
         => (metric ? c : (int)Math.Round(c * 9 / 5.0 + 32)) + "°";
 
+    // The banner has three rows and the chime was only using two of them, so all four facts were queueing
+    // up on one line: "Thursday 30 Jul · 8 Mordad · Tehran · 27°C clear". They fit the rows exactly.
+    //
+    //      TEHRAN                <- Label:    the place. Constant, so it belongs where the app name goes
+    //      1:00 AM · 27°         <- Headline: the two numbers you came for
+    //      Thursday, 8 Mordad    <- Detail:   the date, in the one calendar the place keeps
+    //
+    // and the sky is the badge. Nothing was dropped; one separator survives out of three.
+
+    /// <summary>Where the reading is from, for the banner's label row. "Clock" when the zone names no city.</summary>
+    internal static string Label => Place is { Length: > 0 } p ? p : "Clock";
+
     /// <summary>
-    /// The chime's second line, from whatever is known. Pure, so the shape can be pinned by a test at
-    /// every level of ignorance: no weather, no place, neither.
-    ///
-    /// It was "Thursday 30 Jul · 8 Mordad · Tehran · 27°C clear" and that was three separators of noise
-    /// saying the same day twice. Now: the weekday, the date in the ONE calendar the place actually uses,
-    /// and the place with its temperature - "Thursday, 8 Mordad · Tehran 27°". The sky is the badge.
-    ///
-    /// InvariantCulture is not a detail: this machine is fa-IR, and the local culture would render the
-    /// weekday in Persian inside a banner the rest of which is English.
+    /// The time, with the temperature against it - both are numbers you read at a glance, and the title
+    /// row is where the pill puts numbers. Just the time when there is no reading.
     /// </summary>
-    internal static string Detail(DateTime now, string? place, Weather? w, bool metric, bool jalali)
+    internal static string Headline(DateTime now, Weather? w, bool metric)
     {
-        var s = now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
-            + (jalali && JalaliDate(now) is { Length: > 0 } j
-                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
-        if (place is { Length: > 0 }) s += " · " + place;
-        // the temperature belongs to the place, so it sits against it rather than behind another separator
-        if (w is not null) s += (place is { Length: > 0 } ? " " : " · ") + Temp(w.TempC, metric);
-        return s;
+        var t = now.ToString("h:mm tt", CultureInfo.InvariantCulture);
+        return w is null ? t : t + " · " + Temp(w.TempC, metric);
     }
 
-    /// <summary>The same line, from the live snapshot.</summary>
-    internal static string Detail(DateTime now) => Detail(now, Place, Latest, Metric, SolarHijri);
+    /// <summary>
+    /// The date. Pure, and InvariantCulture is not a detail: this machine is fa-IR, and the local culture
+    /// would render the weekday in Persian inside a banner the rest of which is English.
+    /// </summary>
+    internal static string Detail(DateTime now, bool jalali)
+        => now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
+            + (jalali && JalaliDate(now) is { Length: > 0 } j
+                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
+
+    /// <summary>The same two lines, from the live snapshot.</summary>
+    internal static string Headline(DateTime now) => Headline(now, Latest, Metric);
+
+    internal static string Detail(DateTime now) => Detail(now, SolarHijri);
 }

@@ -17,6 +17,7 @@ internal sealed class CodexWidget : IWidget
     private static readonly Color Green = Color.FromArgb(62, 207, 92);
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
     private static readonly Color Red = Color.FromArgb(229, 72, 77);
+    private static readonly Color Mint = Color.FromArgb(82, 224, 163);   // just compacted: there is room again
     private static readonly Color Track = Color.FromArgb(38, 255, 255, 255);
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
@@ -828,15 +829,19 @@ internal sealed class CodexWidget : IWidget
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
          : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
                                             // activity and left the pill looking busy while it was waiting on a reset.
-         : st?.State == "waiting_input" ? Amber
+         : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
-         : Shown(st) == "working" ? (string.IsNullOrEmpty(st?.CurrentTool) ? Amber : Green)
+         : JustCompacted(st) ? Mint
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
          : White;
 
     private Color RingColor(CodexSnapshot? st)
     {
         var b = RingBase(st);
-        return RingIsTheMessage(st) ? b : Fx.MoodRing(b, Mood(st));
+        if (RingIsTheMessage(st)) return b;
+        bool hueIsFree = st?.State != "waiting_input"
+            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+        return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 
     private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
@@ -894,24 +899,31 @@ internal sealed class CodexWidget : IWidget
     private static string? OutageText() =>
         CodexNetMon.NetDown ? Moods.Line("netError") : CodexNetMon.ApiDown ? Moods.Line("apiError") : null;
 
-    // codex has emitted both custom_tool_call and function_call names; dotted prefixes are already stripped
+    // codex has emitted both custom_tool_call and function_call names; dotted prefixes are already stripped.
+    // The twin of ClaudeCodeWidget.ToolSlot, and the same single mapping: the words and the ring's colour
+    // both come off the slot, so they cannot disagree about what is happening.
+    internal static string? ToolSlot(string? tool) => tool switch
+    {
+        "exec" or "shell" or "shell_command" or "local_shell" or "exec_command" or "container" => "running",
+        "apply_patch" or "edit" or "write_file" => "patching",
+        "read_file" or "view" or "cat" => "reading",
+        "grep" or "rg" or "find" or "list_dir" or "ls" => "digging",
+        "web_search" or "search" => "searching",
+        "browser" or "fetch" or "open_url" => "fetching",
+        "view_image" or "screenshot" => "peeking",
+        "update_plan" or "plan" => "plotting",
+        "spawn" or "agent" or "subagent" or "thread_spawn" => "delegating",
+        "request_user_input" or "ask" => "asking",
+        "wait" or "poll" or "watch" => "watching",
+        null or "" => "unknown",
+        _ when tool.StartsWith("mcp", StringComparison.OrdinalIgnoreCase) => "consulting",
+        _ => null,
+    };
+
     // the situation rides along, same as the Claude twin: a slot with a set for what is going on switches
     // to it rather than repeating one word for four minutes
-    private static string ToolVerb(string? tool, in MoodContext ctx) => tool switch
-    {
-        "exec" or "shell" or "shell_command" or "local_shell" or "exec_command" or "container" => Moods.Line("running", ctx),
-        "apply_patch" or "edit" or "write_file" => Moods.Line("patching", ctx),
-        "read_file" or "view" or "cat" => Moods.Line("reading", ctx),
-        "grep" or "rg" or "find" or "list_dir" or "ls" => Moods.Line("digging", ctx),
-        "web_search" or "search" => Moods.Line("searching", ctx),
-        "browser" or "fetch" or "open_url" => Moods.Line("fetching", ctx),
-        "view_image" or "screenshot" => "peeking o.o",
-        "update_plan" or "plan" => Moods.Line("plotting", ctx),
-        "spawn" or "agent" or "subagent" or "thread_spawn" => Moods.Line("delegating", ctx),
-        "request_user_input" or "ask" => Moods.Line("asking", ctx),
-        null or "" => Moods.Line("unknown", ctx),
-        _ => tool!.ToLowerInvariant() + "…",
-    };
+    private static string ToolVerb(string? tool, in MoodContext ctx)
+        => ToolSlot(tool) is { } slot ? Moods.Line(slot, ctx) : Moods.PrettyTool(tool);
 
     // how long the current turn has been going, as a span rather than the display string
     private static TimeSpan? Running(CodexSnapshot? st) =>

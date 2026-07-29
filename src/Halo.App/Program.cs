@@ -39,7 +39,9 @@ internal static class Program
             for (int i = 0; i < 60 && Almanac.Latest is null; i++) System.Threading.Thread.Sleep(500);
             Console.WriteLine($"weather  {(Almanac.Latest is { } wx ? $"{wx.TempC}C code {wx.Code} = {Almanac.Sky(wx.Code)}" : "(no reading)")}");
             Console.WriteLine($"country  {Almanac.PlaceCountry ?? "(not geocoded)"}   metric {Almanac.Metric}   solar hijri {Almanac.SolarHijri}");
-            Console.WriteLine($"line     {Almanac.Detail(DateTime.Now)}");
+            Console.WriteLine($"label    {Almanac.Label}");
+            Console.WriteLine($"title    {Almanac.Headline(DateTime.Now)}");
+            Console.WriteLine($"body     {Almanac.Detail(DateTime.Now)}");
             return;
         }
         // dev hook: `Halo.App --render-pin <out.png>` — the pushpin states in isolation
@@ -289,14 +291,25 @@ internal static class Program
     {
         var t = new System.Threading.Thread(() =>
         {
-            // (label, state, tool, minutes in, context used of 1M, 5-hour usage)
+            // (label, state, tool, minutes in, context used of 1M, 5-hour usage). The first block is the
+            // palette - one row per colour family, so they can be compared side by side, which is the only
+            // way to tell whether they are actually distinguishable at 20px. The second block is the same
+            // green shell command under rising pressure.
             (string label, string state, string? tool, int agoMin, long ctxUsed, float usage)[] rows =
             {
                 ("idle", "idle", null, 0, 120_000, 0.30f),
-                ("on a tool", "working", "Edit", 0, 120_000, 0.30f),
+                ("thinking", "working", null, 0, 120_000, 0.30f),
+                ("shell", "working", "Bash", 0, 120_000, 0.30f),
+                ("reading", "working", "Read", 0, 120_000, 0.30f),
+                ("writing", "working", "Edit", 0, 120_000, 0.30f),
+                ("surveying", "working", "Grep", 0, 120_000, 0.30f),
+                ("subagent", "working", "Task", 0, 120_000, 0.30f),
+                ("an mcp server", "working", "mcp__serena__find_symbol", 0, 120_000, 0.30f),
+                ("a tool with no slot", "working", "SomeOtherTool", 0, 120_000, 0.30f),
+                ("your turn", "waiting_input", null, 0, 120_000, 0.30f),
                 ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f),
-                ("context 92%", "working", "Bash", 1, 920_000, 0.30f),
-                ("usage 96%", "working", "Bash", 1, 120_000, 0.96f),
+                ("shell, context 92%", "working", "Bash", 1, 920_000, 0.30f),
+                ("shell, usage 96%", "working", "Bash", 1, 120_000, 0.96f),
                 ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f),
             };
             const int pw = 220, ph = 40, gap = 12, labelW = 168, scale = 2;

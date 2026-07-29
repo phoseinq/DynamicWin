@@ -591,6 +591,46 @@ internal static class Fx
     private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
 
     /// <summary>
+    /// The colour for a mood slot — the ring's hue comes from the SAME slot the words come from, so the
+    /// two cannot drift: whatever the pill is saying, the ring is the colour of that. Four flat states
+    /// could not carry this; a dozen can, because each one is a thing the product also names out loud.
+    ///
+    /// Grouped by what the agent is doing to your work rather than by tool: taking things in is cyan,
+    /// putting things out is violet, running something is green, looking through things is lime, handing it
+    /// to somebody else is magenta, thinking about it is amber. A slot with no colour of its own is green,
+    /// which is simply "working".
+    ///
+    /// EIGHT families and not one per slot, which is where this started: thirteen hues in 360 degrees is
+    /// 27 degrees apart, and on a 2px ring at 20px across, reading-cyan and fetching-teal were the same
+    /// colour. A test holds every pair 85 apart in rgb, and consolidating is what made that pass honestly
+    /// rather than by loosening the threshold.
+    /// </summary>
+    internal static Color SlotColor(string? slot) => slot switch
+    {
+        "running" => Color.FromArgb(62, 207, 92),                  // green: something is executing
+        "reading" or "peeking" or "fetching" or "searching"
+            => Color.FromArgb(53, 208, 232),                       // cyan: taking something in
+        "writing" or "patching" or "publishing"
+            => Color.FromArgb(169, 139, 255),                      // violet: putting something back out
+        // lime is "working it out without touching anything yet" - looking through the code, laying a plan,
+        // following a recipe. It was its own gold at first and gold does not fit on this wheel: 15 degrees
+        // from the amber of thinking, and its dimmed night version drifted nearer to that amber than to
+        // itself. A ninth hue would have to be squeezed between two neighbours; a seventh family does not.
+        "digging" or "reviewing" or "planning" or "plotting" or "skill"
+            => Color.FromArgb(191, 215, 62),                       // lime: surveying, nothing changed yet
+        // a DEEP magenta, not the bright one it started as: "somebody else's turn" and "your turn" sit next
+        // to each other on the wheel, and at full pressure the bright magenta came out nearer the pink than
+        // its own calm colour. They differ in lightness as well as hue now, which is the part that survives
+        // being saturated and dimmed.
+        "delegating" or "consulting" or "watching"
+            => Color.FromArgb(190, 80, 175),                       // magenta: it is somebody else's turn
+        "asking" => Color.FromArgb(255, 95, 138),                  // pink: this one is addressed to YOU
+        "unknown" => Color.FromArgb(255, 150, 26),                 // amber: thinking, nothing to show yet
+        "compacting" => Color.FromArgb(91, 157, 255),              // blue, as it has always been
+        _ => Color.FromArgb(62, 207, 92),
+    };
+
+    /// <summary>
     /// The status ring, modulated by the situation it sits in. The ring was four flat colours while what
     /// it describes is a continuum - a context window filling up, a usage window emptying, a turn dragging
     /// on - so the state keeps setting the hue family (green on a tool, amber thinking, white idle) and
@@ -598,22 +638,41 @@ internal static class Fx
     /// snapping between more colours you would have to learn; the caller is expected to keep the states
     /// whose colour IS the message (an outage, a spent limit, a running compact) out of it.
     /// </summary>
-    internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx)
+    internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx, bool hueIsFree = false)
     {
         // each pressure ramps only across the band where it starts to matter: 0 below it, 1 at the top
         float squeeze = MathF.Max(Ramp(ctx.ContextFrac, 0.55f, 0.95f), Ramp(ctx.UsageFrac, 0.70f, 0.98f));
         float drag = ctx.Running is { } r ? Ramp((float)r.TotalMinutes, 2f, 12f) : 0f;
-        // where "warm" is for this much pressure, and then how far the state's own colour travels toward
-        // it. Chaining two lerps off the state colour instead landed a squeezed green ring on YELLOW - the
-        // first hop had already carried the hue most of the way, so the second had little left to move.
-        var target = HueLerp(UsageAmber, RingHot, squeeze);
-        // a dragging turn warms a little, but yields to a squeeze: two signals pulling the same way would
-        // double up and read as "hot" for a turn that is merely slow
-        float pull = MathF.Max(0.85f * squeeze, 0.25f * drag * (1f - squeeze));
-        var c = HueLerp(state, target, pull);
-        // the small hours get a quieter ring. Any more than this reads as a rendering fault rather than as
-        // the time of night.
-        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.86f);
+        float lift = MathF.Max(squeeze, 0.55f * drag);
+        var c = state;
+
+        // The rule that took three attempts to find: a hue that says WHICH activity this is may not be
+        // repurposed by pressure, and a hue that says nothing may be. Warming everything toward orange
+        // erased the slot at 0.85 and impersonated another slot at 0.6 - a squeezed green landing on the
+        // lime of "digging" is worse than losing the signal, because it is wrong rather than vague.
+        //
+        // hueIsFree is true for exactly two states: thinking, whose amber means only "no news", and idle,
+        // whose white means nothing at all. Those two have nothing to protect, so pressure gets their hue
+        // outright - which is where it is most wanted anyway, since an idle pill on a nearly-full context
+        // is precisely the moment you want the ring to catch your eye.
+        if (hueIsFree)
+        {
+            var target = HueLerp(UsageAmber, RingHot, squeeze);
+            c = HueLerp(c, target, MathF.Max(0.85f * squeeze, 0.30f * drag * (1f - squeeze)));
+        }
+
+        // For everyone else pressure goes where it cannot be mistaken for a different state: the same lamp
+        // turned up. Saturation only for the activity hues (white has none to add), value for all.
+        RgbToHsv(c, out float h, out float s, out float v);
+        c = HsvToRgb(h,
+            Math.Clamp(s + (hueIsFree ? 0f : 0.10f) * lift, 0f, 1f),
+            Math.Clamp(v + 0.10f * lift, 0f, 1f));
+
+        // The small hours get a quieter ring, and the amount is bounded by the palette rather than by taste:
+        // at 0.86 the dim moved a colour about as far as the distance between two neighbouring slot hues, so
+        // a dimmed violet came out nearer the magenta than its own daytime self. Everything here has to stay
+        // small enough that a modulated ring is still nearest ITSELF, which is what the test measures.
+        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.93f);
         // hsv carries no alpha, and the idle ring is deliberately not fully opaque (238) - without this the
         // ring got BRIGHTER as the session tightened, which is not what any of the above is saying
         return Color.FromArgb(state.A, c.R, c.G, c.B);
