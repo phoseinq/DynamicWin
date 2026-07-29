@@ -14,7 +14,7 @@
 
 **English** · [فارسی](README.fa.md)
 
-[⬇️ Download](https://github.com/phoseinq/DynamicWin/releases/latest) · [Report a bug](https://github.com/phoseinq/DynamicWin/issues) · [Request a feature](https://github.com/phoseinq/DynamicWin/issues)
+[⬇️ Releases](https://github.com/phoseinq/DynamicWin/releases/latest) · [Report a bug](https://github.com/phoseinq/DynamicWin/issues) · [Request a feature](https://github.com/phoseinq/DynamicWin/issues)
 
 </div>
 
@@ -34,8 +34,7 @@
 
 <br />
 
-A pill of glass at the top of your screen. It comes forward when there is something to say and
-folds away when there is not. No app to open, nothing covering your work.
+A pill of glass at the top of your screen. It comes forward when there is something to say and folds away when there is not. No app to open, nothing covering your work.
 
 <br />
 
@@ -43,11 +42,13 @@ folds away when there is not. No app to open, nothing covering your work.
 
 <div align="center">
 
-### [⬇️ DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)
+### Get the latest version from the **Releases** page
 
-<sub>Windows 11 · x64 · per-user, no admin prompt · updates itself quietly</sub>
+### ➜ https://github.com/phoseinq/DynamicWin/releases/latest
 
-<sub>A portable zip is on the [releases page](https://github.com/phoseinq/DynamicWin/releases/latest).</sub>
+<sub>Windows 11 · x64 · per-user · no admin prompt · silent updates.</sub>
+
+<sub>The installer and portable ZIP are available on the Releases page.</sub>
 
 </div>
 
@@ -59,9 +60,7 @@ folds away when there is not. No app to open, nothing covering your work.
 <img src="ReadmeFiles/media.gif" alt="The pill opening into the media panel" width="880">
 </div>
 
-Collapsed, a waveform off the real system output. Open, the whole player — art, track, seek,
-volume, transport, plus ±10s, speed and subtitles for video. It reads Windows' own media session,
-so it works with whatever is already playing.
+Collapsed, a waveform off the real system output. Open, the whole player — art, track, seek, volume, transport, plus ±10s, speed and subtitles for video. It reads Windows' own media session, so it works with whatever is already playing.
 
 <br />
 
@@ -71,9 +70,7 @@ so it works with whatever is already playing.
 <img src="ReadmeFiles/copy-code.gif" alt="A verification code copied straight from the banner" width="880">
 </div>
 
-Every toast lands in the pill with the real app icon, and the native banner goes quiet so nothing
-is said twice. If it carries a **verification code**, the pill lifts it onto a button — one click
-to copy.
+Every toast lands in the pill with the real app icon, and the native banner goes quiet so nothing is said twice. If it carries a **verification code**, the pill lifts it onto a button — one click to copy.
 
 <br />
 
@@ -83,8 +80,7 @@ to copy.
 <img src="ReadmeFiles/tray.gif" alt="A file dragged onto the pill and back out again" width="880">
 </div>
 
-Drop files onto the pill and it holds them. Drag them back out into any window later — a different
-app, a different desktop, twenty minutes on.
+Drop files onto the pill and it holds them. Drag them back out into any window later — a different app, a different desktop, twenty minutes on.
 
 <br />
 
@@ -94,9 +90,7 @@ app, a different desktop, twenty minutes on.
 <img src="ReadmeFiles/agents.png" alt="The Claude Code panel" width="900">
 </div>
 
-A live panel per **Claude Code** and **Codex** session: what it is doing, context left, your 5-hour
-and weekly limits, and a Cancel that stops the running prompt. Any tool can join by writing a small
-JSON file.
+A live panel per **Claude Code** and **Codex** session: what it is doing, context left, your 5-hour and weekly limits, and a Cancel that stops the running prompt. Any tool can join by writing a small JSON file.
 
 <br />
 
