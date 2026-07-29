@@ -8,3 +8,5 @@ publish/
 .worktrees/
 .superpowers/
 dist/
+.claude/settings.local.json
+.serena/logs/

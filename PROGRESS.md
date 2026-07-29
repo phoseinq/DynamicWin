@@ -1,5 +1,691 @@
 # Halo — progress
 
+## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
+
+Release 0 warnings / 0 errors, **310 tests** (up from 259; three new test files). Deployed by DLL hot-swap
+and relaunched. **Mirror published to `origin/V3`.**
+
+### "still cooking…" forever — the bug under the feature request
+- **Reported as:** only one line ever appears on the pill; it never changes.
+- **Root cause:** the 60-second hold was re-stamped **on every read**, which makes it a sliding window —
+  and `Draw*` reads it 125 times a second. Any key the pill kept looking at could therefore never expire,
+  so a long thinking block latched `unknown@ages` and held it for the life of the process. The whole
+  table was decoration; the wording that shipped was never the problem.
+- **Change:** the expiry is measured from when the line was *rolled*. A reroll also avoids the line that
+  just expired — with a two-line set, picking at random is a coin flip on whether anything appears to
+  have happened at all.
+- **Verified:** a test floods the same key 500 times inside the window (steady), then steps the injected
+  clock past it (moves). `Line` now takes a clock for exactly this reason — expiry is the half that broke
+  in the field and it cannot be watched on a wall clock.
+
+### The situation is more than one dimension now
+`MoodContext` — running time, context fraction, usage fraction, the turn's prompt tokens, tool hand-offs
+this turn, and the local hour. Every field is a figure already drawn on the panel; nothing new is
+measured and nothing is invented. `default` means "know nothing", which is why `Hour` is nullable:
+midnight is 0.
+
+A **ladder** picks exactly one modifier, most pressing first — `@tight` (context ≥80%) → `@thin`
+(usage ≥90%) → `@ages` → `@long` → `@again` (≥4 tool hand-offs) → `@heavy` (≥60k prompt tokens) →
+`@late` (00–04) / `@early` (05–07) → plain. One, not several: stacking explodes combinatorially and most
+pairs read badly ("no room to think, and again, at 3am"). Resolution falls *down* the ladder until it
+finds a set the slot actually has, so a slot needs only the situations worth wording.
+
+The voice itself moved to hands-on work — a kitchen, a toolbox, a job on the bench — because a metaphor
+carries information a synonym does not: "kettle's on…" tells you to go away for a minute, "still
+running…" does not. `@tight` is the bench being covered, `@thin` is rationing, `@again` is the same
+drill. **83 keys** now.
+
+### The ring stopped being four flat colours
+`Fx.MoodRing(state, ctx)`: the state still sets the hue family (green on a tool, amber thinking, white
+idle) and the same situation the words read warms it from there — up as the context or usage window
+tightens, a little more on a turn that is dragging, quieter in the small hours. Two rules keep it
+legible: the warm end is an **orange**, never the error red, so red still means only "broken"; and it is
+all lerps, so it drifts over minutes instead of teaching you more colours. The states whose colour *is*
+the message — outage, spent limit, running compact — are exempt.
+
+Two bugs the tests caught before the screen did: chaining two lerps off the state colour landed a
+squeezed green ring on **yellow** (the first hop had already moved the hue, leaving the second nothing to
+do — it now lerps once toward a target that is itself a function of pressure), and the HSV round trip
+**dropped alpha**, so the deliberately-not-opaque idle ring got *brighter* as the session tightened.
+
+### `--render-pill`, because this is the part that cannot be screenshotted
+Every other hook renders an expanded panel; the ring and the voice both live on the 220×40 pill. Six
+rows, one per situation, at 2× with the situation named beside it. It immediately earned itself: the
+first pass produced six pills with rings and **no words**, because the line fades in over frames
+(`_appear`) and a single-frame render draws it at alpha 0 — it now warms up on a throwaway surface.
+The strip reads: idle → "night shift" (white, dimmed, it was 00:59); on a tool → "one more then bed…"
+(green); thinking 10 min → "deep in thought…" (amber); context 92% → "no room to work…" (amber-orange);
+usage 96% → "coasting…"; both and dragging → "bench is full…" (hottest). Ring and words agree in every
+row, which is the thing being judged.
+
+### The Codex `TurnOver` twin — owed since yesterday, paid
+Same hole, same reason: an interrupt is not a lifecycle event, so nothing writes a status and a
+pid-backed one stays live for as long as the process runs. `CodexWidget.TurnOver` + `Shown(st)` at every
+display site, the Esc watcher and `CancelCodex` both latching the turn's own `StartedAt`, and
+`GetCancelRoute` now refuses a turn the pill has stopped believing in — the stop button used to stay live
+on an already-interrupted turn, which sends a second Esc into whatever owns that terminal now. One
+difference from the twin, and it needed a guard: `CodexSnapshot.UpdatedAt` is non-nullable, so "never
+written" arrives as `default` rather than `null`, which the time backstop would have read as very old.
+
+Also deleted `CodexWidget.Activity` — dead since the panel became a ring cluster, and it would otherwise
+have needed the new context threaded through it for nobody.
+
+### The hourly chime says something worth reading
+It said the time, which is the one thing the tray clock already tells you. `Shell/Almanac.cs` adds the
+rest of the glance.
+
+**First cut was too crowded** — "Thursday 30 Jul · 8 Mordad · Tehran · 27°C clear" is four fields, three
+separators, the same day said twice, and a word for something a picture does better. The shipped version
+is:
+
+```
+[🌙 indigo tile]   1:00 AM
+                   Thursday, 8 Mordad · Tehran 27°
+```
+
+- **The sky moved into the badge.** The banner already carries an icon and its hue already feeds the
+  banner's glow, so `Almanac.SkyBadge(code, day)` returns a glyph and a hue: sun, moon, cloud, or a flake.
+  Only glyphs *verified present* in Segoe Fluent Icons — found by rendering the E700/E900/EA00 blocks to a
+  labelled grid rather than trusting a codepoint list — so what the shape cannot distinguish, the hue
+  does: rain is a blue cloud, overcast a grey one, a storm a violet one. `--render-badges` carries all
+  four now; the first pass had the sun at hue 44, and since the tile gradient runs hue → hue+24 that came
+  out gold→**green** and read as acidic beside the others.
+- **Day/night is `is_day` from the API**, not a guess from the hour — so a moon at nine in the evening in
+  July is still right in January.
+- **One calendar, the one the place keeps.** Both at once was the clutter.
+- **No unit letter.** "Tehran 27°" cannot be misread, and the letter was pure width.
+
+The parts:
+- **Where** is the machine's own timezone, not an IP lookup — `IpCountry` knows where the *VPN* comes
+  out, while the timezone is the one location fact on the box the user set themselves. Windows id → IANA
+  → the segment after the last slash. `Etc/GMT+3` and `UTC` name an offset, not a place, and say nothing.
+- **Weather** is Open-Meteo, keyless: one geocode of that city name (cached for the process), then the
+  reading, on a half-hourly timer that never touches the chime's own path. No reading, no weather clause.
+- **The date** is `PersianCalendar`, so a conversion rather than an estimate, and only for a machine
+  actually in Iran.
+- `--probe-almanac` exercises both live fetches, and immediately found a real flaw: this machine's
+  Windows region is **US** while its timezone is Iran, so the first line read "Tehran 81°F" — describing
+  Tehran in somebody else's units. Units and calendar now follow the *place*, off the `country_code` the
+  geocoder returns, with the region as the fallback for before that lands.
+- `mirror/PRIVACY.{md,fa.md}` updated in both languages: they enumerate every outbound request, and this
+  adds two.
+
+### The public README, per GitHub support
+The direct **`releases/latest/download/DynamicWinSetup.exe`** link is gone from both mirror READMEs —
+support named linking the binary itself as the problem. The download button points at the releases page
+and the sub-line names the two assets as text. Root `README.md`/`README.fa.md` never linked the binary,
+only named it in a table, and are unchanged.
+
+`ReadmeFiles/agents.png` → **`agents-2.png`**, both mirror READMEs following. The file was rewritten in
+place last session and GitHub's camo proxy serves a cached copy of an image whose URL has not changed —
+the same trap `9ceb581` hit with the banners. Renaming is this repo's own workaround. Checked first, and
+worth recording: `raw.githubusercontent.com` returns **200** for every image and for the release asset,
+so nothing was actually broken on the fork — the suspension was what made them look broken.
+
+### Still owed
+- OG card language bar: the auto-detect path is written and syntax-checked but has never run for real.
+- `GenericAgentWidget` still has the flat four-colour ring. Not twin-coupled to the two above, and it has
+  no usage or context figures of its own, so it needs a smaller version of this decision rather than a
+  copy of it.
+
+## 2026-07-29 (later) — the Codex panel is a ring cluster too, and the voice stopped calling out
+
+Release 0 warnings / 0 errors, **259 tests**. Deployed and running. **Not pushed.**
+
+### The generated-copy path is gone
+The CLI generator worked in the end — a real run filled all 21 slots — but it spent tokens on the
+user's own subscription and had to launch their agent CLI to do it, which is a process spawn and an
+account touch for the sake of cosmetic text. Deleted outright: no `RunCli`, no prompt, no cache, no
+`moods.json`/`moods-source.txt`, no `MoodSource` switch, no startup call. In its place a written
+table that ships in the binary — **47 keys, 428 lines**, printable with `--moods`.
+
+- **Bands instead of one word per state.** A verb that has not changed in four minutes has stopped
+  being information, so a slot can carry `@long` (past 2 min) and `@ages` (past 8 min), chosen from
+  the real elapsed clock. Bands only escalate: a slot with `@long` and no `@ages` keeps saying the
+  `@long` thing rather than snapping back. `ToolVerb` now takes the running time on both widgets.
+- `unknown` was the complaint that started it ("unclear state" reads like a fault when the situation
+  is the agent thinking between tools). Its set is now seventeen ways of saying *thinking*.
+- Nine tests pin the shape: the 22-char ceiling, no duplicates, printable-ASCII-plus-ellipsis, every
+  band having a slot behind it, and the latch holding steady across 50 calls.
+- The Codex widget test that asserted exact strings now asserts *set membership* — it was pinning the
+  copy when the thing with logic in it is the routing.
+
+### CodexWidget wears the new theme
+Rewrote `DrawExpanded` as the same ring cluster the Claude panel uses: three arcs (primary window,
+secondary window, context) with the hover lift and the centre readout, the key rows, the mirrored
+latency waveform, the exit block and the refresh line. Verified with a new
+`--render-widget <png> codex-demo`, which writes a synthetic session to `%TEMP%` — the panel cannot
+be screenshotted any other way.
+
+Two real bugs fell out of building it:
+- **`ExitBlock`** — the flag, the reputation mark and the dns test are properties of the *machine*,
+  not of either agent, so they moved out of `ClaudeCodeWidget` into `Widgets/ExitBlock.cs` and both
+  panels draw the same block. Not twin-coupling: both depend on a shared piece, which is what the
+  rule against the twins depending on *each other* is for. Verified by re-rendering `claude-hot` and
+  comparing — identical but for the live latency figures.
+- **The two usage ramps had drifted.** Claude ramped green→amber→red through *hue*; Codex lerped
+  blue→amber in RGB, which passes through grey — so 61% on the Codex panel rendered as a dead grey
+  ring while the same figure on the Claude panel was clearly amber. One `Fx.UsageColor` now.
+- **Codex context never rendered for a CLI session.** The panel demanded `PresentFields`, which only
+  the *rollout* parser ever sets — a hook-written status leaves them zero however real its numbers
+  are. `ContextMax > 0` is the honest test; a figure that came out of the file is not invented.
+
+### Still owed
+- **`docs/moods-plan.md`** — the next pass on the pill's voice: more situations (context nearly full,
+  usage nearly spent, big turn, same tool repeatedly, time of day) resolved as ONE modifier by fixed
+  priority, plus a trade-and-kitchen voice instead of generic wit. Signals, precedence, steps and
+  tone sketches are all written down there. Start from that file, not from scratch.
+- The `TurnOver` twin for Codex: it has the same silent-interrupt hole, so cancelling a Codex turn
+  still sticks. Called out at the bottom of the plan too, since both land in the same files.
+- OG card language bar: the auto-detect path is written and syntax-checked but has never run for
+  real (the Halo post reads its cached JSON, and GitHub still 404s for this account).
+
+## 2026-07-29 — two stuck states, and the mood prompt finally reaching the CLI
+
+Release 0 warnings / 0 errors, **247 tests** (13 new). **Not deployed, not pushed.**
+
+### The context ring disagreed with its own figure
+- **Reported as:** "86% used" written in red, inside a ring that was still blue.
+- **Root cause:** the arc took a hardcoded `Blue` while the figure below it ran `ContextBand`'s
+  blue/amber/red ramp. One value, two colour rules, in the same panel.
+- **Change:** `ClaudeCodeWidget.ContextColour(frac)` is now the only thing that turns a context
+  fraction into a colour; the arc, the swatch and the figure all read it. The band ramp and not
+  `UsageColor`, because context's thresholds are the ones the /compact banner fires on — the arc has
+  to agree with the warning, not with the usage rows beside it.
+- **Verified:** new `--render-widget <png> claude-hot` renders a synthetic 93% / 78% / 86% session;
+  the existing demo sits at 34%, where this bug is invisible. The PNG shows all three arcs matching
+  their figures. Tests pin arc colour == figure colour at four fractions.
+
+### A cancelled turn left the pill on "hmm…" forever
+- **Reported as:** cancel with Esc and it stays "hmm…". Then: the stop button does it too.
+- **Root cause, and the two reports are one bug:** the stop button *injects Esc*, so both are the
+  same path. Claude Code writes status on lifecycle events and an interrupt is not one, so the last
+  write stays `working` with no tool — and `IsLiveStatus` keeps a pid-backed status live for as long
+  as the process runs, so it never expired. `ToolVerb(null)` is "hmm…".
+- **Change:** `ClaudeCodeWidget.TurnOver(st, now)` decides whether a turn the file still calls
+  working is actually over, and the display paths read `Shown(st)` rather than `st.State`. Two ways
+  out because there are two ways in: the stop button and the Esc watcher latch the turn's own
+  `startedAt` — exact, and self-clearing since the next turn carries a new stamp — and a tool-less
+  `working` unwritten for 180s ages out on its own, which is the only thing that can catch an Esc
+  typed into a terminal Halo never sees. It cannot misfire on a long tool call: while a tool runs,
+  its name is on the status. `DetectCompactCancel` became `DetectAgentCancel`.
+- **Verified:** 7 tests. **Not eyeballed live** — needs a real cancel on a real session.
+
+### The mood prompt was never reaching the CLI
+- **Root cause (yesterday's open bug 3 — and it was not the model's fault):** `ArgumentList` escapes
+  for the C runtime, but the process launched is `cmd.exe`, which re-parses the command line by its
+  own rules. The prompt is full of double quotes, so cmd's quote state flipped partway through and
+  `claude` got effectively nothing — it answered "Hey! What can I help you with?" and exited **0**.
+  That is why this read as a model ignoring the format rather than a prompt that never arrived.
+  Proved by hand with the same `ProcessStartInfo`: `what is 2+2` returned `4`; the real prompt
+  returned a greeting.
+- **Change:** the prompt goes over **stdin**, so it never touches a command line and cannot be
+  mangled by one; the argument form stays as a fallback. Separately, the JSON contract moved to the
+  front of the prompt with a worked example, and `Refresh()` retries once, flatly, when the reply
+  contains no object at all.
+- **The two-source switch:** `MoodSource.Fixed` (shipped wording) vs `Ai`. Fixed is the default, so a
+  normal install generates nothing and reads exactly as before; this machine opts in. Stored as one
+  word in `%LOCALAPPDATA%\Halo\moods-source.txt`, so the settings panel this is heading for only has
+  to write that.
+- **New dev hook `--moods [refresh|fixed|ai]`.** The lines reach the screen one slot at a time, weeks
+  apart, in a window that cannot be screenshotted — printing the batch is the only way to read them.
+- **Verified:** a real `--moods refresh` filled all 21 slots with 6 alternates each, all inside the
+  24-char guard and in register ("uh… / erm… / one sec…" for `unknown`).
+
+### Blog — the live header was capped by a term nobody had checked
+- **Reported as:** the demo on the post header is too small. Twice, after a cap raise that in fact
+  changed almost nothing.
+- **Root cause:** `fit()` bounds the scale by the room the **open** panel needs. On the 800px article
+  column a 5:2 frame is 320 tall, so `(320-10)/178 = 1.742` was the real ceiling and the 1.75 cap sat
+  just above it doing nothing. The header was reserving space for a state that only exists while you
+  point at it; on a phone the open panel's 366px minimum pinned the whole dock to ~1.0.
+- **Change:** two scales — `--s` fits the resting 216×38 pill, `--so` fits the open panel, and the
+  dock swaps between them on the curve the notch already morphs with. The hero frame went 5/2 → 2/1
+  so the height term stops binding on desktop.
+- **Verified:** resting pill 47% → 59% of the frame on desktop, 56% → 76% on a phone; the open state
+  still fills 95–98% of the width in both. Served bytes checked on both vhosts, script parses under
+  `node --check`. Backups `*.bak-herofit-20260729`, `*.bak-twoscale-20260729`.
+
+### The generated lines arrived as mojibake
+- **Reported as:** the pill showing `ermâ€¦`.
+- **Root cause:** a redirected child's output is decoded with the *console's* codepage, not UTF-8, so
+  the three bytes of `…` were read as three Latin-1 characters. Nothing to do with the model or the
+  cache — `File.WriteAllText`/`ReadAllText` were UTF-8 all along; the damage happened at the pipe.
+- **Change:** `StandardOutputEncoding`/`StandardErrorEncoding`/`StandardInputEncoding` pinned to
+  UTF-8, plus a `Legible()` guard that drops any line carrying U+FFFD or a Latin-1 supplement
+  character — the pill's whole vocabulary is ASCII plus an ellipsis, so that range is damage, not
+  language. Belt and braces, because this one reached the screen.
+- **Verified:** cache purged and regenerated; 0 mojibake characters in the stored JSON, `uh…` intact.
+
+### Blog demo — reverted at the user's request
+The two-scale change and the 2/1 hero frame were **rolled back** on both vhosts from
+`*.bak-herofit-20260729`; `aspect-ratio:5/2` and the single `--s` scale are back. The analysis in the
+section above still stands, but it was the wrong target: the ask was the static poster image, not the
+live demo. Backups of the reverted-away work remain as `*.bak-twoscale-20260729`.
+
+### Still owed
+- **Port the ring-cluster theme to `CodexWidget`** — not started. Only its mood strings are wired.
+  Map unchanged from yesterday's entry below.
+- **The `TurnOver` twin for Codex.** `CodexWidget` reads `st?.State == "working"` in the same places
+  and has the same silent-interrupt hole; the repo rule is that a change in one twin needs the other.
+- ~~`halo-hero.jpg`~~ **done:** cropped 1600×640 → a 1050×420 window anchored to the top edge (the
+  notch has to stay flush with it) and resampled back, so the notch went from 37% to ~56% of the
+  frame. Cropped from a `.bak-crop-20260729` backup rather than in place, so re-running cannot crop a
+  crop. DB `featured_image` bumped to `?v=5`.
+- **Generated lines were shallow** ("??…", "hmm what…", "ready when u are"). The prompt now demands
+  the line carry the slot's actual meaning and bans chat shorthand and punctuation-only lines, and
+  `Legible()` drops anything with no letter in it. Regenerated: "not sure what… / state unknown /
+  can't tell :P" for `unknown`.
+- OG card language bar: still parked on the GitHub ticket.
+
+## 2026-07-28 — the pill's lines are written, not hardcoded
+
+- **Root cause / motive:** every mood on the collapsed pill was a literal in `ClaudeCodeWidget` and
+  `CodexWidget`, so the product said the same four things forever.
+- **Change:** new `src/Halo.App/Agents/Moods.cs`. Each line is a *slot* whose shipped wording is the
+  fallback; a background call writes fresh alternates into a pool and `Moods.Line(slot)` serves them.
+  18 call sites in each widget now go through it. Startup does `LoadCache()` + `RefreshSoon()`.
+- **Two things that shaped it:** `Draw*` runs per frame, so latching lives inside `Moods` keyed per
+  slot with a 60s hold — a caller-side latch would strobe, because one frame asks for more than one
+  slot (`OutageText` and `ToolVerb` both run, only one is shown). And the width guard (≤24 chars) is
+  ours, not the model's: a long line clips mid-word and reads as a rendering bug.
+- **No new packages** — `HttpClient` + `System.Text.Json` are BCL, so the API call is hand-rolled.
+  No key, no network, bad JSON → falls back to exactly today's strings.
+- **Superseded the same day:** the first cut called the paid API with a stored key. Replaced with
+  the agent CLI already on the machine (`claude -p`, else `codex exec`) — no key, and it rides the
+  subscription that is already running. Cache `%LOCALAPPDATA%\Halo\moods.json`, stamp
+  `moods-stamp.txt`, refresh throttled to once per 24h (it was every launch, ~3c a shot).
+- **Verified:** Release 0 warnings / 0 errors; `dotnet test` 234 passed / 0 failed. **Not yet
+  deployed, not pushed.** The generated lines have not been eyeballed on a real pill — no key was
+  configured on this machine, so every path taken so far was the fallback.
+- Reverted the same day: a blog two-variant experiment (`content_ai`/`content_fa_ai`/`text_variant`
+  + a `post.html` patch) — wrong target, backed out on both vhosts and the columns dropped.
+
+### Follow-up — what a live CLI run actually found (2026-07-29)
+
+Ran the real prompt through `claude -p` rather than trusting the code. Three bugs; two closed:
+
+1. **Prompt over stdin meant the CLI never ran.** `cmd /c claude -p` with the text piped in left
+   cmd reading the prompt's own lines as commands — and still exiting 0, so the failure was
+   completely silent. Fixed: `ProcessStartInfo.ArgumentList`, prompt as one argument.
+2. **Inheriting the working directory hijacked the answer.** Run inside the repo, the agent picked
+   up this `CLAUDE.md` and replied with Halo backlog items instead of pill copy. Fixed:
+   `WorkingDirectory = Path.GetTempPath()`.
+3. **OPEN — the model answers in prose, not JSON.** The API path guaranteed shape with
+   `output_config.format`; the CLI has no equivalent, and the contract sat at the end of a long
+   prompt. Fix: lead with the output contract, include a one-line example of the exact shape, and
+   retry once when the reply has no JSON object. Until then the pool never fills and the pill shows
+   exactly today's strings — nothing broken, nothing gained.
+
+**Two things still owed, neither started:**
+
+- Close bug 3 above, then eyeball the generated lines on a real pill.
+- **Port the ring-cluster theme to `CodexWidget`** — only its mood *strings* were wired up; the
+  layout is still the old design. The map: on `ClaudeCodeWidget`, `DrawExpanded` + `Key(...)` are
+  ~306-542, `DrawNet` + `Rule`/`Waveform`/`Cap` ~854-980, `DrawNetHover` ~981-1032, `DrawExit` +
+  `FlagFitted`/`Waved` ~542-798. `CodexWidget.DrawExpanded` is ~244-318. Not a copy-paste: the data
+  model differs (`CodexSnapshot` vs `CcStatus`, plus `CodexSurface` and `CodexLimit`/`LimitLabel`
+  which have no Claude counterpart), and the twins must not start depending on each other.
+  Budget ~400 lines of C#, plus a `--render-widget codex` pass to actually see it.
+
+Still **not deployed, not pushed.** Release 0/0, `dotnet test` 234 passed.
+
+## 2026-07-28 (latest+10): the banner's grabber bar promised more when there was none
+Build 0/0, **234 tests** (4 new). Hot-deployed. **Not pushed.**
+
+- Reported as: a short notification still shows the little bar underneath that says "open the pill to read
+  the rest", when there is no rest. Correct — the condition was `n.Body.Length > 0`, i.e. *has a body at
+  all*, not *has more body than fits*. A two-word message offered a handle that expanded into the same two
+  words over an empty gap.
+- `NotifBanner.BodyOverflows(n)` asks the layout instead: lay the body into the same two-line box and see
+  whether any characters are left over. Measured with `WrapFmt`, **not** the summary's `SummaryFmt` — a
+  format carrying `EllipsisCharacter` reports the whole string as fitted, because as far as GDI+ is
+  concerned it did fit it, by cutting it short. `TrimEnd` first: mirrored toasts routinely carry trailing
+  newlines and those are not something to read. Memoised on (body, has-preview) — it is on the per-frame
+  path twice and the answer only changes when the notification does. A measurement failure returns *true*,
+  so a broken probe can never hide a real "there's more".
+- **Both** call sites use it: the bar in `NotifBanner.Draw` and the drag gesture in `NotchController`
+  (which had the same `Body.Length > 0` test). A strip that expands into nothing is worse than no strip,
+  and the two must not be able to disagree.
+- `--render-notif` now renders **two** banners — a long body and a short Persian one — because a single
+  long-body sample could never have shown this. Verified: bar on the ellipsised one, absent on the short.
+
+## 2026-07-28 (latest+9b): the blog's Claude panel image, replaced live
+- The post `halo-glass-notch` referenced `assets/blog/halo-claude.png?v=2`, from **both** `content` and
+  `content_fa`. Replaced with the regenerated `claude-demo` render (below), backed up as
+  `halo-claude.png.bak-20260728` on each vhost first.
+- **Both vhosts, as always**: `/home/boystore.org/public_html` (owner `boyst8337`) and
+  `/home/pvboy.dev/public_html` (owner `pvboy2287`). scp lands as root, so the chown back to each
+  vhost's own user is not optional. Cache-bust bumped `?v=2` → `?v=3` with one `REPLACE()` over both
+  language columns — the file name is shared, so a single UPDATE covers EN and FA.
+- Verified live, not assumed: API reports `?v=3`, both hosts return 200 / 84000 bytes / `image/png`, and
+  the md5 fetched over HTTPS equals the local file's (`dfbb9db6…`).
+- Trap: the first scp to boystore.org died with `Connection reset by peer` while the pvboy.dev one
+  succeeded, leaving the two vhosts **disagreeing** — the old file was still being served on one side and
+  nothing said so. `scp -O` went through. Always diff the two by checksum afterwards rather than trusting
+  that a loop of two uploads both landed.
+
+## 2026-07-28 (latest+9): the docs screenshot was three layouts out of date
+Build 0/0, 230 tests. **Not pushed. Blog not touched — see below.**
+
+- `ReadmeFiles/agents.png` still showed the **pre-ring-cluster** panel: progress bars, an empty graph
+  reading "net … · api …", no weekly limit, no exit block. Regenerated from
+  `--render-widget agents.png claude-demo 2 440,145` — the cursor parked inside `ExitRect()` so the block
+  renders its audit rows rather than the resting one-liner. Shows: running (red stop), 5-hour 42%,
+  weekly 61%, context 341K/1M, the live graph, and the full exit audit.
+- **`claude-demo` seeded the limits but not the exit**, so a docs render still put the author's real
+  address, ISP and ASN on a public page. Now seeded with **RFC 5737 TEST-NET-3 (`203.0.113.24`)** and an
+  **RFC 5398 documentation ASN (`AS64496`)** — they read as a real exit and can never be anyone's. The
+  load-bearing part is setting `IpRep.ForIp`/`DnsLeak.ForIp` to the same address: both `Want()` methods
+  early-return when they already hold that ip, which is what stops the draw-time calls going out and
+  overwriting the demo values. Same trap the limits hit, one layer down.
+- Prose updated in **both** mirror READMEs to name what the new image shows (the two-sided graph, the
+  exit audit). Root `README.md`/`README.fa.md` carry no screenshot — only `mirror/` does.
+
+## 2026-07-28 (latest+8): the small rows were soft because the hinting never landed
+Build 0/0, 230 tests. Hot-deployed. **Not pushed.**
+
+- **Small text in the Claude Code panel was soft and uneven, and it was not the renderer.** Content is
+  drawn at native resolution (only the *shape* is supersampled) and the hint was already
+  `AntiAliasGridFit`, and DPI here is 96 so the `ScaleTransform` is a no-op. The bug is that grid-fit was
+  being handed a **fractional origin**: `TextTop` multiplies the ascent ratio by the size (0.9668 × 12.5),
+  so baselines landed on .915 of a pixel, and `x` came straight off `MeasureString` just as fractional.
+  Every hinted stem was then resampled across two pixels. The error is a fixed fraction of a pixel, so its
+  share of the glyph grows as the font shrinks — which is exactly why the 12–13px rows looked worse than
+  the 22px title while nothing was wrong with the title.
+- Fix: `MathF.Round` on both the baseline and `x` in `Text`/`TextClipped`. Costs ≤ half a pixel of layout.
+- Separately, three fonts were declared at **12.5px**. A half-pixel em cannot be grid-fitted; all three
+  are 13px now. Verified with `--render-widget` cropped to the key rows and blown up 3× nearest-neighbour
+  — stems are single-pixel and clean where they were two-pixel smears.
+- `TintAppExpanded` 60 → **48** on request (open panel ~81% window). `TintAppCollapsed` stays at 120: the
+  small pill has no room to lose contrast under its own content.
+
+## 2026-07-28 (latest+7): the tint revert, then the ends of the pill were a different colour
+Build 0/0, 230 tests. Hot-deployed. **Not pushed.**
+
+- **`TintAppExpanded` 140 → 60, reverted on the user's judgement.** 140 measured better on the offending
+  capture (band spread 13.7 → 8.3, sharpest edge 1.64 → 1.00 per row) and looked wrong: at 140 the glass
+  stopped reading as glass. Transparency *is* the material here; the ghost band is the price. The comment
+  at the constant now records both the measurement and why the better number lost, so it does not get
+  "fixed" back.
+- **Then: the ends of the pill took the colour of whatever was behind them while the middle stayed near
+  black.** Root cause is not the tint and not the mask — the straight edges measure clean, hue identical
+  to the boundary (R−G = 39 interior, 38 at the last covered pixel), only alpha ramps, so the single-mask
+  fix from latest+6 holds. It is `BlurPyramid`: **blur shrinks the backdrop, it does not stop it being a
+  map of the backdrop.** A 90px block against the pill's left end is still ~6px in the 1/14 thumbnail and
+  the bicubic upscale hands it back as a flat coloured slab. More blur cannot fix it — past ~1/14 the
+  upscale rings and the edge comes back *sharper*, measured earlier.
+- **Fix: pull the blurred plate toward its own mean (`FrostMix`, default 0.55).** That is what frosted
+  glass actually does — takes on the average of its backdrop and keeps a soft drift of it. Hue and
+  movement survive, the pane still shifts with the wallpaper, but no region reads as a shape. Mean is
+  computed on the 40×15 thumbnail's bits (a `DrawImage` to 1×1 is a resample, not an average).
+- Verified with a deliberately brutal backdrop — saturated 90px blocks flush against both borders, a
+  bright bar across the middle. End-vs-centre region delta: **37 → 18 at 0.55, → 9 at 0.75.**
+  `--render-shape` takes a 4th argument now that sweeps `FrostMix` without a rebuild; the sweep strip is
+  the only way to pick that number.
+- **Then `FrostMix` fixed the edges and killed the glass** — and that is the actual lesson of this whole
+  run. Both ghost fixes (the tint, then the mix) work by REMOVING information from the backdrop, and with
+  nothing put back the pane stops being a material and becomes a flat colour. **Transparency alone is not
+  glass.** Frosted glass anywhere is blurred backdrop + a lit surface: a **sheen** down the face, a
+  **grain** in the substrate, a **rim light** along the contour. None of those three existed here. All
+  three are backdrop-independent, so they buy the material back at zero cost to the ghost suppression —
+  which is why they are the right lever and the tint was not.
+  **Rejected on sight and rolled back — the three are shipped at 0.** The reasoning above is sound and the
+  code stays (at 0 each is a branch that does not run), but on the real pill it did not read as glass, it
+  read as an effect on top of one. Shipped state is `FrostMix 0.55`, no cues — edges fixed, and the glass
+  question still open. The 4th argument sweeps `mix,sheen,grain,rim`.
+  Rim is drawn INSIDE the mask, inset by half the pen, so it is shaped by the same path and cannot come
+  back as the coloured frame. Grain tile is deterministic — a per-frame reseed is a crawling fizz on a
+  window that sits still.
+
+## 2026-07-28 (latest+6): the white rectangle was the desktop, and the glass was letting it through
+Build 0/0, 230 tests. Hot-deployed. **Not pushed.**
+
+- **The "white rectangle inside the glass" was real content, faithfully rendered.** Found by dumping the
+  capture rather than guessing: new `HALO_DUMP_GLASS=1` writes the raw grab and the blurred result to
+  `%TEMP%`, and the raw grab was a Telegram window with a pale message bar across it. The glass was
+  showing exactly that. **Blur alone does not make frosted glass** — a blurred bright panel is still a
+  bright panel, so any light strip behind (a message bar, a title bar) arrived as a hard-edged pale block
+  sitting inside the pill. The backdrop is now desaturated 40% toward its own luminance and its range
+  squeezed to ~58% into the lower half (`Frost`) before the tint goes on. Measured on the actual offending
+  capture: row-luminance spread through the glass **51.5 → 2.7**. Hue and movement still come through;
+  legible shapes do not.
+- `--render-shape` takes an optional backdrop image now, so the composite can be driven with a REAL
+  captured desktop instead of flat magenta. Flat magenta could never have caught this.
+- **Separately, a latent capture bug: the grab ignored the drag offset.** The window lands at
+  `workLeft + (workWidth - winW)/2 + OffsetX`, the capture started at `workLeft + (workWidth - CaptureW)/2`
+  with no offset — so a pill dragged off centre showed a faithful picture of *the centre of the screen*
+  instead of what is behind it. The pill's own width cancels out of the algebra, so the fix is the offset
+  alone. **Not** the reported symptom (the saved offset here is 0) and it is not claimed as such, but it
+  is a real bug and it is fixed.
+- **The pin's hover label sits on its own chip.** Bare text at `pin.Right + 6` landed straight on the
+  agent panels' stop button once that moved to x=42 — a hover label you have to read against whatever it
+  covers is not a label.
+- A little more air between the flag and the country line (9 → 13).
+- Deleted a dead 54-line `DrawNetHover` overload left from an older graph design — it turned out to be a
+  copy of the one Codex still uses, which is its own small warning about the two panels drifting.
+
+## 2026-07-28 (latest+5): the rings answer to the pointer, and the dns row is a button
+Build 0/0, 230 tests. Hot-deployed. **Not pushed.**
+
+- **Press the dns row to run the test again.** `DnsLeak.Retest()` drops the cached answer and the next
+  hover frame starts a fresh lookup; the old verdict stays on screen, dimmed, behind "testing dns…"
+  rather than the row blanking. A second press mid-test is a no-op — `_busy` already guarded that.
+  `DrawExit` records where it actually put the row and `Buttons()` hands back that exact rect, because
+  how far down the row sits depends on whether the exits have split — and the hand cursor reads the same
+  list, so what looks pressable and what is pressable cannot drift apart.
+- **Hovering a ring lifts it and fills the hole in the middle.** Which band the pointer is in comes from
+  the distance to the centre — they are concentric, so the radius alone answers it. The hovered arc
+  thickens and the other two step back (dimming the others is what actually picks one out of three), all
+  eased on a time constant rather than a per-frame step so it takes the same ~0.09s at any fps tier. Its
+  figure lands in the centre of the cluster — the empty hole flagged two entries ago — with the label and
+  detail under the cluster. `Animating` now also stays true while the lift settles, or it would freeze
+  half-raised the moment the pointer left and the next hover would start from wherever it stopped.
+- **Credits moved to hover.** They were on the resting 5-hour line beside the countdown, which kept a
+  dollar figure on screen permanently for something most glances are not asking about. Now the resting
+  line is just the countdown; pointing at the row adds the spend (or the remaining, or spent-against-cap
+  when the API exposes those), and the 5-hour ring's centre readout carries it too so both hover paths
+  agree.
+- Graph switched back to the **equaliser** — mirrored capsules with a capped bar width and the older
+  samples dimmer. Constellation is gone; the mirror and the full-width spread stay.
+- **The wind loop reads as smooth now.** It was already seamless arithmetically — the phase advances by
+  exactly Tau and sine is Tau-periodic, so the frame after the wrap is the frame that would have come
+  next. The problem was perceptual: one sine at 1.45 cycles is simple enough that the eye memorises it
+  and reads each pass as a restart. Two harmonics (the second at double rate, offset phase) make the
+  cloth wander instead of march, and both terms keep period Tau, so the loop is still exactly seamless.
+  Period 5s → 7s: the faster a repeating pattern runs, the more obviously it repeats.
+
+**Unresolved: the white rectangle in the big pill.** Could not reproduce. `--render-shape` over flat
+magenta is clean, and the only capture of the live window needs `HALO_CAPTURABLE=1`, which removes the
+capture exclusion and makes the glass photograph itself — so that image cannot be used to diagnose the
+glass. Waiting on where exactly it appears and in which state before guessing at a third fix; the first
+guess at the coloured frame was wrong and only measurement caught it.
+
+## 2026-07-28 (latest+4): the coloured frame round the glass, and a flag that leans into the wind
+Build 0/0, 230 tests. Hot-deployed. **Not pushed.**
+
+- **The coloured frame behind the glass was real, and my first fix was wrong.** Reported as a coloured
+  border visible around the big glass pill. First guess: `SetClip` is hard-edged whatever the smoothing
+  mode, so the backdrop landed one stair-stepped pixel proud of the antialiased tint. Replaced it with an
+  antialiased `FillPath(TextureBrush)` — and **measurement said it got worse** (80 leaking pixels against
+  the old 21). The actual cause is more basic: the backdrop and the tint were filled through the *same*
+  path one after the other, and at a boundary pixel with coverage `c` the tint's alpha is scaled by `c`
+  too, so it covers the backdrop least exactly where the backdrop already is. On a magenta test backdrop
+  the rim reached 130 in red and blue against an interior of 27. **Fix: composite backdrop + tint on a
+  flat rectangle first, then mask once.** A single antialiased edge can only scale alpha; it cannot shift
+  the hue. Now 0 leaking pixels, worst residual 23 — which is just the glass legitimately showing the
+  backdrop through the tint.
+- New `--render-shape <png>` hook drives the real composite over flat magenta, and `DrawShape` was split
+  so the backdrop is a parameter rather than a field read. This is the only way to inspect that edge: the
+  window carries `WDA_EXCLUDEFROMCAPTURE`, and the edge has now been got wrong twice.
+- The two supersampled buffers are **reused** rather than allocated per frame. The old code already
+  allocated one 1120×440 bitmap per call; the fix needs two, and that is not churn this path may have.
+- **The flag's wind has an angle.** The phase now advances with y as well as x, so the wavefronts cross
+  the cloth on a slant instead of marching straight across in flat columns, and the amplitude ramps
+  (smoothstepped) from nothing at the hoist to full at the fly. That ramp is most of what sells it as
+  cloth rather than an image being wobbled.
+- **The mark is coloured by its own value**, on a continuous red → amber → green ramp instead of four
+  buckets: bucketing put a 72 in the "fine" band and painted it plain white, which reads as no colour at
+  all. Only the figure takes the colour — `72/100` in the ramp, `· datacenter` grey — the same rule the
+  usage rows follow. `dns ok` / `dns leak` gets the same treatment.
+
+## 2026-07-28 (latest+3): constellation graph, a real DNS leak test, and a mark out of 100
+Build 0/0, **230 tests** (was 221). Hot-deployed. **Not pushed.**
+
+- **The two-lane sparkline was a mistake and is gone.** Feedback was blunt and correct: it looked
+  ridiculous. The error was throwing away the MIRROR — that symmetric silhouette was the only thing
+  giving the graph character, and the actual complaint had only ever been the empty left half. Three
+  mirrored treatments were built and rendered for real (equaliser capsules, a filled ridge, a dot field);
+  **constellation** was chosen. Every sample is a lit dot, your internet above the rule and the path to
+  Anthropic below, oldest at 0.45 alpha rising to full at "now". A steady route settles into a calm even
+  row, and a spike genuinely jumps *out* of the row instead of merely being taller. The other two were
+  deleted rather than left behind an env switch.
+- **A real DNS leak test** (`DnsLeak`). This cannot be measured locally — the only way to see which
+  resolver actually answers is to have an authoritative nameserver watch for the query — so it uses
+  `bash.ws`: take an id, look up six `<n>.<id>.bash.ws`, read back the resolvers that came asking. The
+  leak test is the resolver's **country** against the exit's; their own `conclusion` field calls any
+  different-ASN resolver a leak, which flags merely choosing Cloudflare DNS. Hover-only, once per
+  address, cached. Measured live: 5 resolvers in IE/TR/US → leaking; a later run, 2 in TR → clean.
+- **A mark out of 100** (`IpRep.Score`, 9 tests). Stated plainly in the comment and here: this is the one
+  number on the panel that is *ours*. Every input is a real flag from a real lookup, but the weights are
+  a house opinion about what gets an address refused, and nothing measures that. So it is never shown as
+  a percentage, and the findings that took the points off always sit on the same line — a bare score you
+  cannot audit is a magic number. `72/100 · datacenter` on the live exit; the abuse term is dropped
+  rather than ellipsised when the column is too narrow, since an ellipsis would eat the verdict instead.
+- **The flag ripples.** Per-column vertical displacement plus a brightness term from the slope, done in
+  one `LockBits` pass into a reused PArgb buffer. Sampling clamps at the edges so only the *content*
+  waves and the silhouette stays the rounded rectangle it is clipped to — letting the edges undulate
+  fought the rounded corners rather than adding to them. `Animating` only asks for frames while the
+  pointer is actually on the panel: pinned open with the mouse elsewhere, nobody can see it.
+- Flag settled at 28×18 (32×21 overshot). Exit block moved up to y=120 and its rows are a built list now,
+  laid out in order, because how many there are depends on what is actually wrong.
+
+`--probe-ip` now runs the DNS test too, which is the only way to check the parse without hovering an
+uncapturable window. `mirror/PRIVACY.{md,fa.md}` updated in both languages — `bash.ws` gets its own
+paragraph, because a DNS leak test *cannot* be done quietly: telling a third party who resolves your
+names is the entire mechanism, which is why it never runs without a hover.
+
+Still open: the swatch dots duplicate the figure colour, the ring cluster's centre is empty, and red vs
+amber needs a shape difference for red-green colour blindness. City/region/operator-domain from
+`ipapi.is` are fetched-but-unused — they want a second-level popup on the flag, not another row.
+
+## 2026-07-28 (latest+2): the graph becomes two lanes, and the header stops narrating
+Build 0/0, 221 tests. Hot-deployed. **Not pushed.** Driven by "the panel has got crowded" and "the graph
+needs a better idea so we use that space better".
+
+- **The network graph is two lanes, not a mirrored axis.** Both series now grow upward from their own
+  floor as filled area traces — green net on top, blue api below — so reading the lower one no longer
+  means mentally flipping it, and each gets a full height instead of half a shared one. The fill is a
+  vertical gradient to transparent; drawn as a brush straight onto the surface it composites correctly,
+  unlike the baked textures that forced the PArgb rule.
+- **The samples now spread across the whole column.** A half-warm buffer used to pack its bars against
+  the right edge and leave the rest as bare rule — which was most of the graph, most of the time. Both
+  lanes share ONE origin index, or a gap in one series would slide it out of time with the other. The
+  trace is straight segments between samples, not a smoothed curve: a curve invents shape between
+  readings, which is the same sin as an invented number.
+- Kept: the scale off 3× the median, the red full-height tick for a dropped sample, the tooltip. The
+  tooltip now picks the **nearest** sample rather than the cell landed in, since the trace is vertices.
+  A single sample pins to the right end — time runs rightward, so the first reading is already "now".
+- **Band 46 → 38**, and the 8px went to the exit block below: **the flag is 26×17 → 32×21 with rounded
+  corners.** That is the actual fix for "make the flag higher quality" — at the old size the TR star had
+  about six device pixels to live in, and no filter fixes that. Rounding is done with a texture brush,
+  not `SetClip`: GDI+ clipping is hard-edged whatever the smoothing mode, so a clipped rounded rect comes
+  back with stair-stepped corners while `FillPath` antialiases them.
+- **The line under the title is down to one job:** the question Claude is waiting on. The verbs ("hmmm",
+  "googling :P"), the moods and the elapsed clock all left — narrating that something is running, in the
+  panel you opened *because* something is running, next to a lamp that already says so in colour.
+  `Activity()` died with it. The collapsed pill keeps all of it: a blank pill reads as broken, and that
+  is where the product's voice lives.
+- **The weekly row disappears when it has no figure**, and the rows below close up (they take a running
+  slot now instead of a fixed index). The 5-hour row keeps its dash — that window always exists on a
+  Claude account, so a missing figure there means the fetch failed, which is worth seeing.
+- Figures 18px → 16px. `⟳ refresh` keeps its word at rest (a lone glyph is a guess about what it does,
+  and it is a button); only the age waits for the pointer.
+- **The cursor turns to a hand over anything pressable.** A layered popup tells Windows nothing about its
+  own hit-testing, so `WM_SETCURSOR` asks the controller, which walks the same rects the click dispatch
+  walks at the same scale — the pointer can never promise a press the click path would not honour.
+
+Verified with `--render-widget claude-idle 2`, `claude 2`, and the exit hover under `HALO_RENDER_NET=1`.
+
+Still on the table: the swatch dots duplicate the figure colour exactly now, the three sub-lines could
+move to hover, the ring cluster's centre is empty while its numbers sit in the next column, and red vs
+amber needs a shape difference for red-green colour blindness if more text goes.
+
+## 2026-07-28 (latest+1): text that only confirmed the normal case is gone
+Build 0/0, 221 tests. Hot-deployed. **Not pushed.** Reported as "the panel has got crowded — could some
+of this be a shape, or live behind the pointer?"
+
+The rule applied: **text reports the exception, not the norm.** A line that is only ever there to say
+nothing is wrong is a line that costs attention every glance and pays back on almost none of them.
+
+- **"api takes the same exit" / "no proxy set · direct" deleted.** It appeared on hover whenever the two
+  exits agreed — i.e. it existed to announce the default. The split case is the one worth words and
+  already gets them, loudly, in amber. Silence there now means agreement.
+- **"not fetched yet" (×2) deleted.** The value already reads `—`; the sub-line underneath was the same
+  fact spelled out. Both usage rows collapse to one line while the figure is unknown.
+- **"scale 1500" deleted** from the graph legend, and `cap` dropped out of the `_hover` tuple with it —
+  it was dead once the legend stopped printing it. The legend carried the axis cap because a mirrored
+  profile has nothing to hang numbers off, but the tooltip *is* that axis now: point at any bar and it
+  reads out. The unit moved onto the figure it belongs to (`api 328 ms`) instead of floating right-aligned
+  on its own.
+- The reputation line now takes the **next free row** rather than a fixed `y + 53`, so removing the third
+  line closes the gap instead of leaving a hole where the sentence used to be (caught in the render).
+
+Resting text runs: ~16 → ~11. Verified with `--render-widget … claude 2` and `… 2 447,160` under
+`HALO_RENDER_NET=1`.
+
+Still on the table, not done: the swatch dots in the key rows now duplicate the figure colour exactly
+(they became redundant the moment the figures took colour), the three sub-lines could move to hover, and
+the ring cluster's centre is empty while its numbers sit in the next column. Also noted for whenever more
+text goes: red and amber are close for red-green colour blindness, so a critical band should carry a
+shape difference, not only a hue.
+
+## 2026-07-28 (latest): context warns before it degrades, and the exit gets scored
+Build 0/0, **221 tests** (was 197). Hot-deployed (`Halo.App.dll` swapped into
+`%LOCALAPPDATA%\Programs\Halo`, relaunched, alive). **Not pushed.**
+
+- **A banner when the context is full enough to cost quality.** `CheckContext` joins the latched alerts
+  in `CheckAlerts`; past `ContextWarnAt` (0.80) it enqueues "Context N% full · answers get vaguer from
+  here — /compact when you can". Latched per session — keyed `pid:startedAt`, because pids get recycled —
+  rather than per edge: compacting drops the fraction and a long session would otherwise re-warn every
+  time it climbed back. Dropping below the line re-arms it.
+- **Colour on the figures only.** `Key` grew a `figure` colour and a `hot` token so the caption stays
+  grey while the number carries the state — colouring the label too turns the row into a block of one
+  hue you have to decode. The 5-hour and weekly percentages take `UsageColor`; context has its own ramp
+  (`ContextBand`: blue → amber 15 points out → red at the warn line), applied to both "132K" and the
+  "13%" inside "of 1M · 13% used". Splitting that sub-line into runs needed `MeasureTrailingSpaces` —
+  `GenericTypographic` measures a run ending in spaces short, and the next run slid onto the separator.
+- **The exit is now scored, with someone else's numbers.** Hovering it asks `api.ipapi.is` (HTTPS, no
+  key) for `is_datacenter / is_vpn / is_proxy / is_tor / is_abuser` and the operator's `abuser_score`,
+  and adds a fourth line: `datacenter · abuse high`, coloured by severity. ip-api.com carries the same
+  flags but its free tier is plaintext HTTP, and asking "is my exit private" over a channel the local
+  network can read and rewrite is the wrong trade. Nothing is computed here — a reputation is not
+  something this machine can measure about itself. Only the *ordering* is ours (`IpRep.Classify`): a
+  flagged address is refused outright, a recognised vpn draws captchas, a plain datacenter is merely
+  noticed, and an operator their own data calls a high abuser lifts a datacenter into the warning band.
+  Fetched lazily on hover, one request per address, cached until the exit changes.
+- **The stop button was sitting on the pushpin.** `CancelRect` was `(18,16,34,34)`, the controller paints
+  the pin at `(9,4,24,24)` — a press meant for one could land on the other. Stop moved to x=42, title and
+  activity line to x=84.
+- **The refresh timestamp is hover-only.** A permanent "updated 4m ago" is a timestamp nobody asked for
+  sitting in the corner; at rest it is just `⟳`, and the age appears when you go to press it.
+
+`mirror/PRIVACY.{md,fa.md}` updated in both languages — they enumerate every outbound request, and the
+line claiming `ipwho.is` was *the only* one disclosing anything to a third party had become false.
+
+New dev hooks: `--probe-ip` prints the exit as both providers see it (the only way to check the
+reputation parse without hovering an uncapturable window), and `HALO_RENDER_NET=1` makes
+`--render-widget` wait for the real lookups so the exit block renders live data instead of "locating…".
+
+Verified: `--probe-ip` against the live exit returned `verdict=datacenter abuse=high sev=2`;
+`--render-widget … claude 2 447,160` under `HALO_RENDER_NET=1` shows all four exit lines with the amber
+verdict, and the resting render shows the bare `⟳` and the stop button clear of the pin.
+
+Asked for and **already shipped**: the media title marquee on hover. It exists (`DrawScrollingLine`,
+bound to the title row, `Animating` gated on `_marqueeScrolling`, unit-tested in `MediaMarqueeTests`),
+landed in 5f21d60, and the installed build already postdated it. It only moves when the title is too
+long to fit — a title that fits is drawn plain, by design.
+
 ## 2026-07-28 (later): tooltip draw order, and the exit answers for the route
 Build 0/0, **197 tests**. Hot-deployed.
 

@@ -43,11 +43,11 @@ folds away when there is not. No app to open, nothing covering your work.
 
 <div align="center">
 
-### [⬇️ DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)
+### [⬇️ Download for Windows](https://github.com/phoseinq/DynamicWin/releases/latest)
 
 <sub>Windows 11 · x64 · per-user, no admin prompt · updates itself quietly</sub>
 
-<sub>A portable zip is on the [releases page](https://github.com/phoseinq/DynamicWin/releases/latest).</sub>
+<sub>Take `DynamicWinSetup.exe` to install it, or `DynamicWinPortable.zip` to just run it.</sub>
 
 </div>
 
@@ -91,12 +91,14 @@ app, a different desktop, twenty minutes on.
 <h2 align="center">🤖 Coding sessions</h2>
 
 <div align="center">
-<img src="ReadmeFiles/agents.png" alt="The Claude Code panel" width="900">
+<img src="ReadmeFiles/agents-2.png" alt="The Claude Code panel" width="900">
 </div>
 
 A live panel per **Claude Code** and **Codex** session: what it is doing, context left, your 5-hour
-and weekly limits, and a Cancel that stops the running prompt. Any tool can join by writing a small
-JSON file.
+and weekly limits, and a Cancel that stops the running prompt. The graph tracks both your internet
+and the path to Anthropic, so when things stall you can see whose side it is. Point at the exit and
+it turns into an audit: country, ASN, latency and loss, and a real DNS leak test. Any tool can join
+by writing a small JSON file.
 
 <br />
 

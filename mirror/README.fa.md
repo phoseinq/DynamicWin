@@ -43,11 +43,11 @@
 
 <div align="center">
 
-### [⬇️ DynamicWinSetup.exe](https://github.com/phoseinq/DynamicWin/releases/latest/download/DynamicWinSetup.exe)
+### [⬇️ دانلود برای ویندوز](https://github.com/phoseinq/DynamicWin/releases/latest)
 
 <sub>ویندوز ۱۱ · x64 · برای همین کاربر، بدونِ پرامپتِ ادمین · خودش بی‌صدا آپدیت می‌شود</sub>
 
-<sub>نسخهٔ پرتابل در [صفحهٔ ریلیزها](https://github.com/phoseinq/DynamicWin/releases/latest) هست.</sub>
+<sub>`DynamicWinSetup.exe` را بردار برای نصب، یا `DynamicWinPortable.zip` را برای اجرای بدونِ نصب.</sub>
 
 </div>
 
@@ -90,12 +90,14 @@
 <h2 align="center">🤖 سشن‌های کدنویسی</h2>
 
 <div align="center">
-<img src="ReadmeFiles/agents.png" alt="پنلِ Claude Code" width="900">
+<img src="ReadmeFiles/agents-2.png" alt="پنلِ Claude Code" width="900">
 </div>
 
 برای هر سشنِ **Claude Code** و **Codex** یک پنلِ زنده: مشغولِ چه کاری است، چقدر کانتکست مانده، سقفِ
-۵ ساعته و هفتگی، و یک Cancel که پرامپتِ در حالِ اجرا را متوقف می‌کند. هر ابزارِ دیگری با یک فایلِ
-کوچکِ JSON اضافه می‌شود.
+۵ ساعته و هفتگی، و یک Cancel که پرامپتِ در حالِ اجرا را متوقف می‌کند. گراف هم اینترنتِ خودت را
+می‌سنجد هم مسیر تا Anthropic را، پس وقتی کار گیر می‌کند معلوم است تقصیرِ کدام طرف است. موس را ببر
+روی خروجی تا تبدیل شود به یک ممیزی: کشور، ASN، تأخیر و اتلاف، و یک تستِ واقعیِ نشتِ DNS. هر ابزارِ
+دیگری با یک فایلِ کوچکِ JSON اضافه می‌شود.
 
 <br />
 

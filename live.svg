@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300"
+     font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0"   stop-color="#131417"/>
+    <stop offset="0.55" stop-color="#0c0d10"/>
+    <stop offset="1"   stop-color="#09090b"/>
+  </linearGradient>
+  <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0"   stop-color="#ffffff"/>
+    <stop offset="0.55" stop-color="#d6dae2"/>
+    <stop offset="1"   stop-color="#9aa1ad"/>
+  </linearGradient>
+  <filter id="wide" x="-70%" y="-70%" width="240%" height="240%">
+    <feGaussianBlur stdDeviation="60"/>
+  </filter>
+  <filter id="near" x="-80%" y="-80%" width="260%" height="260%">
+    <feGaussianBlur stdDeviation="13"/>
+  </filter>
+  <clipPath id="card"><rect width="1200" height="300" rx="28"/></clipPath>
+</defs>
+
+<g clip-path="url(#card)">
+  <rect width="1200" height="300" fill="url(#bg)"/>
+
+  <!-- a single soft light behind the mark, clipped so it never bleeds past a rounded corner -->
+  <ellipse cx="600" cy="140" rx="300" ry="130" fill="#ffffff" opacity=".055" filter="url(#wide)"/>
+
+  <!-- ring and wordmark, centred on a measured width rather than a guessed one -->
+  <circle cx="517" cy="150" r="25" fill="none" stroke="url(#ring)" stroke-width="7"/>
+  <circle cx="517" cy="150" r="25" fill="none" stroke="#ffffff" stroke-width="10" opacity=".16" filter="url(#near)"/>
+  <text x="564" y="170" fill="#f4f6f9" font-size="64" font-weight="800" letter-spacing="-1">Halo</text>
+
+  <text x="600" y="218" fill="#8b919c" font-size="17" text-anchor="middle">A glass notch for Windows — the Dynamic Island your desktop never got</text>
+</g>
+</svg>
