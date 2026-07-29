@@ -382,12 +382,19 @@ internal static class Fx
         var ghost = FlagGhost(flag);
         const int gw = 210;
         int gh = ghost.Height * gw / ghost.Width;
-        var dest = new Rectangle((w - gw) / 2, (h - gh) / 2 + 4, gw, gh);
+        DrawFlagGhost(g, flag, new RectangleF((w - gw) / 2f, (h - gh) / 2f + 4, gw, gh), a);
+    }
+
+    public static void DrawFlagGhost(Graphics g, System.Drawing.Bitmap? flag, RectangleF dest, float a)
+    {
+        if (flag is null) return;
+        var ghost = FlagGhost(flag);
+        float strength = dest.Width >= 160 ? 0.16f : dest.Width >= 90 ? 0.22f : 0.30f;
         using var ia = new ImageAttributes();
-        ia.SetColorMatrix(new ColorMatrix { Matrix33 = 0.16f * a });
+        ia.SetColorMatrix(new ColorMatrix { Matrix33 = strength * a });
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-        g.DrawImage(ghost, dest, 0, 0, ghost.Width, ghost.Height, GraphicsUnit.Pixel, ia);
+        g.DrawImage(ghost, Rectangle.Round(dest), 0, 0, ghost.Width, ghost.Height, GraphicsUnit.Pixel, ia);
         g.InterpolationMode = oldInterp;
     }
 
@@ -473,4 +480,68 @@ internal static class Fx
         p.CloseFigure();
         return p;
     }
+
+    internal static Color UsageColor(float f) =>
+        f <= 0.5f ? UsageGreen
+        : f <= 0.75f ? HueLerp(UsageGreen, UsageAmber, (f - 0.5f) / 0.25f)
+        : HueLerp(UsageAmber, UsageRed, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+
+    private static readonly Color UsageGreen = Color.FromArgb(62, 207, 92);
+    private static readonly Color UsageAmber = Color.FromArgb(255, 176, 32);
+    private static readonly Color UsageRed = Color.FromArgb(229, 72, 77);
+
+    private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
+
+        internal static Color MoodRing(Color state, in Halo.Agents.MoodContext ctx)
+    {
+
+        float squeeze = MathF.Max(Ramp(ctx.ContextFrac, 0.55f, 0.95f), Ramp(ctx.UsageFrac, 0.70f, 0.98f));
+        float drag = ctx.Running is { } r ? Ramp((float)r.TotalMinutes, 2f, 12f) : 0f;
+
+        var target = HueLerp(UsageAmber, RingHot, squeeze);
+
+        float pull = MathF.Max(0.85f * squeeze, 0.25f * drag * (1f - squeeze));
+        var c = HueLerp(state, target, pull);
+
+        if (ctx.Hour is >= 0 and <= 5) c = Scale(c, 0.86f);
+
+        return Color.FromArgb(state.A, c.R, c.G, c.B);
+    }
+
+    private static float Ramp(float v, float from, float to)
+        => to <= from ? 0f : Math.Clamp((v - from) / (to - from), 0f, 1f);
+
+    private static Color Scale(Color c, float k) => Color.FromArgb(
+        c.A, (int)Math.Clamp(c.R * k, 0, 255), (int)Math.Clamp(c.G * k, 0, 255), (int)Math.Clamp(c.B * k, 0, 255));
+
+    private static Color HueLerp(Color a, Color b, float t)
+    {
+        var (h1, s1, v1) = ToHsv(a);
+        var (h2, s2, v2) = ToHsv(b);
+        float dh = h2 - h1;
+        if (dh > 180) dh -= 360; else if (dh < -180) dh += 360;
+        return FromHsv(h1 + dh * t, s1 + (s2 - s1) * t, v1 + (v2 - v1) * t);
+    }
+
+    private static (float h, float s, float v) ToHsv(Color c)
+    {
+        float r = c.R / 255f, g2 = c.G / 255f, b = c.B / 255f;
+        float max = Math.Max(r, Math.Max(g2, b)), min = Math.Min(r, Math.Min(g2, b)), d = max - min;
+        float h = d == 0 ? 0
+            : max == r ? 60 * (((g2 - b) / d) % 6)
+            : max == g2 ? 60 * ((b - r) / d + 2)
+            : 60 * ((r - g2) / d + 4);
+        if (h < 0) h += 360;
+        return (h, max == 0 ? 0 : d / max, max);
+    }
+
+    private static Color FromHsv(float h, float s, float v)
+    {
+        h = (h % 360 + 360) % 360;
+        float c = v * s, x = c * (1 - MathF.Abs((h / 60) % 2 - 1)), m = v - c;
+        var (r, g2, b) = h < 60 ? (c, x, 0f) : h < 120 ? (x, c, 0f) : h < 180 ? (0f, c, x)
+            : h < 240 ? (0f, x, c) : h < 300 ? (x, 0f, c) : (c, 0f, x);
+        return Color.FromArgb(255, (int)((r + m) * 255), (int)((g2 + m) * 255), (int)((b + m) * 255));
+    }
+
 }

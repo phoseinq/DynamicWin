@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using Halo.Agents;
 using Halo.ClaudeCode;
 
 namespace Halo.Widgets;
@@ -57,14 +58,22 @@ internal sealed class ClaudeCodeWidget : IWidget
         => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + NetMon.Version;
     public AgentNotice AgentNotice => Live is { } status
-        ? new AgentNotice(status.State, ParseTime(status.CompactedAt), status.Message)
+        ? new AgentNotice(Shown(status), ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
     public IEnumerable<int> OwnerPids => Live is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
 
-    public bool Animating => _appear < 1f || Compacting(Live);
+    public bool Animating => _appear < 1f || Compacting(Live)
+        || (_wasOpen && (WidgetInput.Over || RingsSettling));
 
     private string _shownKey = "";
     private float _appear = 1f;
+
+    private readonly float[] _ringLift = new float[3];
+    private long _ringTick;
+    private bool RingsSettling
+    {
+        get { foreach (var v in _ringLift) if (v > 0.01f) return true; return false; }
+    }
 
     private static Bitmap? LoadIcon()
     {
@@ -76,7 +85,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         catch { return null; }
     }
 
-    private bool CanCancel => Live is { State: "working", Pid: > 0 };
+    private bool CanCancel => Live is { Pid: > 0 } st && Shown(st) == "working";
 
     private bool _wasOpen;
 
@@ -116,19 +125,20 @@ internal sealed class ClaudeCodeWidget : IWidget
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))
                 g.FillEllipse(db, x, y, sz, sz);
 
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
+        var mood = Mood(st);
+        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
+            "working" => ToolVerb(st?.CurrentTool, mood),
+            "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
-            _ => IdleMood(st),
+            _ => IdleMood(st, mood),
         });
         string el = LimitHit ? LimitReset() : Elapsed(st);
         if (Compacting(st) && !LimitHit && el.Length > 0) el = CompactPct(st!) + " · " + el;
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; }
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
-        bool busy = st?.State == "working" || Compacting(st) || LimitHit;
+        bool busy = Shown(st) == "working" || Compacting(st) || LimitHit;
         bool centred = !busy && st?.State != "waiting_input";
 
         float textX = x + sz + 11;
@@ -170,6 +180,23 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     public static void MarkCompactCancelled(string? startedAt) => _cancelledCompactKey = startedAt;
 
+    private static string? _cancelledTurnKey;
+
+    public static void MarkTurnCancelled(string? startedAt) => _cancelledTurnKey = startedAt;
+
+    internal const int SettleAfterSeconds = 180;
+
+        internal static bool TurnOver(CcStatus? st, DateTimeOffset now)
+    {
+        if (st is not { State: "working" }) return false;
+        if (st.StartedAt is { Length: > 0 } && st.StartedAt == _cancelledTurnKey) return true;
+        if (!string.IsNullOrEmpty(st.CurrentTool)) return false;
+        return ParseTime(st.UpdatedAt) is { } u && now - u > TimeSpan.FromSeconds(SettleAfterSeconds);
+    }
+
+    private static string? Shown(CcStatus? st) =>
+        TurnOver(st, DateTimeOffset.UtcNow) ? "idle" : st?.State;
+
     private static bool Compacting(CcStatus? st) =>
         st?.State == "compacting" && st.StartedAt != _cancelledCompactKey
         && ParseTime(st.StartedAt) is { } t
@@ -207,189 +234,385 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
+    internal const float ContextWarnAt = 0.80f;
+
+    internal static int ContextBand(float frac)
+        => frac >= ContextWarnAt ? 2 : frac >= ContextWarnAt - 0.15f ? 1 : 0;
+
+    internal static Color ContextColour(double frac)
+        => frac < 0 ? Blue : ContextBand((float)frac) switch { 2 => Red, 1 => Amber, _ => Blue };
+
+    internal (string? id, float frac) ContextState()
+    {
+        var st = Live;
+        if (st?.Session is not { ContextMax: > 0 } ses) return (null, -1f);
+        var id = st.Pid + ":" + st.StartedAt;
+        return (id, (float)Math.Clamp((double)ses.ContextUsed / ses.ContextMax, 0, 1));
+    }
+
+    private const int Pad = 22;
+    private const float ColR = 356f, RightEdge = 538f;
+    private const float RingCx = 84f, RingCy = 132f, RingOuter = 52f, RingBand = 8f, RingStep = 16f;
+    private const float KeyX = 178f, KeyValX = 268f;
+    private const float Row0 = 96f, RowPitch = 42f;
+
+    private static float TextTop(Font f, float baseline)
+        => MathF.Round(baseline - f.FontFamily.GetCellAscent(f.Style) / (float)f.FontFamily.GetEmHeight(f.Style) * f.Size);
+
+    private static void Text(Graphics g, string t, Font f, Brush b, float x, float baseline)
+        => g.DrawString(t, f, b, MathF.Round(x), TextTop(f, baseline), StringFormat.GenericTypographic);
+
+    private static readonly StringFormat AdvanceFmt =
+        new(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.MeasureTrailingSpaces };
+
+    private static float Advance(Graphics g, string t, Font f)
+        => t.Length == 0 ? 0f : g.MeasureString(t, f, System.Drawing.Point.Empty, AdvanceFmt).Width;
+
+    private static void TextClipped(Graphics g, string t, Font f, Brush b, float x, float baseline, float w)
+    {
+        using var sf = new StringFormat(StringFormat.GenericTypographic)
+        { FormatFlags = StringFormatFlags.NoWrap, Trimming = StringTrimming.EllipsisCharacter };
+        g.DrawString(t, f, b, new RectangleF(MathF.Round(x), TextTop(f, baseline), w, f.Size * 1.6f), sf);
+    }
+
     private void DrawExpanded(Graphics g, int w, int h, float a, CcStatus? st)
     {
-        int pad = 26;
-        using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
-        using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
-        using var small = new Font("Segoe UI", 12.5f, GraphicsUnit.Pixel);
+        using var title = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
+        using var line = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        using var keyCap = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        using var keyVal = new Font("Segoe UI Semibold", 16f, GraphicsUnit.Pixel);
 
-        var dot = RingColor(st);
+        using var keySub = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        Fx.DrawFlagGhost(g, IpCountry.Flag, w, h, a);
-        using (var db = new SolidBrush(Mul(dot, a)))
-            g.FillEllipse(db, pad, pad + 8, 11, 11);
+        var state = RingColor(st);
+
+        DrawCancel(g, w, h, a, state);
         using (var tb = new SolidBrush(Mul(White, a)))
-            g.DrawString("Claude Code", title, tb, pad + 20, pad - 2);
-        string line = st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message)
-            ? st.Message! : Activity(st);
-        using (var ab = new SolidBrush(Mul(st?.State == "waiting_input" ? Amber : Dim, a)))
-            g.DrawString(line, small, ab, pad + 20, pad + 24);
+            Text(g, "Claude Code", title, tb, 84, 40);
 
-        float y = pad + 58;
-        int barW = w - pad * 2;
-        if (st?.Session is { } sess)
+        if (st?.State == "waiting_input" && !string.IsNullOrEmpty(st.Message))
+            using (var ab = new SolidBrush(Mul(Amber, a)))
+                TextClipped(g, st.Message!, line, ab, 84, 62, ColR - 92);
+
+        double ctxFrac = st?.Session is { ContextMax: > 0 } ? ContextFrac(st) : -1;
+
+        var ctxCol = ContextColour(ctxFrac);
+        var rings = new (float frac, Color col)[]
         {
-            double ctx = ContextFrac(st);
-            long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
-            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
-            DrawBar(g, pad, y, barW, "Context", $"{usedK}K / {maxLabel}", ctx, Blue, a, body, small);
-        }
-        else
+            (Limits.FiveHour, Limits.FiveHour >= 0 ? UsageColor(Limits.FiveHour) : Dim),
+            (Limits.Week,     Limits.Week     >= 0 ? UsageColor(Limits.Week)     : Dim),
+            ((float)ctxFrac,  ctxCol),
+        };
+
+        int hotRing = -1;
+        if (WidgetInput.Over)
         {
-            using var nb = new SolidBrush(Mul(Dim, a));
-            g.DrawString("No active Claude Code session", body, nb, pad, y + 4);
+            float dx = WidgetInput.Mouse.X - RingCx, dy = WidgetInput.Mouse.Y - RingCy;
+            float dist = MathF.Sqrt(dx * dx + dy * dy);
+            for (int i = 0; i < rings.Length; i++)
+                if (MathF.Abs(dist - (RingOuter - i * RingStep)) <= RingBand / 2f + 3f) { hotRing = i; break; }
         }
 
-        string LimitValue(float f, DateTimeOffset reset, float rowY)
+        long ringNow = Environment.TickCount64;
+        float rdt = _ringTick == 0 ? 1f / 60f : Math.Clamp((ringNow - _ringTick) / 1000f, 0.001f, 0.1f);
+        _ringTick = ringNow;
+        for (int i = 0; i < _ringLift.Length; i++)
+            _ringLift[i] += ((hotRing == i ? 1f : 0f) - _ringLift[i]) * (1f - MathF.Exp(-rdt / 0.09f));
+
+        for (int i = 0; i < rings.Length; i++)
         {
-            bool hov = WidgetInput.Over && WidgetInput.Mouse.Y >= rowY && WidgetInput.Mouse.Y < rowY + 36
-                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            return hov ? $"{f * 100:0.#}%  ·  resets {reset.ToLocalTime():ddd HH:mm}"
-                       : $"{Pct(f)}  ·  {ResetIn(reset)}";
+            float lift = _ringLift[i];
+            float r = RingOuter - i * RingStep;
+            float band = RingBand + 3.2f * lift;
+            using (var track = new Pen(Mul(Track, a * (1f + 0.5f * lift)), band))
+                g.DrawArc(track, RingCx - r, RingCy - r, r * 2, r * 2, 0, 360);
+
+            if (rings[i].frac < 0) continue;
+            float sweep = Math.Clamp(rings[i].frac, 0f, 1f) * 360f;
+            if (sweep <= 0.5f) continue;
+
+            float other = hotRing >= 0 ? 1f - 0.35f * (1f - lift) : 1f;
+            using var arc = new Pen(Mul(rings[i].col, a * other), band) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(arc, RingCx - r, RingCy - r, r * 2, r * 2, -90f, sweep);
         }
+
+        float show = 0f;
+        int shown = -1;
+        for (int i = 0; i < _ringLift.Length; i++)
+            if (_ringLift[i] > show) { show = _ringLift[i]; shown = i; }
+        if (shown >= 0 && show > 0.01f)
+        {
+            var (rf, rc) = rings[shown];
+            string big = rf < 0 ? "\u2014" : $"{Math.Clamp(rf, 0f, 1f) * 100:0}%";
+            string cap2 = shown switch
+            {
+                0 => Limits.FiveHour < 0 ? "5-hour  \u00b7  not fetched"
+                    : Limits.CreditsUsed > 0 ? $"5-hour  \u00b7  {ResetIn(Limits.FiveHourReset)} left  \u00b7  ${Limits.CreditsUsed:0.00}"
+                    : $"5-hour  \u00b7  {ResetIn(Limits.FiveHourReset)} left",
+                1 => Limits.Week >= 0 ? $"weekly  \u00b7  {ResetIn(Limits.WeekReset)} left" : "weekly  \u00b7  not fetched",
+                _ => st?.Session is { ContextMax: > 0 } ses
+                    ? $"context  \u00b7  {ses.ContextUsed / 1000}K of {ses.ContextMax / 1000}K" : "context  \u00b7  no session",
+            };
+
+            float hole = RingOuter - 2 * RingStep - RingBand / 2f - 2f;
+            Font centreF = new("Segoe UI Semibold", 15f, GraphicsUnit.Pixel);
+            foreach (float px in new[] { 15f, 14f, 13f, 12f, 11f, 10f, 9f })
+            {
+                var probe = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+                float half = probe.Height / 2f;
+                float chord = 2f * MathF.Sqrt(MathF.Max(1f, hole * hole - half * half));
+                if (Advance(g, big, probe) <= chord || px <= 9f) { centreF.Dispose(); centreF = probe; break; }
+                probe.Dispose();
+            }
+            using var _centreF = centreF;
+            using var underF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+            using var mid = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap };
+            using (var cb = new SolidBrush(Mul(rf < 0 ? Dim : rc, a * show)))
+                g.DrawString(big, centreF, cb, new RectangleF(RingCx - 30, RingCy - 11, 60, 22), mid);
+            using (var ub = new SolidBrush(Mul(Dim, a * show * 0.95f)))
+
+                g.DrawString(cap2, underF, ub,
+                    new RectangleF(RingCx - 74, RingCy + RingOuter + RingBand / 2f + 7f, 148, 16), mid);
+        }
+
+        bool KeyHover(int i) => WidgetInput.Over
+            && WidgetInput.Mouse.X >= KeyX - 20 && WidgetInput.Mouse.X < ColR - 8
+            && WidgetInput.Mouse.Y >= Row0 + i * RowPitch - 16 && WidgetInput.Mouse.Y < Row0 + i * RowPitch + 20;
+
+        void Key(int i, Color swatch, string cap, string value, string sub, Color? figure = null,
+                 string? hot = null)
+        {
+            float b1 = Row0 + i * RowPitch, b2 = b1 + 17;
+            using (var sb = new SolidBrush(Mul(swatch, a)))
+                g.FillEllipse(sb, KeyX - 20, b1 - 9, 9, 9);
+            using (var cb = new SolidBrush(Mul(Dim, a * 0.85f)))
+                Text(g, cap, keyCap, cb, KeyX, b1);
+            using (var vb = new SolidBrush(Mul(figure ?? White, a)))
+                Text(g, value, keyVal, vb, KeyValX, b1);
+            if (sub.Length == 0) return;
+            int cut = hot is { Length: > 0 } ? sub.IndexOf(hot, StringComparison.Ordinal) : -1;
+            if (cut < 0)
+            {
+                using var ub = new SolidBrush(Mul(Dim, a * 0.8f));
+                TextClipped(g, sub, keySub, ub, KeyX, b2, ColR - KeyX - 12);
+                return;
+            }
+            using (var ub = new SolidBrush(Mul(Dim, a * 0.8f)))
+            using (var hb = new SolidBrush(Mul(figure ?? White, a * 0.95f)))
+            {
+                string pre = sub.Substring(0, cut), post = sub.Substring(cut + hot!.Length);
+                float x = KeyX;
+                Text(g, pre, keySub, ub, x, b2);
+                x += Advance(g, pre, keySub);
+                Text(g, hot!, keySub, hb, x, b2);
+                x += Advance(g, hot!, keySub);
+                Text(g, post, keySub, ub, x, b2);
+            }
+        }
+
+        int slot = 0;
 
         if (Limits.FiveHour >= 0)
         {
-            bool hov5 = WidgetInput.Over && WidgetInput.Mouse.Y >= y + 40 && WidgetInput.Mouse.Y < y + 76
-                && WidgetInput.Mouse.X >= pad && WidgetInput.Mouse.X <= pad + barW;
-            string credits = Limits.CreditsUsed <= 0 ? ""
-                : hov5
-                    ? (Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
-                       : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} left of ${Limits.CreditsLimit:0}"
-                       : $"  ·  ${Limits.CreditsUsed:0.00} used")
-                    : $"  ·  ${Limits.CreditsUsed:0.00} credits";
-            DrawBar(g, pad, y + 40, barW, "5-hour limit",
-                LimitValue(Limits.FiveHour, Limits.FiveHourReset, y + 40) + credits,
-                Limits.FiveHour, UsageColor(Limits.FiveHour), a, body, small);
+            int s = slot++;
+            string sub = KeyHover(s) ? $"resets {Limits.FiveHourReset.ToLocalTime():ddd HH:mm}"
+                                     : $"{ResetIn(Limits.FiveHourReset)} left";
+
+            if (Limits.CreditsUsed > 0 && KeyHover(s))
+                sub += Limits.CreditsBalance >= 0 ? $"  ·  ${Limits.CreditsBalance:0.00} left"
+                     : Limits.CreditsLimit > 0 ? $"  ·  ${Math.Max(0, Limits.CreditsLimit - Limits.CreditsUsed):0.00} of ${Limits.CreditsLimit:0}"
+                     : $"  ·  ${Limits.CreditsUsed:0.00} used";
+            Key(s, UsageColor(Limits.FiveHour), "5-hour",
+                KeyHover(s) ? $"{Limits.FiveHour * 100:0.#}%" : Pct(Limits.FiveHour), sub,
+                UsageColor(Limits.FiveHour));
         }
+
+        else Key(slot++, Dim, "5-hour", "\u2014", "");
+
         if (Limits.Week >= 0)
-            DrawBar(g, pad, y + 80, barW, "Weekly limit",
-                LimitValue(Limits.Week, Limits.WeekReset, y + 80), Limits.Week, UsageColor(Limits.Week), a, body, small);
+        {
+            int s = slot++;
+            Key(s, UsageColor(Limits.Week), "weekly",
+                KeyHover(s) ? $"{Limits.Week * 100:0.#}%" : Pct(Limits.Week),
+                KeyHover(s) ? $"resets {Limits.WeekReset.ToLocalTime():ddd HH:mm}"
+                            : $"{ResetIn(Limits.WeekReset)} left",
+                UsageColor(Limits.Week));
+        }
+
+        if (st?.Session is { } sess)
+        {
+            long maxK = sess.ContextMax / 1000, usedK = Math.Min(sess.ContextUsed / 1000, maxK);
+            string maxLabel = maxK >= 1000 ? $"{maxK / 1000f:0.#}M" : $"{maxK}K";
+            Key(slot, ctxCol, "context", $"{usedK}K", $"of {maxLabel}  ·  {ctxFrac * 100:0}% used", ctxCol,
+                $"{ctxFrac * 100:0}%");
+        }
+        else Key(slot, Dim, "context", "\u2014", "no active session");
+
+        DrawNet(g, ColR, 74, RightEdge - ColR, 38, a);
+        ExitBlock.Draw(g, a, keySub, keyCap, ColR, RightEdge,
+            NetMon.Snapshot().api, NetMon.Empty, NetMon.Lost);
 
         var rr = RefreshRect(w, h);
         bool rHover = WidgetInput.Over && rr.Contains(WidgetInput.Mouse);
-        string age = Limits.LastSuccess == DateTime.MinValue ? "usage never fetched"
-            : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}";
-        string rtxt = $"{age}  ·  ⟳ refresh";
-        using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a)))
+        using (var rb = new SolidBrush(Mul(rHover ? White : Dim, a * (rHover ? 1f : 0.65f))))
         using (var rsf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center, FormatFlags = StringFormatFlags.NoWrap })
-            g.DrawString(rtxt, small, rb, rr, rsf);
+        { Alignment = StringAlignment.Far, FormatFlags = StringFormatFlags.NoWrap })
+        {
+            string label = rHover
+                ? (Limits.LastSuccess == DateTime.MinValue ? "never fetched  ·  \u27f3 refresh"
+                   : $"updated {AgeText(DateTime.UtcNow - Limits.LastSuccess)}  ·  \u27f3 refresh")
+                : "\u27f3 refresh";
+            g.DrawString(label, keySub, rb, rr, rsf);
+        }
 
-        DrawCancel(g, w, h, a, body);
+        DrawNetHover(g, a);
     }
 
-    private void DrawCancel(Graphics g, int w, int h, float a, Font font)
+    internal static RectangleF ExitRect() => ExitBlock.Rect(ColR, RightEdge);
+
+    private void DrawCancel(Graphics g, int w, int h, float a, Color state)
     {
         var r = CancelRect(w, h);
-        bool on = CanCancel;
-        var col = on ? Red : Color.FromArgb(120, 255, 255, 255);
-        float ba = on ? a : a * 0.4f;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var b = new SolidBrush(Mul(Color.FromArgb(46, col), a)))
+        if (!CanCancel)
+        {
+            const float d = 15f;
+            using var glow = new SolidBrush(Mul(Color.FromArgb(38, state), a));
+            g.FillEllipse(glow, r.X + (r.Width - d * 1.9f) / 2, r.Y + (r.Height - d * 1.9f) / 2, d * 1.9f, d * 1.9f);
+            using var lamp = new SolidBrush(Mul(state, a));
+            g.FillEllipse(lamp, r.X + (r.Width - d) / 2, r.Y + (r.Height - d) / 2, d, d);
+            return;
+        }
+        using (var b = new SolidBrush(Mul(Color.FromArgb(46, Red), a)))
             g.FillEllipse(b, r.X, r.Y, r.Width, r.Height);
-        using (var pen = new Pen(Mul(col, ba), 1.4f))
+        using (var pen = new Pen(Mul(Red, a), 1.4f))
             g.DrawEllipse(pen, r.X, r.Y, r.Width, r.Height);
         float sq = r.Width * 0.34f;
-        using (var sb = new SolidBrush(Mul(on ? Red : Dim, a)))
+        using (var sb = new SolidBrush(Mul(Red, a)))
         using (var sp = Rounded(new RectangleF(r.X + (r.Width - sq) / 2, r.Y + (r.Height - sq) / 2, sq, sq), 2f))
             g.FillPath(sb, sp);
-
-        DrawNet(g, r.X - 26, a);
     }
 
-    private static void DrawNet(Graphics g, float rightX, float a)
+    private (int[] net, int[] api, float x0, float step, int first, int count,
+             float top, float bottom, float right)? _hover;
+
+    private void DrawNet(Graphics g, float colX, float topY, float colW, float colH, float a)
     {
         var (net, api) = NetMon.Snapshot();
-        const float stepX = 5f, gh = 22f;
         int n = net.Length;
-        float gw = (n - 1) * stepX, x0 = rightX - gw, top = 19, barsY = top + 14;
 
-        int cap = 150;
-        foreach (var v in net) if (v > cap) cap = v;
-        foreach (var v in api) if (v > cap) cap = v;
-        cap = (cap + 49) / 50 * 50;
+        bool hasData = false;
+        foreach (var v in net) if (v != NetMon.Empty) { hasData = true; break; }
+        if (!hasData) foreach (var v in api) if (v != NetMon.Empty) { hasData = true; break; }
+
+        float mid = topY + colH / 2f, half = colH / 2f - 1f;
+        float span = colW - 4f;
 
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        float ax = x0 - 5;
-        using (var axis = new Pen(Mul(Dim, a * 0.6f), 1f))
+
+        _hover = null;
+        if (!hasData)
         {
-            g.DrawLine(axis, ax, barsY - 3, ax, barsY + gh);
-            g.DrawLine(axis, ax, barsY + gh, x0 + gw, barsY + gh);
-        }
-        using (var tf = new Font("Segoe UI", 9f, GraphicsUnit.Pixel))
-        using (var tb = new SolidBrush(Mul(Dim, a * 0.8f)))
-        {
-            var sz = g.MeasureString(cap.ToString(), tf);
-            g.DrawString(cap.ToString(), tf, tb, ax - sz.Width - 1, barsY - 5);
-            sz = g.MeasureString("0", tf);
-            g.DrawString("0", tf, tb, ax - sz.Width - 1, barsY + gh - 9);
+            using var wf = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+            using var wb = new SolidBrush(Mul(Dim, a * 0.7f));
+            using var wsf = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString("sampling…", wf, wb, new RectangleF(colX, topY, colW, colH), wsf);
+            return;
         }
 
-        float Y(int ms) => barsY + gh * (1 - Math.Clamp((float)ms / cap, 0.04f, 1f));
-
-        void Series(int[] s, Color col)
+        var seen = new List<int>();
+        foreach (var v in net) if (v >= 0) seen.Add(v);
+        foreach (var v in api) if (v >= 0) seen.Add(v);
+        int cap = 150;
+        if (seen.Count > 0)
         {
-            var pts = new List<(PointF p, bool lost)>();
-            for (int i = 0; i < s.Length; i++)
+            seen.Sort();
+            cap = Math.Max(cap, seen[seen.Count / 2] * 3);
+        }
+        cap = (cap + 49) / 50 * 50;
+
+        int first = n;
+        for (int i = 0; i < n; i++)
+            if (net[i] != NetMon.Empty || api[i] != NetMon.Empty) { first = i; break; }
+        int count = n - first;
+
+        float slot = count > 0 ? span / count : span;
+        float X(int i) => colX + 2f + i * slot + slot / 2f;
+
+        float Mag(int v) => v == NetMon.Lost ? half
+            : v == NetMon.Empty ? 1.2f
+            : Math.Max(1.6f, half * 0.94f * Math.Clamp(v / (float)cap, 0.02f, 1f));
+
+        float Age(int i) => count < 2 ? 1f : 0.45f + 0.55f * (i / (float)(count - 1));
+
+        void Rule(float alpha)
+        {
+            using var rule = new Pen(Mul(Dim, a * alpha), 1f);
+            g.DrawLine(rule, colX, mid, colX + colW, mid);
+        }
+
+        void Waveform()
+        {
+            Rule(0.22f);
+
+            float barW = Math.Clamp(slot - 2.2f, 2f, 5.5f);
+            for (int i = 0; i < count; i++)
             {
-                if (s[i] == NetMon.Empty) continue;
-                bool lost = s[i] == NetMon.Lost;
-                pts.Add((new PointF(x0 + i * stepX, lost ? barsY : Y(s[i])), lost));
+                void Cap(int v, Color col, bool up)
+                {
+                    if (v == NetMon.Empty) return;
+                    bool lost = v == NetMon.Lost;
+                    float m = Mag(v);
+                    var r = up ? new RectangleF(X(i) - barW / 2f, mid - 1.5f - m, barW, m)
+                               : new RectangleF(X(i) - barW / 2f, mid + 1.5f, barW, m);
+                    using var b = new SolidBrush(Mul(lost ? Red : col, a * Age(i) * (lost ? 1f : 0.92f)));
+                    using var p = Rounded(r, barW / 2f);
+                    g.FillPath(b, p);
+                }
+                Cap(net[first + i], Green, true);
+                Cap(api[first + i], Blue, false);
             }
-            using var ok = new Pen(Mul(col, a), 1.6f) { LineJoin = LineJoin.Round };
-            using var bad = new Pen(Mul(Red, a), 1.6f) { LineJoin = LineJoin.Round };
-            for (int i = 1; i < pts.Count; i++)
-                g.DrawLine(pts[i - 1].lost || pts[i].lost ? bad : ok, pts[i - 1].p, pts[i].p);
-            if (pts.Count > 0)
-                using (var db = new SolidBrush(Mul(pts[^1].lost ? Red : col, a)))
-                    g.FillEllipse(db, pts[^1].p.X - 2f, pts[^1].p.Y - 2f, 4.5f, 4.5f);
         }
-        Series(net, Green);
-        Series(api, Blue);
+
+        Waveform();
 
         int lastN = LastSample(net), lastA = LastSample(api);
         string tn = Fx.NetLabel + " " + (lastN == NetMon.Empty ? "…" : lastN == NetMon.Lost ? ":(" : lastN.ToString());
         string ta = Fx.ApiLabel + " " + (lastA == NetMon.Empty ? "…" : lastA == NetMon.Lost ? ":(" : lastA + " ms");
-        using (var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel))
+        using (var f = new Font("Segoe UI", 13f, GraphicsUnit.Pixel))
         {
-            float wN = g.MeasureString(tn, f).Width, wS = g.MeasureString(" · ", f).Width, wA = g.MeasureString(ta, f).Width;
-            float lx = rightX - (wN + wS + wA);
-            using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a))) g.DrawString(tn, f, b, lx, top - 2);
-            using (var b = new SolidBrush(Mul(Dim, a))) g.DrawString(" · ", f, b, lx + wN, top - 2);
-            using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a))) g.DrawString(ta, f, b, lx + wN + wS, top - 2);
+            float bl = topY - 8;
+            using (var b = new SolidBrush(Mul(lastN == NetMon.Lost ? Red : Green, a)))
+                Text(g, tn, f, b, colX, bl);
+            float wN = g.MeasureString(tn, f, PointF.Empty, StringFormat.GenericTypographic).Width;
+            using (var b = new SolidBrush(Mul(Dim, a * 0.7f)))
+                Text(g, "·", f, b, colX + wN + 6, bl);
+            using (var b = new SolidBrush(Mul(lastA == NetMon.Lost ? Red : Blue, a)))
+                Text(g, ta, f, b, colX + wN + 18, bl);
         }
 
-        DrawNetHover(g, a, net, api, x0, stepX, barsY, gh, rightX, Y);
+        _hover = (net, api, colX + 2f, slot, first, count, topY, topY + colH, colX + colW);
     }
 
-    private static int LastSample(int[] s)
+    private void DrawNetHover(Graphics g, float a)
     {
-        for (int i = s.Length - 1; i >= 0; i--) if (s[i] != NetMon.Empty) return s[i];
-        return NetMon.Empty;
-    }
-
-    private static void DrawNetHover(Graphics g, float a, int[] net, int[] api,
-        float x0, float stepX, float top, float gh, float right, Func<int, float> Y)
-    {
+        if (_hover is not { } hv) return;
+        var (net, api, x0, step, first, count, top, bottom, right) = hv;
         var m = WidgetInput.Mouse;
-        if (!WidgetInput.Over || m.X < x0 - 9 || m.X > right + 6 || m.Y < top - 10 || m.Y > top + gh + 10)
-            return;
-        int idx = Math.Clamp((int)MathF.Round((m.X - x0) / stepX), 0, net.Length - 1);
+        if (!WidgetInput.Over || m.X < x0 || m.X > right || m.Y < top - 10 || m.Y > bottom + 10) return;
+        if (count <= 0) return;
+
+        int rel = step > 0 ? (int)((m.X - x0) / step) : 0;
+        int idx = first + Math.Clamp(rel, 0, count - 1);
         int vN = net[idx], vA = api[idx];
         if (vN == NetMon.Empty && vA == NetMon.Empty) return;
 
-        float gx = x0 + idx * stepX;
-        using (var guide = new Pen(Mul(White, a * 0.35f), 1f) { DashStyle = DashStyle.Dot })
-            g.DrawLine(guide, gx, top - 3, gx, top + gh);
-        void Mark(int v, Color col)
-        {
-            if (v == NetMon.Empty) return;
-            using var hb = new SolidBrush(Mul(v == NetMon.Lost ? Red : col, a));
-            g.FillEllipse(hb, gx - 2.5f, (v == NetMon.Lost ? top : Y(v)) - 2.5f, 5.5f, 5.5f);
-        }
-        Mark(vN, Green); Mark(vA, Blue);
+        float gx = x0 + (idx - first) * step;
+        using (var guide = new Pen(Mul(White, a * 0.30f), 1f) { DashStyle = DashStyle.Dot })
+            g.DrawLine(guide, gx, top, gx, bottom);
 
         int lostN = 0, cntN = 0, lostA = 0, cntA = 0;
         for (int i = 0; i < net.Length; i++)
@@ -407,29 +630,33 @@ internal sealed class ClaudeCodeWidget : IWidget
         if (vA == NetMon.Lost && vN >= 0) lines.Add(("Anthropic's side :(", Amber));
         else if (vN == NetMon.Lost) lines.Add(("your internet :(", Red));
 
-        using var f2 = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
+        using var f2 = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
         float bw2 = 0;
         foreach (var l in lines) bw2 = Math.Max(bw2, g.MeasureString(l.t, f2).Width);
         bw2 += 16;
-        float bh2 = lines.Count * 14 + 10;
-        float bx = Math.Min(gx + 8, right - bw2), by = top + gh + 8;
+        float bh2 = lines.Count * 15 + 10;
+        float bx = Math.Clamp(gx - bw2 / 2f, Pad, right - bw2);
+        float by = bottom + 8;
+        if (by + bh2 > 214) by = top - bh2 - 8;
         using (var path = Rounded(new RectangleF(bx, by, bw2, bh2), 7))
         {
-            using (var bg = new SolidBrush(Mul(Color.FromArgb(232, 20, 20, 22), a))) g.FillPath(bg, path);
+            using (var bg = new SolidBrush(Mul(Color.FromArgb(255, 16, 16, 18), a))) g.FillPath(bg, path);
             using (var pen = new Pen(Mul(Track, a), 1f)) g.DrawPath(pen, path);
         }
         for (int i = 0; i < lines.Count; i++)
             using (var b = new SolidBrush(Mul(lines[i].c, a)))
-                g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 14);
+                g.DrawString(lines[i].t, f2, b, bx + 8, by + 5 + i * 15);
     }
 
-    private static RectangleF CancelRect(int w, int h)
+    private static int LastSample(int[] s)
     {
-        const float d = 34, margin = 22;
-        return new RectangleF(w - margin - d, 20, d, d);
+        for (int i = s.Length - 1; i >= 0; i--) if (s[i] != NetMon.Empty) return s[i];
+        return NetMon.Empty;
     }
 
-    private static RectangleF RefreshRect(int w, int h) => new(w - 26 - 220, h - 26, 220, 20);
+    private static RectangleF CancelRect(int w, int h) => new(42, 16, 34, 34);
+
+    private static RectangleF RefreshRect(int w, int h) => new(RightEdge - 210, 22, 210, 20);
 
     private static string AgeText(TimeSpan d) =>
         d.TotalMinutes < 1 ? "just now"
@@ -438,11 +665,17 @@ internal sealed class ClaudeCodeWidget : IWidget
         : $"{(int)d.TotalDays}d ago";
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
-        => new[]
+    {
+        var list = new List<(RectangleF, Action<PointF>)>
         {
-            (CancelRect(w, h), (Action<PointF>)(_ => { if (CanCancel) _cancel(); })),
-            (RefreshRect(w, h), (Action<PointF>)(_ => Limits.ForceRefresh())),
+            (CancelRect(w, h), _ => { if (CanCancel) _cancel(); }),
+            (RefreshRect(w, h), _ => Limits.ForceRefresh()),
         };
+
+        if (ExitBlock.DnsRowRect != RectangleF.Empty)
+            list.Add((ExitBlock.DnsRowRect, _ => DnsLeak.Retest()));
+        return list;
+    }
 
     private static void DrawBar(Graphics g, float x, float y, float w, string label, string value,
         double frac, Color fill, float a, Font labelFont, Font valueFont)
@@ -491,17 +724,43 @@ internal sealed class ClaudeCodeWidget : IWidget
         return Math.Clamp((double)s.ContextUsed / s.ContextMax, 0, 1);
     }
 
+    private MoodContext Mood(CcStatus? st) => new(
+        Running(st), (float)ContextFrac(st), UsageFrac(),
+        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour);
+
+    private string? _runsTurn;
+    private string? _runsTool;
+    private int _runs;
+
+    private int ToolRuns(CcStatus? st)
+    {
+        var stamp = st?.StartedAt;
+        if (stamp != _runsTurn) { _runsTurn = stamp; _runsTool = null; _runs = 0; }
+        var tool = st?.CurrentTool;
+        if (!string.IsNullOrEmpty(tool) && tool != _runsTool) { _runsTool = tool; _runs++; }
+        return _runs;
+    }
+
     private static float UsageFrac()
         => Limits.FiveHour >= 0 ? Limits.FiveHour : Limits.Week >= 0 ? Limits.Week : 0f;
 
-    private static Color RingColor(CcStatus? st)
+    private static bool RingIsTheMessage(CcStatus? st)
+        => NetMon.ApiDown || NetMon.NetDown || LimitHit || Compacting(st);
+
+    private static Color RingBase(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White
 
          : st?.State == "waiting_input" ? Amber
          : Compacting(st) ? Blue
-         : st?.State == "working" ? (string.IsNullOrEmpty(st.CurrentTool) ? Amber : Green)
+         : Shown(st) == "working" ? (string.IsNullOrEmpty(st?.CurrentTool) ? Amber : Green)
          : White;
+
+    private Color RingColor(CcStatus? st)
+    {
+        var b = RingBase(st);
+        return RingIsTheMessage(st) ? b : Fx.MoodRing(b, Mood(st));
+    }
 
     private static string Pct(float f) => $"{(int)Math.Round(f * 100)}%";
 
@@ -509,10 +768,9 @@ internal sealed class ClaudeCodeWidget : IWidget
         (int)(a.A + (b.A - a.A) * t), (int)(a.R + (b.R - a.R) * t),
         (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    private static Color UsageColor(float f) =>
-        f <= 0.5f ? Blue
-        : f <= 0.75f ? LerpC(Blue, Amber, (f - 0.5f) / 0.25f)
-        : LerpC(Amber, Red, Math.Clamp((f - 0.75f) / 0.25f, 0f, 1f));
+    internal static Color UsageColorForTest(float f) => UsageColor(f);
+
+    private static Color UsageColor(float f) => Fx.UsageColor(f);
 
     private static string ResetIn(DateTimeOffset r)
     {
@@ -524,20 +782,6 @@ internal sealed class ClaudeCodeWidget : IWidget
         return $"{d.Minutes}m";
     }
 
-    private static string Activity(CcStatus? st)
-    {
-        string verb = OutageText() ?? (LimitHit ? "outta juice :(" : st?.State switch
-        {
-            "working" => ToolVerb(st.CurrentTool),
-            "compacting" when Compacting(st) => "compacting…",
-            "waiting_input" => "your move ;)",
-            _ => IdleMood(st),
-        });
-        if (!LimitHit && st?.State != "working" && !Compacting(st)) return verb;
-        var el = LimitHit ? LimitReset() : Elapsed(st);
-        return el.Length > 0 ? $"{verb}  ·  {el}" : verb;
-    }
-
     private static bool LimitHit =>
         (Limits.FiveHour >= 0.99f || Limits.Week >= 0.99f) && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0;
 
@@ -547,39 +791,44 @@ internal sealed class ClaudeCodeWidget : IWidget
         return r.Length > 0 ? "back in " + r : "";
     }
 
-    private static string IdleMood(CcStatus? st) =>
-        NetMon.NetDown ? "offline :("
-        : NetMon.ApiDown ? "api down :("
-        : JustCompacted(st) ? "compacted :)"
-        : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? "outta juice XD"
-        : "let's work :)";
+    private static string? Trouble(CcStatus? st) =>
+        NetMon.NetDown ? Moods.Line("offline")
+        : NetMon.ApiDown ? Moods.Line("apiDown")
+        : JustCompacted(st) ? Moods.Line("compacted")
+        : Limits.FiveHour >= 0.95f && !Limits.ExtraUsageOn && Limits.CreditsUsed >= 0 ? Moods.Line("outOfCredit")
+        : null;
+
+    private static string IdleMood(CcStatus? st, in MoodContext ctx) => Trouble(st) ?? Moods.Line("idle", ctx);
 
     private static bool JustCompacted(CcStatus? st) =>
         DateTimeOffset.TryParse(st?.CompactedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)
         && DateTimeOffset.UtcNow - t < TimeSpan.FromSeconds(20);
 
     private static string? OutageText() =>
-        NetMon.NetDown ? "net error :(" : NetMon.ApiDown ? "api error :(" : null;
+        NetMon.NetDown ? Moods.Line("netError") : NetMon.ApiDown ? Moods.Line("apiError") : null;
 
-    private static string ToolVerb(string? tool) => tool switch
+    private static string ToolVerb(string? tool, in MoodContext ctx) => tool switch
     {
-        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => "writing…",
-        "Read" => "reading…",
-        "Bash" or "PowerShell" => "running…",
-        "Grep" or "Glob" => "digging…",
-        "WebFetch" => "fetching…",
-        "WebSearch" => "googling :P",
-        "Task" or "Agent" => "delegating…",
-        "TodoWrite" => "planning…",
-        "SlashCommand" or "Skill" => "using a skill…",
-        "AskUserQuestion" => "asking you :)",
-        null or "" => "hmm…",
+        "Edit" or "Write" or "MultiEdit" or "NotebookEdit" => Moods.Line("writing", ctx),
+        "Read" => Moods.Line("reading", ctx),
+        "Bash" or "PowerShell" => Moods.Line("running", ctx),
+        "Grep" or "Glob" => Moods.Line("digging", ctx),
+        "WebFetch" => Moods.Line("fetching", ctx),
+        "WebSearch" => Moods.Line("searching", ctx),
+        "Task" or "Agent" => Moods.Line("delegating", ctx),
+        "TodoWrite" => Moods.Line("planning", ctx),
+        "SlashCommand" or "Skill" => Moods.Line("skill", ctx),
+        "AskUserQuestion" => Moods.Line("asking", ctx),
+        null or "" => Moods.Line("unknown", ctx),
         _ => tool!.ToLowerInvariant() + "…",
     };
 
+    private static TimeSpan? Running(CcStatus? st) =>
+        ParseTime(st?.StartedAt) is { } t ? DateTimeOffset.UtcNow - t : null;
+
     private static string Elapsed(CcStatus? st)
     {
-        if ((st?.State != "working" && !Compacting(st)) || string.IsNullOrEmpty(st?.StartedAt)) return "";
+        if ((Shown(st) != "working" && !Compacting(st)) || string.IsNullOrEmpty(st?.StartedAt)) return "";
         if (!DateTimeOffset.TryParse(st.StartedAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)) return "";
         var d = DateTimeOffset.UtcNow - t;
         if (d.TotalSeconds < 1) return "";

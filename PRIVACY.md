@@ -80,14 +80,36 @@ Halo makes no request that is not on this list.
 | `api.anthropic.com` — `/api/oauth/usage` and `/v1/messages` | your Claude Code usage limits and whether the API is reachable | **your own** Claude credentials, read from `~/.claude/.credentials.json` — the same token Claude Code itself uses, sent only to Anthropic |
 | `chatgpt.com/backend-api/codex/responses` | whether Codex is reachable | a reachability probe |
 | `ipwho.is` | to show which country your connection is leaving from | **your public IP address**, unavoidably. This is a third party |
+| `api.ipapi.is` | only while you hover the exit block, to say whether that address looks like a datacenter, a known vpn, or a flagged one | **your public IP address**. This is a third party. Sent once per address and then cached, so hovering repeatedly costs no further requests |
+| `bash.ws` — `/id`, six lookups of `<n>.<id>.bash.ws`, and `/dnsleak/test/<id>` | only while you hover the exit block, to test whether your DNS lookups leave by the same exit as your traffic | **which resolvers answer for you**, and your public IP. This is a third party, and it is a wider disclosure than the two above: the whole mechanism is that their nameserver watches which resolver comes asking. Once per address, then cached |
 | `flagcdn.com` | the flag image for that country | the two-letter country code |
+| `geocoding-api.open-meteo.com` and `api.open-meteo.com` | the weather on the hourly banner, refreshed every half hour | **the city from your machine's own timezone** — "Asia/Tehran" becomes "Tehran" — and then that city's coordinates. Your IP address goes along with any request, as ever; your actual location does not, because Halo never asks for it |
 | `displaycatalog.mp.microsoft.com` | the name and art of a Microsoft Store install in progress | the Store product id |
 | `127.0.0.1` | VLC playback controls | nothing — it never leaves your machine |
 
-**The `ipwho.is` request is the only one that tells a third party anything about you.** It discloses
-your public IP the same way opening any web page does, it runs only while a coding-session panel is
-open, and at most once every five minutes. If that trade isn't worth a small flag to you, say so in
-an issue — it is a good candidate for a switch.
+**`ipwho.is`, `api.ipapi.is` and `bash.ws` are the only requests that tell a third party anything about
+you.** All three disclose your public IP the same way opening any web page does. `ipwho.is` runs only
+while a coding-session panel is open, and at most once every five minutes. The other two run only when
+you actually **hover the exit block**, once per address, cached until the address changes — they answer a
+question you asked by pointing at it, so each costs exactly one lookup.
+
+`api.ipapi.is` is asked over HTTPS deliberately: other providers serve the same flags over plaintext
+HTTP, and asking "is my exit private" over a channel the local network can read and rewrite is the wrong
+trade.
+
+**`bash.ws` deserves its own paragraph**, because a DNS leak test cannot be done quietly. There is no way
+to see which resolver actually answers for you from inside your own machine — the only way is to look up
+names under a domain whose nameserver is watching, and read back which resolvers came asking. So the test
+necessarily tells `bash.ws` who resolves your names. That is the entire point of it, and it is why it
+never runs on its own: no hover, no test.
+
+**Open-Meteo** needs no key and is asked for a *city*, never for you. The city comes from the timezone
+Windows is already set to, which is the coarsest location fact on the machine — a whole country wide, and
+one you chose yourself. Halo does not use the Windows location API, and does not use the exit-IP lookup
+above for this either.
+
+If any of these trades isn't worth it to you, say so in an issue — all of them are good candidates for a
+switch.
 
 ---
 

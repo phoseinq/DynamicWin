@@ -117,7 +117,8 @@ internal sealed class NotchController
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
     private const int ExpandedW = 560, ExpandedH = 220, ExpandedR = 30;
     private const int TintDeskCollapsed = 255, TintDeskExpanded = 245;
-    private const int TintAppCollapsed = 120, TintAppExpanded = 60;
+
+    internal const int TintAppCollapsed = 120, TintAppExpanded = 48;
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f;
 
     private const float HoldSeconds = 0.75f;
@@ -243,6 +244,7 @@ internal sealed class NotchController
     {
         _notch = notch;
         _notch.ClipboardImage += OnClipboardImage;
+        _notch.WantsHandCursor = OverPressable;
         _claudeStore = new StatusStore();
         _codexStore = new CodexStatusStore();
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
@@ -454,7 +456,38 @@ internal sealed class NotchController
         CheckLimit("Codex", CodexLimits.FiveHour, CodexLimits.FiveHourReset, "primary");
         CheckLimit("Codex", CodexLimits.Week, CodexLimits.WeekReset, "weekly");
         CheckInternet();
+        CheckContext();
         CheckHourly();
+        Almanac.Poke();
+    }
+
+    private readonly HashSet<string> _ctxWarned = new(StringComparer.Ordinal);
+    private readonly List<string> _ctxLive = new();
+
+    private void CheckContext()
+    {
+        _ctxLive.Clear();
+        foreach (var widget in _widgets)
+        {
+            if (widget is not Widgets.ClaudeCodeWidget cc) continue;
+            var (id, frac) = cc.ContextState();
+            if (id is null) continue;
+            _ctxLive.Add(id);
+            if (frac < Widgets.ClaudeCodeWidget.ContextWarnAt)
+            {
+                _ctxWarned.Remove(id);
+                continue;
+            }
+            if (!_ctxWarned.Add(id)) continue;
+            _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+            {
+                App = "Claude", Title = $"Context {(int)(frac * 100)}% full",
+                Body = "Answers get vaguer from here — /compact when you can.",
+                Kind = "ctx-" + id, Duration = 8, Icon = LimitBadge(),
+            });
+        }
+
+        if (_ctxWarned.Count > _ctxLive.Count) _ctxWarned.IntersectWith(_ctxLive);
     }
 
     private int _chimedHour = DateTime.Now.Hour;
@@ -466,7 +499,8 @@ internal sealed class NotchController
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
             App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-            Kind = "hourly", Duration = 4, Icon = ClockBadge(),
+            Body = Almanac.Detail(t),
+            Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
         });
     }
 
@@ -497,10 +531,12 @@ internal sealed class NotchController
                     break;
                 case "clock": case "hour": case "hourly":
                     var t = int.TryParse(arg, out var hr) && hr is >= 0 and <= 23 ? DateTime.Today.AddHours(hr) : DateTime.Now;
+                    Almanac.Poke();
                     _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
                     {
                         App = "Clock", Title = t.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture),
-                        Kind = "hourly", Duration = 5, Icon = ClockBadge(),
+                        Body = Almanac.Detail(t),
+                        Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
                     });
                     break;
             }
@@ -577,7 +613,7 @@ internal sealed class NotchController
         CheckAlerts();
         var notifStart = _notif;
         var fg = Win32.GetForegroundWindow();
-        DetectCompactCancel(fg);
+        DetectAgentCancel(fg);
         DetectLanguageChange(fg);
         bool fullscreen = !_pinned && _notch.IsFullscreen(fg);
         var active = fullscreen ? [] : ActiveIndices();
@@ -961,7 +997,8 @@ internal sealed class NotchController
                 _notif.Copied = true;
                 _notifDeadline = Max(_notifDeadline, DateTime.UtcNow.AddSeconds(2));
             }
-            else if (!_notifDetailOn && _notif.Body.Length > 0 && p.Y >= _ct + Sc(_curH - 22))
+
+            else if (!_notifDetailOn && NotifBanner.BodyOverflows(_notif) && p.Y >= _ct + Sc(_curH - 22))
             {
                 _notifDetailOn = true;
                 _notifDeadline = DateTime.MaxValue;
@@ -1075,6 +1112,32 @@ internal sealed class NotchController
 
     private static bool InRect(Win32.POINT p, int left, int top, int w, int h)
         => p.X >= left && p.X < left + w && p.Y >= top && p.Y < top + h;
+
+    private bool OverPressable(Point p)
+    {
+        try
+        {
+            if (_empty || _primary < 0 || _primary >= _widgets.Length) return false;
+            if (_progress > 0.9f)
+            {
+                if (Contains(PinRect(ExpandedW, ExpandedH), _el, _et, p)) return true;
+                foreach (var (r, _) in _widgets[_primary].Buttons(ExpandedW, ExpandedH))
+                    if (Contains(r, _el, _et, p)) return true;
+                return false;
+            }
+            if (_progress < 0.1f)
+                foreach (var (r, _) in _widgets[_primary].CollapsedButtons(CollapsedW, CollapsedH))
+                    if (Contains(r, _cl, _ct, p)) return true;
+            return false;
+        }
+        catch { return false; }
+    }
+
+    private bool Contains(RectangleF r, int left, int top, Point p)
+    {
+        float bx = left + r.X * S, by = top + r.Y * S;
+        return p.X >= bx && p.X < bx + r.Width * S && p.Y >= by && p.Y < by + r.Height * S;
+    }
 
     private bool TryCollapsedButton(Win32.POINT p)
     {
@@ -1332,11 +1395,18 @@ internal sealed class NotchController
         if (hv > 0.02f)
         {
             using var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
-            using var b = new SolidBrush(Color.FromArgb((int)(200 * hv * a), 235, 235, 235));
-            using var sf = new StringFormat { LineAlignment = StringAlignment.Center };
 
-            g.DrawString(_pinned ? "unpin" : "pin on top", f, b,
-                new RectangleF(r.Right + 6, r.Y, 120, r.Height), sf);
+            string label = _pinned ? "unpin" : "pin on top";
+
+            var sz = g.MeasureString(label, f);
+            var chip = new RectangleF(r.Right + 6, r.Y + (r.Height - 17) / 2f, sz.Width + 12, 17);
+            using (var bgb = new SolidBrush(Color.FromArgb((int)(215 * hv * a), 18, 18, 20)))
+            using (var chipPath = Fx.Rounded(chip, 6f))
+                g.FillPath(bgb, chipPath);
+            using var b = new SolidBrush(Color.FromArgb((int)(230 * hv * a), 235, 235, 235));
+            using var sf = new StringFormat(StringFormat.GenericTypographic)
+            { LineAlignment = StringAlignment.Center, Alignment = StringAlignment.Center };
+            g.DrawString(label, f, b, chip, sf);
         }
     }
 
@@ -1422,14 +1492,19 @@ internal sealed class NotchController
     private static float Toward(float v, float t, float step)
         => v < t ? Math.Min(t, v + step) : Math.Max(t, v - step);
 
-    private void DetectCompactCancel(IntPtr fg)
+    private void DetectAgentCancel(IntPtr fg)
     {
         if ((Win32.GetAsyncKeyState(Win32.VK_ESCAPE) & 0x8000) == 0) return;
-        bool claude = _claudeStore.Current?.State == "compacting";
-        bool codex = _codexStore.Current?.State == "compacting";
-        if (!claude && !codex || !ForegroundIsAgentHost(fg)) return;
-        if (claude) ClaudeCodeWidget.MarkCompactCancelled(_claudeStore.Current?.StartedAt);
-        if (codex) CodexWidget.MarkCompactCancelled(_codexStore.Current?.StartedAt);
+        if (!ForegroundIsAgentHost(fg)) return;
+        if (_claudeStore.Current?.State == "compacting")
+            ClaudeCodeWidget.MarkCompactCancelled(_claudeStore.Current?.StartedAt);
+        if (_codexStore.Current?.State == "compacting")
+            CodexWidget.MarkCompactCancelled(_codexStore.Current?.StartedAt);
+
+        if (_claudeStore.Current?.State == "working")
+            ClaudeCodeWidget.MarkTurnCancelled(_claudeStore.Current?.StartedAt);
+        if (_codexStore.Current?.State == "working")
+            CodexWidget.MarkTurnCancelled(_codexStore.Current?.StartedAt);
     }
 
     private static string ProcessNameOf(IntPtr hwnd)
@@ -1464,8 +1539,12 @@ internal sealed class NotchController
 
     private void CancelClaude(int slot)
     {
-        var pid = _claudeStore.SessionLive(slot)?.Pid ?? 0;
-        if (pid > 0) CcCancel.Request(pid);
+        var st = _claudeStore.SessionLive(slot);
+        var pid = st?.Pid ?? 0;
+        if (pid <= 0) return;
+        CcCancel.Request(pid);
+
+        ClaudeCodeWidget.MarkTurnCancelled(st?.StartedAt);
     }
 
     private void CancelCodex(CodexSurface surface)
@@ -1475,6 +1554,9 @@ internal sealed class NotchController
             CcCancel.Request(snapshot.ConsolePid);
         else if (snapshot is { Source: CodexSurface.Desktop, State: "working" })
             _codexDesktopRuntime.TryCancel();
+        else return;
+
+        CodexWidget.MarkTurnCancelled(snapshot.StartedAt);
     }
 
     private void OnClipboardImage(Bitmap shot, bool isScreenshot)
@@ -1599,8 +1681,19 @@ internal sealed class NotchController
     private static Bitmap ShotBadge()    => LocalBadge(0xE722, 200, 28f);
     private static Bitmap ClipBadge()    => LocalBadge(0xE8C8, 155, 28f);
 
+    private static Bitmap HourlyBadge()
+    {
+        if (Almanac.Latest is not { } wx) return ClockBadge();
+        var (glyph, hue) = Almanac.SkyBadge(wx.Code, wx.Day);
+        return LocalBadge(glyph, hue, 32f);
+    }
+
     internal static Bitmap[] AllLocalBadges() => new[]
-        { BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge() };
+    {
+        BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge(),
+        LocalBadge(0xE706, 30, 32f), LocalBadge(0xE708, 232, 32f),
+        LocalBadge(0xE753, 220, 32f), LocalBadge(0xEA38, 188, 32f),
+    };
 
     internal static Halo.Notifications.NotifItem[] SampleLocalNotices(Bitmap shot) => new[]
     {
@@ -1620,6 +1713,13 @@ internal sealed class NotchController
         {
             App = "Claude", Title = "Claude usage 85%", Body = "You've used 85% of your weekly limit.",
             Icon = LimitBadge(),
+        },
+
+        new Halo.Notifications.NotifItem
+        {
+            App = "Clock", Title = "1:00 AM",
+            Body = Almanac.Detail(DateTime.Now, "Tehran", new Almanac.Weather(27, 0), metric: true, jalali: true),
+            Icon = LocalBadge(0xE708, 232, 32f),
         },
     };
 

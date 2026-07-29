@@ -68,14 +68,22 @@ public sealed class CodexWidgetTests
         }
     }
 
+    // What is being pinned is the MAPPING - this state and this tool mean that situation - not the
+    // exact words, which now come from a set per slot and vary by design. Asserting a literal here
+    // would break every time the wording is widened, and would be testing the copy rather than the
+    // routing that actually has logic in it.
     [Theory]
-    [InlineData("working", "exec", false, false, "running…")]
-    [InlineData("working", "shell_command", false, false, "running…")]
-    [InlineData("working", "apply_patch", false, false, "patching…")]
-    [InlineData("working", "web_search", false, false, "googling :P")]
-    [InlineData("waiting_input", null, false, false, "your move ;)")]
-    [InlineData("idle", null, false, false, "let's work :)")]
-    [InlineData("working", null, true, false, "api error :(")]
-    public void MoodAndVerbMatchClaudeSemantics(string state, string? tool, bool apiDown, bool netDown, string expected)
-        => Assert.Equal(expected, CodexWidget.DisplayText(state, tool, apiDown, netDown));
+    [InlineData("working", "exec", false, false, "running")]
+    [InlineData("working", "shell_command", false, false, "running")]
+    [InlineData("working", "apply_patch", false, false, "patching")]
+    [InlineData("working", "web_search", false, false, "searching")]
+    [InlineData("idle", null, false, false, "idle")]
+    [InlineData("working", null, true, false, "apiError")]
+    public void MoodAndVerbMatchClaudeSemantics(string state, string? tool, bool apiDown, bool netDown, string slot)
+        => Assert.Contains(CodexWidget.DisplayText(state, tool, apiDown, netDown), Halo.Agents.Moods.Set(slot));
+
+    // not a mood slot: the question is addressed to you, so it is one fixed sentence on purpose
+    [Fact]
+    public void WaitingForYouIsNotARotatingLine()
+        => Assert.Equal("your move ;)", CodexWidget.DisplayText("waiting_input", null, false, false));
 }

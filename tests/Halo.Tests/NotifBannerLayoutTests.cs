@@ -53,4 +53,27 @@ public class NotifBannerLayoutTests
     [Fact]
     public void No_code_means_no_copy_button_to_hit_test()
         => Assert.True(NotifBanner.CopyRect(new Halo.Notifications.NotifItem(), NotifBanner.W).IsEmpty);
+
+    // The grabber bar under a banner means "drag me, there is more". It used to appear for every message
+    // that had a body at all, so a short one offered a handle that expanded into the same text and an empty
+    // gap. The bar and the drag gesture both ask BodyOverflows now, so they cannot disagree.
+    private static Halo.Notifications.NotifItem Body(string s) => new() { Body = s };
+
+    [Fact]
+    public void A_body_that_fits_the_two_summary_lines_offers_no_grabber()
+        => Assert.False(NotifBanner.BodyOverflows(Body("on my way")));
+
+    [Fact]
+    public void A_body_too_long_for_two_lines_still_offers_one()
+        => Assert.True(NotifBanner.BodyOverflows(Body(string.Join(" ",
+            Enumerable.Repeat("the quick brown fox jumps over the lazy dog", 12)))));
+
+    [Fact]
+    public void An_empty_body_offers_no_grabber()
+        => Assert.False(NotifBanner.BodyOverflows(Body("")));
+
+    // trailing newlines are common in mirrored toasts and are not something to read
+    [Fact]
+    public void Trailing_whitespace_is_not_more_to_read()
+        => Assert.False(NotifBanner.BodyOverflows(Body("done   \r\n\r\n")));
 }

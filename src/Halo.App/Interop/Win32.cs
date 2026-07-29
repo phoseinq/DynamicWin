@@ -81,8 +81,13 @@ internal static class Win32
     public static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
 
     public static readonly IntPtr IDC_ARROW = new(32512);
+    public static readonly IntPtr IDC_HAND = new(32649);
+    public const uint WM_SETCURSOR = 0x0020;
     [DllImport("user32.dll")]
     public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCursor(IntPtr hCursor);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style,
