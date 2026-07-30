@@ -66,6 +66,11 @@ internal static class Program
         // thumbnail, and what each icon resolver answers for it. The pill falling back to a glyph is always
         // one of these three coming back empty, and guessing which is how a whole evening gets spent.
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
+        // dev hook: `Halo.App --probe-seek <±seconds>` — ask the live session to move by that much and report
+        // what it says and what actually happened. Whether a player HONOURS a seek cannot be reasoned about
+        // from outside, and two rounds of theorising about it is two rounds too many.
+        if (args.Length >= 2 && args[0] == "--probe-seek") { ProbeSeek(double.Parse(args[1],
+            System.Globalization.CultureInfo.InvariantCulture)); return; }
         // dev hook: `Halo.App --probe-downloads <out.txt>` — every download each source can see, plus the
         // raw rows out of Chromium's in-progress store. Written to a file because this is a WinExe.
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
@@ -503,6 +508,40 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
+    private static void ProbeSeek(double secs)
+    {
+        var sessions = new Halo.Widgets.MediaSessions();
+        for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
+        var s = sessions.Session(0);
+        if (s is null) { Console.WriteLine("no session"); return; }
+
+        // the widget's own view of the same session, so "did the player seek" and "did the BAR follow" are two
+        // separate readings rather than one guess
+        var widget = new Halo.Widgets.MediaWidget(sessions, 0);
+        // the widget refreshes from its draw path, like it does in the pill, so this has to draw too
+        using var scratch = new System.Drawing.Bitmap(220, 40,
+            System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var sg = System.Drawing.Graphics.FromImage(scratch);
+        void Pump() { try { widget.DrawCollapsed(sg, 220, 40, 1f); } catch { } }
+        for (int i = 0; i < 20 && widget.RingProgress < 0f; i++) { Pump(); System.Threading.Thread.Sleep(100); }
+
+        var before = s.GetTimelineProperties();
+        var target = before.Position + TimeSpan.FromSeconds(secs);
+        Console.WriteLine($"before   pos={before.Position}  (asking for {target})");
+        bool ok = false;
+        try { ok = s.TryChangePlaybackPositionAsync(target.Ticks).AsTask().GetAwaiter().GetResult(); }
+        catch (Exception ex) { Console.WriteLine("threw: " + ex.Message); }
+        Console.WriteLine($"returned {ok}");
+        for (int i = 1; i <= 6; i++)
+        {
+            System.Threading.Thread.Sleep(400);
+            Pump();
+            var now = s.GetTimelineProperties();
+            Console.WriteLine($"  +{i * 400,4}ms pos={now.Position}  updated={now.LastUpdatedTime:HH:mm:ss.fff}"
+                + $"  widget.RingProgress={widget.RingProgress:0.0000}");
+        }
+    }
+
     // dev-only: what each live media session actually offers the pill to draw. Three things decide whether
     // the art tile shows something real or falls back to a glyph — the track's own thumbnail, then the shell's
     // icon for the app id, then the icon inside the app's exe — and this prints all three per slot.
@@ -527,6 +566,22 @@ internal static class Program
                 Console.WriteLine($"          title='{props?.Title}'  thumbnail={(thumb ? "yes" : "NONE")}");
             }
             catch (Exception ex) { Console.WriteLine("          properties failed: " + ex.Message); }
+
+            // the numbers the seek bar is built on. Guessing at these cost a round trip: what a player reports
+            // as its seekable window is the whole reason a backward seek can be rejected while a forward one
+            // works, and it cannot be reasoned about from outside.
+            try
+            {
+                var tl = s.GetTimelineProperties();
+                var pb = s.GetPlaybackInfo();
+                Console.WriteLine($"          pos={tl.Position} start={tl.StartTime} end={tl.EndTime}");
+                Console.WriteLine($"          minSeek={tl.MinSeekTime} maxSeek={tl.MaxSeekTime}"
+                    + $"  lastUpdated={tl.LastUpdatedTime:HH:mm:ss}");
+                Console.WriteLine($"          canSeek={pb.Controls.IsPlaybackPositionEnabled}"
+                    + $" canRate={pb.Controls.IsPlaybackRateEnabled} rate={pb.PlaybackRate}"
+                    + $" state={pb.PlaybackStatus} type={pb.PlaybackType}");
+            }
+            catch (Exception ex) { Console.WriteLine("          timeline failed: " + ex.Message); }
 
             var shell = aumid is null ? null : Halo.Notifications.ShellIcon.ForAumid(aumid);
             var exe = Halo.Widgets.AppIcon.ForAumid(aumid);
@@ -917,6 +972,19 @@ internal static class Program
                     Halo.ClaudeCode.IpCountry.Split ? Halo.ClaudeCode.IpCountry.ApiCc : Halo.ClaudeCode.IpCountry.Cc);
                 for (int i = 0; i < 40 && !Halo.ClaudeCode.DnsLeak.Done; i++) System.Threading.Thread.Sleep(500);
             }
+            // Everything in these panels eases toward its target with a time constant, so a single frame
+            // renders every hover state part-way there — a menu that opens on hover came out at a fifth of
+            // its opacity and read as "not drawn at all". Real frames, on a real clock, until they settle.
+            using (var warm = new System.Drawing.Bitmap(560, 220,
+                       System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
+            using (var wg = System.Drawing.Graphics.FromImage(warm))
+                for (int f = 0; f < 45; f++)
+                {
+                    wg.Clear(System.Drawing.Color.FromArgb(20, 20, 22));
+                    try { w.DrawContent(wg, 560, 220, 1f); } catch { }
+                    System.Threading.Thread.Sleep(12);
+                }
+
             using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {

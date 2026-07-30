@@ -205,13 +205,17 @@ internal sealed class MediaWidget : IWidget
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return;
+                bool moved = _status != info.PlaybackStatus
+                    || _rateEnabled != info.Controls.IsPlaybackRateEnabled
+                    || _seekEnabled != info.Controls.IsPlaybackPositionEnabled;
                 _status = info.PlaybackStatus;
                 _playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
                 _isVideo = info.PlaybackType == Windows.Media.MediaPlaybackType.Video;
                 _rateEnabled = info.Controls.IsPlaybackRateEnabled;
                 _seekEnabled = info.Controls.IsPlaybackPositionEnabled;
-                if (info.PlaybackRate is double pr && pr > 0) _rate = pr; // reflect the app's real rate
-                _version++;
+                if (info.PlaybackRate is double pr && pr > 0 && Math.Abs(pr - _rate) > 0.001)
+                { _rate = pr; moved = true; }
+                if (moved) _version++;   // a poll that found nothing new must not force a repaint
             }
         }
         catch { }
@@ -246,12 +250,31 @@ internal sealed class MediaWidget : IWidget
                     if (!arrived && DateTime.UtcNow - _seekSentAt < slack) { _version++; return; }
                     _seekPending = null;
                 }
+                bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
                 _pos = t.Position;
                 _posAt = DateTime.UtcNow;
-                _version++;
+                if (moved) _version++;
             }
         }
         catch { }
+    }
+
+    // SMTC's TimelinePropertiesChanged is not a stream, it is an occasional nudge: Windows' Media Player
+    // fires it on a seek and then says nothing for minutes. If the session was hooked before its file had a
+    // duration, EndTime stays ZERO for the rest of the session - measured on a live 2h10m film, where the
+    // session itself reported 2:10:23 while the widget still held 0. Everything hangs off that number, so
+    // everything broke at once and quietly: the bar never filled, the timestamps never drew, RingProgress
+    // was -1, and Seek() returned early on `end <= start` - which is precisely "the bar does nothing".
+    //
+    // So the timeline is polled as well, twice a second, from the draw path. The event stays: it makes the
+    // update prompt. The poll makes it certain.
+    private long _pollAt;
+    private void PollTimeline()
+    {
+        long now = Environment.TickCount64;
+        if (now - _pollAt < 500) return;
+        _pollAt = now;
+        if (Cur() is { } s) { RefreshTimeline(s); RefreshPlayback(s); }
     }
 
     private void Clear()
@@ -338,7 +361,10 @@ internal sealed class MediaWidget : IWidget
     // 2x, no way to see what the choices were, and no way back except all the way round. Now it is a bare
     // label at the top right - no chip, no circle - that drops the whole list when you point at it.
     private static readonly double[] Rates = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0 };
-    private const float SpeedW = 44f, SpeedH = 22f, MenuW = 60f, ItemH = 21f, MenuPad = 5f;
+    // seven rows have to fit between the label and the bottom of a 220-tall panel: 27 + 22 + 5 for the
+    // handle and the gap leaves 158, and 7 x 21 + 2 x 5 is 157. The first attempt used 23px rows and the
+    // last one hung out of the panel.
+    private const float SpeedW = 44f, SpeedH = 22f, MenuW = 64f, ItemH = 21f, MenuPad = 5f;
     private bool _speedOpen;   // last frame's hover verdict; Buttons() reads it to know if the list is live
     private float _speedT;     // eased open amount
 
@@ -614,6 +640,7 @@ internal sealed class MediaWidget : IWidget
     public void DrawContent(Graphics g, int w, int h, float fade)
     {
         if (fade <= 0.01f) return;
+        PollTimeline();
         string? title, artist; bool playing; TimeSpan pos, end, start; DateTime posAt;
         lock (_lock)
         {
@@ -783,7 +810,7 @@ internal sealed class MediaWidget : IWidget
         if (!show)
         {
             _speedOpen = false;
-            _speedT = Ease(_speedT, 0f, dt, 0.05f);
+            _speedT = Ease(_speedT, 0f, dt, 0.13f);
             if (_speedT < 0.01f) { _speedT = 0f; return; }
         }
         var label = SpeedRect(w);
@@ -794,7 +821,7 @@ internal sealed class MediaWidget : IWidget
             bool over = WidgetInput.Over
                 && (hot.Contains(WidgetInput.Mouse) || (_speedOpen && menu.Contains(WidgetInput.Mouse)));
             _speedOpen = over;
-            _speedT = Ease(_speedT, over ? 1f : 0f, dt, 0.05f);
+            _speedT = Ease(_speedT, over ? 1f : 0f, dt, over ? 0.075f : 0.13f);
         }
 
         double rate; lock (_lock) rate = _rate;
@@ -810,49 +837,84 @@ internal sealed class MediaWidget : IWidget
             { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
             var textBox = new RectangleF(label.X, label.Y, label.Width - 11f, label.Height);
             g.DrawString(RateText(rate), lf, lb, textBox, sf);
-            float cx = label.Right - 5f, cy = label.Y + label.Height / 2f + 1f - 2f * _speedT;
+            // the chevron turns over as the list opens rather than swapping to a different glyph: the arms
+            // lerp through flat, which is the same "one shape, eased" idea as everything else here
+            float cx = label.Right - 5f, cy = label.Y + label.Height / 2f + 1f;
+            float armY = -1.6f + 3.2f * _speedT, tipY = 1.9f - 3.8f * _speedT;
             using var cp = new Pen(Mul(White, fade * (0.45f + 0.4f * _speedT)), 1.4f)
             { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            g.DrawLines(cp, new[] { new PointF(cx - 3.5f, cy - 1.5f), new PointF(cx, cy + 2f),
-                                    new PointF(cx + 3.5f, cy - 1.5f) });
+            g.DrawLines(cp, new[] { new PointF(cx - 3.5f, cy + armY), new PointF(cx, cy + tipY),
+                                    new PointF(cx + 3.5f, cy + armY) });
         }
 
         if (_speedT <= 0.01f) return;
 
-        // slides down a few pixels as it fades in: opening from nothing at full size reads as a flicker
+        // ── the list ─────────────────────────────────────────────────────────────────────────────────────
+        // First attempt was an opaque dark box with a 1px white border: a Win32 context menu sitting on top of
+        // a frosted panel, which is what "doesn't match the theme" meant. This one is built out of the same
+        // three things the rest of the panel is: a translucent white wash over the glass rather than a solid
+        // fill, an accent glow underneath so it belongs to the artwork's colour, and an edge that is brightest
+        // at the top and fades away down the sides - which is what a lit glass edge actually does, and why a
+        // uniform hairline read as hard.
         float a = fade * _speedT;
-        var m = menu; m.Offset(0f, -6f * (1f - _speedT));
-        using (var shadow = new SolidBrush(Color.FromArgb((int)(70 * a), 0, 0, 0)))
-        using (var sp = Fx.Rounded(new RectangleF(m.X + 1f, m.Y + 2f, m.Width, m.Height), 11f))
-            g.FillPath(shadow, sp);
-        using (var back = new SolidBrush(Color.FromArgb((int)(232 * a), 28, 28, 32)))
-        using (var mp = Fx.Rounded(m, 11f))
-            g.FillPath(back, mp);
-        using (var edge = new Pen(Color.FromArgb((int)(46 * a), 255, 255, 255), 1f))
-        using (var mp2 = Fx.Rounded(m, 11f))
-            g.DrawPath(edge, mp2);
+        var m = menu;
+        m.Offset(0f, -9f * (1f - _speedT));   // rises into place instead of appearing at full size
+
+        Fx.Glow(g, (int)(m.Right + 30f), (int)(m.Bottom + 30f), a * 0.5f,
+            m.X + m.Width / 2f, m.Y + m.Height * 0.35f, m.Width * 2.6f, m.Height * 1.5f, 26,
+            _accent == White ? Color.FromArgb(120, 150, 255) : _accent);
+
+        using (var shade = new SolidBrush(Color.FromArgb((int)(120 * a), 10, 10, 13)))
+        using (var sp = Fx.Rounded(m, 15f))
+            g.FillPath(shade, sp);
+        using (var wash = new SolidBrush(Color.FromArgb((int)(26 * a), 255, 255, 255)))
+        using (var wp = Fx.Rounded(m, 15f))
+            g.FillPath(wash, wp);
+        // the lit edge: a vertical gradient down the stroke, bright where the light is and gone by the bottom
+        using (var edge = new LinearGradientBrush(
+                   new RectangleF(m.X, m.Y - 1f, m.Width, m.Height + 2f),
+                   Color.FromArgb((int)(74 * a), 255, 255, 255),
+                   Color.FromArgb((int)(10 * a), 255, 255, 255), 90f))
+        using (var pen = new Pen(edge, 1f))
+        using (var ep = Fx.Rounded(m, 15f))
+            g.DrawPath(pen, ep);
 
         using var itemF = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
         using var isf = new StringFormat(StringFormat.GenericTypographic)
         { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
         for (int i = 0; i < Rates.Length; i++)
         {
-            var r = ItemRect(w, i); r.Offset(0f, -6f * (1f - _speedT));
+            // each row arrives a beat after the one above it: a list that unrolls reads as soft, and the same
+            // seven rows appearing together read as a box being switched on
+            float ti = Math.Clamp((_speedT - i * 0.05f) / 0.55f, 0f, 1f);
+            ti = 1f - MathF.Pow(1f - ti, 3);
+            if (ti <= 0.01f) continue;
+            var r = ItemRect(w, i);
+            r.Offset(0f, -9f * (1f - _speedT) + 5f * (1f - ti));
+
             bool cur = Math.Abs(Rates[i] - rate) < 0.01;
             bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
-            if (hov)
-                using (var hb = new SolidBrush(Color.FromArgb((int)(26 * a), 255, 255, 255)))
-                using (var hp = Fx.Rounded(new RectangleF(r.X + 3f, r.Y, r.Width - 6f, r.Height), 7f))
-                    g.FillPath(hb, hp);
-            // the current rate is marked by a dot rather than by being the brightest row, or "which one am I
-            // on" and "which one am I about to pick" would be the same signal
-            using (var tb2 = new SolidBrush(Mul(White, a * (cur || hov ? 0.98f : 0.66f))))
-                g.DrawString(RateText(Rates[i]), itemF, tb2, r, isf);
+            // eased, not binary: the first version snapped the highlight on and off under the pointer
+            _itemHover[i] = Ease(_itemHover[i], hov ? 1f : 0f, dt, 0.055f);
+            float ih = _itemHover[i];
+            float ia = a * ti;
+
+            var pill = new RectangleF(r.X + 4f, r.Y + 1f, r.Width - 8f, r.Height - 2f);
             if (cur)
-                using (var db = new SolidBrush(Mul(_accent == White ? White : _accent, a * 0.95f)))
-                    g.FillEllipse(db, r.X + 7f, r.Y + r.Height / 2f - 2f, 4f, 4f);
+                using (var cb = new SolidBrush(Fx.Alpha(_accent == White ? White : _accent, ia * 0.20f)))
+                using (var cp = Fx.Rounded(pill, pill.Height / 2f))
+                    g.FillPath(cb, cp);
+            if (ih > 0.01f)
+                using (var hb = new SolidBrush(Color.FromArgb((int)(30 * ia * ih), 255, 255, 255)))
+                using (var hp = Fx.Rounded(pill, pill.Height / 2f))
+                    g.FillPath(hb, hp);
+
+            using (var tb2 = new SolidBrush(Mul(White, ia * (0.58f + 0.40f * MathF.Max(cur ? 1f : 0f, ih)))))
+                g.DrawString(RateText(Rates[i]), itemF, tb2, r, isf);
         }
     }
+
+    private readonly float[] _itemHover = new float[8];
 
     private static string Glyph(int codepoint) => ((char)codepoint).ToString();
 
@@ -980,6 +1042,7 @@ internal sealed class MediaWidget : IWidget
     // Collapsed pill = album art on the left + an audio equalizer on the right (Dynamic-Island style).
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
+        PollTimeline();
         string? title; bool playing;
         lock (_lock) { title = _title; playing = _playing; }
         if (title == null) return;
@@ -994,20 +1057,8 @@ internal sealed class MediaWidget : IWidget
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
-        // ...and the same fraction again around the art, the way the agent pills ring their icon. The art is a
-        // rounded square, so this is a stroke along a fraction of its outline (Fx.PathProgress) rather than an
-        // arc: it fills clockwise from the top-left corner. The track underneath keeps the shape readable at
-        // 0% instead of leaving the art looking unframed.
-        if (prog >= 0f)
-        {
-            var ringRect = new RectangleF(x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
-            using var ringPath = Fx.Rounded(ringRect, sz * 0.28f + 2.5f);
-            using (var track = new Pen(Mul(Track, fade * 0.9f), 1.7f))
-                g.DrawPath(track, ringPath);
-            using var pen = new Pen(Mul(_accent == White ? White : _accent, fade * 0.95f), 1.9f)
-            { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            Fx.PathProgress(g, ringPath, prog, pen);
-        }
+        // No ring around the art. The pill's own background already carries this exact number, and a second
+        // reading of it two pixels away is decoration, not information.
         DrawEqualizer(g, w - 14f, h / 2f, fade, playing);
     }
 

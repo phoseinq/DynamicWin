@@ -2,6 +2,55 @@
 
 ## 2026-07-30 (evening) - the media panel: a speed menu, a second line, a seek bar that works, and VLC
 
+### The bar was dead because the widget never learned the duration
+Reported again: the bar still does not work. Two probes settled it in a way that three rounds of reasoning
+had not.
+
+`--probe-seek` asks the live session to move and reports what happens: **both directions worked perfectly**
+at the API level (`returned True`, position followed immediately, forward and backward alike). So the player
+was never the problem, and neither was the seekable window - `--probe-media` showed `minSeek=0`,
+`maxSeek=2:10:23`, `canSeek=True`, which makes the earlier `StartTime`/`MinSeekTime` clamp a no-op. Then the
+same probe read the *widget's* own view of that session: **`RingProgress = -1`**.
+
+That is the bug. `_end` was **zero** in the widget while the session reported 2h10m. SMTC's
+`TimelinePropertiesChanged` is not a stream, it is an occasional nudge - Media Player fires it on a seek and
+then says nothing for minutes - so a session hooked before its file had a duration keeps a zero forever. And
+everything hangs off that number, so everything broke at once and silently: the bar never filled, the
+timestamps never drew, `RingProgress` was -1, and `Seek()` returned early on `end <= start`. Which is exactly
+the reported shape of it — the ±10s buttons worked, because they do not need a duration, and the bar did
+nothing at all.
+
+The timeline is now **polled** twice a second from the draw path as well; the event stays, to make updates
+prompt. Both refreshes only bump `Version` when something actually moved, so a poll that finds nothing new
+costs no repaint. Proof in the render: the bar fills and the timestamps read **5:00 / 2:10:23**, where before
+there were no timestamps at all.
+
+### The speed list, again, in the panel's own language
+"It is not smooth and it does not match the theme" - both fair. The first one was an opaque dark box with a
+1px white border: a Win32 context menu sitting on a frosted panel. This one is built from what the rest of
+the panel is built from — a translucent wash over the glass (the seek bar is visible *through* it), an accent
+glow underneath so it belongs to the artwork's colour, and an edge that is brightest at the top and gone by
+the bottom, which is what a lit glass edge does and why a uniform hairline read as hard.
+
+Smoothness was three things: per-item hover was **binary** and now eases; the list **unrolls**, each row a
+beat behind the one above it, instead of seven rows appearing together; and it opens quickly but closes
+slowly (0.075s in, 0.13s out), because a menu that snaps shut is the part that reads as abrupt. The chevron
+turns over as it opens rather than swapping glyph. The current rate is an accent-tinted pill now, not a dot.
+
+Seven rows at 21px fit exactly between the handle and the bottom of a 220-tall panel; the first attempt used
+23px rows and the last one hung out of the panel.
+
+### `--render-widget` now settles before it shoots
+Every hover state in these panels eases toward its target, and the hook drew exactly one frame - so a menu
+that opens on hover rendered at a fifth of its opacity and looked like it had not been drawn at all. It now
+runs 45 real frames on a real clock before the shot. Half of this session's UI work could not be checked
+without it.
+
+### No ring around the collapsed art after all
+Added, then removed the same evening: the pill's own background already carries that exact fraction, and a
+second reading of one number two pixels away is decoration. Both widgets, and the `Fx.PathProgress` helper
+stays - it is the only way to stroke part of a rounded square's outline, and it will be wanted again.
+
 ### The speed chip became a menu, and lost its circle
 It was a glass chip in the transport row that **cycled** on every click: four clicks from 1x to 2x, no way to
 see the choices, and no way back except all the way round. It is now a bare label at the top right - no chip,
