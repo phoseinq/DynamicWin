@@ -33,7 +33,10 @@ internal sealed class MediaWidget : IWidget
     private TimeSpan _pos, _end;
     private TimeSpan _start, _minSeek, _maxSeek;
     private TimeSpan? _seekPending;
-    private DateTime _seekSentAt;
+    private DateTimeOffset _seekSentAt, _seekAskedAt;
+    private TimeSpan _reported;
+    private int _seekTries;
+    private bool _seekBusy;
     private DateTime _posAt;
     private int _version;
 
@@ -217,17 +220,18 @@ internal sealed class MediaWidget : IWidget
                 _maxSeek = t.MaxSeekTime;
                 _end = t.EndTime;
 
-                if (_seekPending is { } target)
+                _reported = t.Position;
+
+                bool stale = _seekPending is { } want
+                    && (t.Position - want).Duration() > TimeSpan.FromSeconds(1.5);
+                if (!stale)
                 {
-                    var slack = TimeSpan.FromMilliseconds(1500);
-                    bool arrived = (t.Position - target).Duration() <= TimeSpan.FromSeconds(2);
-                    if (!arrived && DateTime.UtcNow - _seekSentAt < slack) { _version++; return; }
                     _seekPending = null;
+                    bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
+                    _pos = t.Position;
+                    _posAt = DateTime.UtcNow;
+                    if (moved) _version++;
                 }
-                bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
-                _pos = t.Position;
-                _posAt = DateTime.UtcNow;
-                if (moved) _version++;
             }
         }
         catch { }
@@ -237,9 +241,10 @@ internal sealed class MediaWidget : IWidget
     private void PollTimeline()
     {
         long now = Environment.TickCount64;
-        if (now - _pollAt < 500) return;
+        if (now - _pollAt < 200) return;
         _pollAt = now;
         if (Cur() is { } s) { RefreshTimeline(s); RefreshPlayback(s); }
+        NudgeSeek();
     }
 
     private void Clear()
@@ -296,9 +301,59 @@ internal sealed class MediaWidget : IWidget
         var ceil = hi > TimeSpan.Zero ? hi : end;
         if (target < floor) target = floor;
         if (ceil > TimeSpan.Zero && target > ceil) target = ceil;
-        lock (_lock) { _seekPending = target; _seekSentAt = DateTime.UtcNow; }
-        try { _ = s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
+        lock (_lock)
+        {
+            _seekPending = target;
+            _seekAskedAt = DateTimeOffset.UtcNow;
+            _seekTries = 0;
+            _pos = target;
+            _posAt = DateTime.UtcNow;
+            _version++;
+        }
     }
+
+        private void NudgeSeek()
+    {
+        TimeSpan target, reported;
+        DateTimeOffset asked, sent;
+        int tries;
+        lock (_lock)
+        {
+            if (_seekPending is not { } want || _seekBusy) return;
+            target = want; reported = _reported; asked = _seekAskedAt; sent = _seekSentAt; tries = _seekTries;
+        }
+
+        if ((reported - target).Duration() <= TimeSpan.FromSeconds(1.5))
+        {
+            lock (_lock) _seekPending = null;
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (tries == 0)
+        {
+            if (now - asked < TimeSpan.FromMilliseconds(320)) return;
+        }
+        else
+        {
+            if (tries >= 7) { lock (_lock) _seekPending = null; return; }
+            if (now - sent < TimeSpan.FromMilliseconds(500 + 300 * Math.Min(tries, 4))) return;
+        }
+
+        lock (_lock) { _seekSentAt = now; _seekTries = tries + 1; _seekBusy = true; }
+        var s = Cur();
+        if (s is null) { lock (_lock) _seekBusy = false; return; }
+
+        _ = Task.Run(async () =>
+        {
+            try { await s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
+            lock (_lock) _seekBusy = false;
+        });
+    }
+
+    internal void SeekByForProbe(int secs) => SeekBy(secs);
+    internal TimeSpan PositionForProbe { get { lock (_lock) return _pos; } }
+
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
     private void Mute() { _meter.ToggleMute(); Bump(); }
     private void Bump() { lock (_lock) { _version++; } }
