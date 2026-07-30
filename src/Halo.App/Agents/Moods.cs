@@ -40,7 +40,8 @@ internal static class Moods
         ["idle"] = new[]
         {
             "let's work :)", "standing by", "all yours", "nothing on", "clear desk",
-            "say the word", "on standby", "queue's empty", "awaiting orders", "idle", "ready",
+
+            "say the word", "on standby", "queue's empty", "awaiting orders", "ready",
             "put me to work", "unoccupied", "primed", "twiddling thumbs", "at your service",
             "tools down", "bench is clear", "apron on", "gloves on",
         },
