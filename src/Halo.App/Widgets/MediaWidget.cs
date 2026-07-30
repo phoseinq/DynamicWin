@@ -37,8 +37,11 @@ internal sealed class MediaWidget : IWidget
     private byte[]? _thumb;
     private TimeSpan _pos, _end;
     private TimeSpan _start, _minSeek, _maxSeek;   // the seekable window; not always [0, end]
-    private TimeSpan? _seekPending;                // a seek asked for and not yet reflected back
-    private DateTime _seekSentAt;
+    private TimeSpan? _seekPending;                // where we have asked to be, until the player confirms it
+    private DateTimeOffset _seekSentAt, _seekAskedAt;
+    private TimeSpan _reported;                    // the last position the PLAYER actually claimed
+    private int _seekTries;
+    private bool _seekBusy;                        // one outstanding request at a time
     private DateTime _posAt;
     private int _version;
 
@@ -238,22 +241,23 @@ internal sealed class MediaWidget : IWidget
                 _maxSeek = t.MaxSeekTime;
                 _end = t.EndTime;
 
-                // A seek we just asked for takes a moment to land, and players emit a timeline update with
-                // the OLD position in the meantime. Taking that at face value dragged the bar back to where
-                // it came from and then jumped it forward when the real update arrived - reported as "it
-                // seeks but the bar glitches backwards". So while a seek is in flight, only an update that
-                // has actually moved near the target is believed; the rest are stale and dropped.
-                if (_seekPending is { } target)
+                _reported = t.Position;
+                // While a seek is outstanding, the only report worth believing is one that AGREES with where
+                // we asked to be. A timestamp is not enough on its own: a player will happily stamp an update
+                // after our request and still carry its pre-seek position in it - measured, and that is how a
+                // rapid third tap ended up computing from a position the player had already left. Until it
+                // agrees, the pill keeps showing the target, which is also what the next relative tap counts
+                // from. NudgeSeek is what makes that agreement happen, or gives up and lets reality back in.
+                bool stale = _seekPending is { } want
+                    && (t.Position - want).Duration() > TimeSpan.FromSeconds(1.5);
+                if (!stale)
                 {
-                    var slack = TimeSpan.FromMilliseconds(1500);
-                    bool arrived = (t.Position - target).Duration() <= TimeSpan.FromSeconds(2);
-                    if (!arrived && DateTime.UtcNow - _seekSentAt < slack) { _version++; return; }
                     _seekPending = null;
+                    bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
+                    _pos = t.Position;
+                    _posAt = DateTime.UtcNow;
+                    if (moved) _version++;
                 }
-                bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
-                _pos = t.Position;
-                _posAt = DateTime.UtcNow;
-                if (moved) _version++;
             }
         }
         catch { }
@@ -272,9 +276,10 @@ internal sealed class MediaWidget : IWidget
     private void PollTimeline()
     {
         long now = Environment.TickCount64;
-        if (now - _pollAt < 500) return;
+        if (now - _pollAt < 200) return;   // the seek pump lives on this cadence too
         _pollAt = now;
         if (Cur() is { } s) { RefreshTimeline(s); RefreshPlayback(s); }
+        NudgeSeek();
     }
 
     private void Clear()
@@ -335,9 +340,74 @@ internal sealed class MediaWidget : IWidget
         var ceil = hi > TimeSpan.Zero ? hi : end;
         if (target < floor) target = floor;
         if (ceil > TimeSpan.Zero && target > ceil) target = ceil;
-        lock (_lock) { _seekPending = target; _seekSentAt = DateTime.UtcNow; }
-        try { _ = s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
+        lock (_lock)
+        {
+            _seekPending = target;
+            _seekAskedAt = DateTimeOffset.UtcNow;
+            _seekTries = 0;      // the burst may still be going: NudgeSeek decides when to actually speak
+            _pos = target;       // optimistic — the pill moves on the ask, not on the answer
+            _posAt = DateTime.UtcNow;
+            _version++;
+        }
     }
+
+    /// <summary>
+    /// Getting a seek to actually happen, which took three measurements to understand.
+    ///
+    /// The player accepts an isolated seek immediately, and <b>silently drops</b> anything that arrives while
+    /// it is still working on one — six taps 120ms apart produced one seek and five no-ops, with
+    /// <c>TryChangePlaybackPositionAsync</c> returning true for every single one. So sending on every tap
+    /// throws away precisely the position the user actually wanted: the last one.
+    ///
+    /// Hence: a tap moves a <i>target</i>, and this sends the target once the tapping has stopped for a
+    /// moment, then re-sends with a widening gap until the player reports itself there. The pill has already
+    /// moved to the target, so none of that waiting is visible. After about five seconds of being ignored it
+    /// gives up and lets the player's own position back in, because a pill showing a position the player is
+    /// not at has stopped being a status display.
+    /// </summary>
+    private void NudgeSeek()
+    {
+        TimeSpan target, reported;
+        DateTimeOffset asked, sent;
+        int tries;
+        lock (_lock)
+        {
+            if (_seekPending is not { } want || _seekBusy) return;
+            target = want; reported = _reported; asked = _seekAskedAt; sent = _seekSentAt; tries = _seekTries;
+        }
+
+        if ((reported - target).Duration() <= TimeSpan.FromSeconds(1.5))
+        {
+            lock (_lock) _seekPending = null;      // arrived
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (tries == 0)
+        {
+            if (now - asked < TimeSpan.FromMilliseconds(320)) return;   // the burst has not finished
+        }
+        else
+        {
+            if (tries >= 7) { lock (_lock) _seekPending = null; return; }
+            if (now - sent < TimeSpan.FromMilliseconds(500 + 300 * Math.Min(tries, 4))) return;
+        }
+
+        lock (_lock) { _seekSentAt = now; _seekTries = tries + 1; _seekBusy = true; }
+        var s = Cur();
+        if (s is null) { lock (_lock) _seekBusy = false; return; }
+        // awaited rather than fired and forgotten, so a second request is never issued on top of one that is
+        // still outstanding
+        _ = Task.Run(async () =>
+        {
+            try { await s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
+            lock (_lock) _seekBusy = false;
+        });
+    }
+    // dev hooks (--probe-seek): the rapid-tap case can only be measured through the path the buttons use
+    internal void SeekByForProbe(int secs) => SeekBy(secs);
+    internal TimeSpan PositionForProbe { get { lock (_lock) return _pos; } }
+
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
     private void Mute() { _meter.ToggleMute(); Bump(); }
     private void Bump() { lock (_lock) { _version++; } }

@@ -70,7 +70,7 @@ internal static class Program
         // what it says and what actually happened. Whether a player HONOURS a seek cannot be reasoned about
         // from outside, and two rounds of theorising about it is two rounds too many.
         if (args.Length >= 2 && args[0] == "--probe-seek") { ProbeSeek(double.Parse(args[1],
-            System.Globalization.CultureInfo.InvariantCulture)); return; }
+            System.Globalization.CultureInfo.InvariantCulture), args.Length > 2 ? int.Parse(args[2]) : 1); return; }
         // dev hook: `Halo.App --probe-downloads <out.txt>` — every download each source can see, plus the
         // raw rows out of Chromium's in-progress store. Written to a file because this is a WinExe.
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
@@ -508,7 +508,10 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
-    private static void ProbeSeek(double secs)
+    // `--probe-seek <±seconds> [count]` — count>1 fires them back to back, which is the case that broke:
+    // each tap has to compute from where the LAST one put us, not from a position the player has not caught
+    // up to reporting yet.
+    private static void ProbeSeek(double secs, int count)
     {
         var sessions = new Halo.Widgets.MediaSessions();
         for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
@@ -525,14 +528,20 @@ internal static class Program
         void Pump() { try { widget.DrawCollapsed(sg, 220, 40, 1f); } catch { } }
         for (int i = 0; i < 20 && widget.RingProgress < 0f; i++) { Pump(); System.Threading.Thread.Sleep(100); }
 
-        var before = s.GetTimelineProperties();
-        var target = before.Position + TimeSpan.FromSeconds(secs);
-        Console.WriteLine($"before   pos={before.Position}  (asking for {target})");
-        bool ok = false;
-        try { ok = s.TryChangePlaybackPositionAsync(target.Ticks).AsTask().GetAwaiter().GetResult(); }
-        catch (Exception ex) { Console.WriteLine("threw: " + ex.Message); }
-        Console.WriteLine($"returned {ok}");
-        for (int i = 1; i <= 6; i++)
+        Console.WriteLine($"before   pos={s.GetTimelineProperties().Position}");
+        // through the WIDGET's own ±10s path, not straight to the session: the bug was in how the widget
+        // decides where "here" is between an ask and its answer
+        for (int n = 1; n <= count; n++)
+        {
+            widget.SeekByForProbe((int)secs);
+            // HALO_SEEK_GAP lets the gap between taps be swept: the question is what spacing the PLAYER
+            // will actually honour, which no amount of reading our own code can answer
+            int gap = int.TryParse(Environment.GetEnvironmentVariable("HALO_SEEK_GAP"), out var gv) ? gv : 120;
+            for (int k = 0; k < Math.Max(1, gap / 100); k++) { Pump(); System.Threading.Thread.Sleep(100); }
+            Console.WriteLine($"tap {n}    player={s.GetTimelineProperties().Position}"
+                + $"  widget={widget.PositionForProbe}  ring={widget.RingProgress:0.0000}");
+        }
+        for (int i = 1; i <= 16; i++)
         {
             System.Threading.Thread.Sleep(400);
             Pump();

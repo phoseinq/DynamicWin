@@ -2,6 +2,32 @@
 
 ## 2026-07-30 (evening) - the media panel: a speed menu, a second line, a seek bar that works, and VLC
 
+### Seeking several times quickly: the player drops all but the first
+Reported: it works, but use it a few times in a row and it stops moving. Three measurements, each one
+killing the theory before it:
+
+1. `--probe-seek 60 6` fires six taps 120ms apart **through the widget's own path**. The widget asked for
+   1:11, 1:12, 1:13, 1:14, 1:15, 1:16 — and the player went to 1:11 and stopped. Every single call returned
+   **true**. So the player honours an isolated seek and **silently drops** anything arriving while it is
+   still working on one, and nothing in the API says so.
+2. Serialising the requests (awaiting each before issuing the next) changed nothing: it is not a fire-and-
+   forget problem.
+3. The same six taps 3 seconds apart mostly landed. It is a timing property of the player, not of us.
+
+Which means sending on every tap throws away exactly the position the user wanted — the last one. So a tap
+now moves a **target**, and the target is sent once the tapping stops for 320ms, then re-sent with a widening
+gap until the player reports itself there, giving up after about five seconds and letting the player's own
+position back in. The pill has already moved to the target, so none of that waiting is visible.
+
+Two supporting fixes fell out of it. The position is set **optimistically** at the moment of asking, so the
+next relative tap counts from where you asked to be rather than from a position the player has not caught up
+to reporting — three quick ±10s taps used to all land in the same place. And while a seek is outstanding the
+only report believed is one that **agrees** with the target: a timestamp is not enough, because a player will
+stamp an update after our request and still carry its pre-seek position in it.
+
+Measured after: six taps 120ms apart, the widget tracks all six (1:33 → 1:38) and the player lands on
+**1:38:35** within 800ms of the last tap, and stays.
+
 ### The bar was dead because the widget never learned the duration
 Reported again: the bar still does not work. Two probes settled it in a way that three rounds of reasoning
 had not.
