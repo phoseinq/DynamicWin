@@ -12,6 +12,10 @@ internal static class AppIcon
     private static readonly Dictionary<string, Bitmap> _ok = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, long> _missed = new(StringComparer.OrdinalIgnoreCase);
 
+        public static Bitmap? ForSessionApp(string? aumid)
+        => string.IsNullOrEmpty(aumid) ? null
+         : Halo.Notifications.ShellIcon.ForAumid(aumid) ?? ForAumid(aumid);
+
     public static Bitmap? ForAumid(string? aumid)
     {
         if (string.IsNullOrEmpty(aumid)) return null;

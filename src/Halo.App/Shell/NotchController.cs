@@ -613,7 +613,10 @@ internal sealed class NotchController
         var fg = Win32.GetForegroundWindow();
         DetectAgentCancel(fg);
         DetectLanguageChange(fg);
-        bool fullscreen = !_pinned && _notch.IsFullscreen(fg);
+        bool coveringApp = _notch.IsFullscreen(fg);
+        bool fullscreen = !_pinned && coveringApp;
+
+        if (_pinned && coveringApp) _notch.AssertTopmost();
         var active = fullscreen ? [] : ActiveIndices();
 
         bool notifLive = _notif != null || _notifSrc.HasPending;

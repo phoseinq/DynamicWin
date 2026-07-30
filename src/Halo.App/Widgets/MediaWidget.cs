@@ -72,7 +72,7 @@ internal sealed class MediaWidget : IWidget
         get
         {
             string? id; lock (_lock) { id = _appId; }
-            var app = AppIcon.ForAumid(id);
+            var app = AppIcon.ForSessionApp(id);
             if (app != null) return app;
             EnsureArt();
             return _art;
@@ -619,7 +619,7 @@ internal sealed class MediaWidget : IWidget
         using var path = Rounded(new RectangleF(x, y, size, size), radius);
 
         Bitmap? img = CurArt();
-        if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForAumid(id); }
+        if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForSessionApp(id); }
         if (img != null)
         {
             CoverFill(g, img, x, y, size, path, fade);
@@ -752,9 +752,7 @@ internal sealed class MediaWidget : IWidget
         using var f = new Font("Segoe Fluent Icons", px, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
 
-        using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(glyph, f, b, r, sf);
+        Fx.GlyphCentred(g, r, glyph, f, b);
     }
 
     private static (Bitmap[]? frames, int[]? delays) DecodeFrames(byte[]? bytes)

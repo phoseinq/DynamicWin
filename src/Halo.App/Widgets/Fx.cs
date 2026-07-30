@@ -190,28 +190,38 @@ internal static class Fx
         catch { return 0f; }
     }
 
-    private static readonly Dictionary<string, float> _inkOffsets = new();
+    private static readonly Dictionary<string, PointF> _inkOffsets = new();
 
-    public static float InkCentreOffset(Font f, string s)
+        public static PointF InkCentreOffsets(Font f, string s)
     {
-        if (string.IsNullOrEmpty(s)) return 0f;
+        if (string.IsNullOrEmpty(s)) return PointF.Empty;
         string key = f.FontFamily.Name + "|" + f.Style + "|" + f.Size.ToString("0.##") + "|" + s;
         lock (_inkOffsets)
         {
-            if (_inkOffsets.TryGetValue(key, out float v)) return v;
-            float off = 0f;
+            if (_inkOffsets.TryGetValue(key, out var v)) return v;
+            var off = PointF.Empty;
             try
             {
                 using var path = new GraphicsPath();
                 using var sf = new StringFormat(StringFormat.GenericTypographic);
                 path.AddString(s, f.FontFamily, (int)f.Style, f.Size, PointF.Empty, sf);
                 var b = path.GetBounds();
-                if (b.Height > 0) off = -(b.Top + b.Height / 2f);
+                if (b.Width > 0 && b.Height > 0)
+                    off = new PointF(-(b.Left + b.Width / 2f), -(b.Top + b.Height / 2f));
             }
             catch { }
             _inkOffsets[key] = off;
             return off;
         }
+    }
+
+    public static float InkCentreOffset(Font f, string s) => InkCentreOffsets(f, s).Y;
+
+        public static void GlyphCentred(Graphics g, RectangleF r, string glyph, Font f, Brush brush)
+    {
+        var off = InkCentreOffsets(f, glyph);
+        using var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap };
+        g.DrawString(glyph, f, brush, new PointF(r.X + r.Width / 2f + off.X, r.Y + r.Height / 2f + off.Y), sf);
     }
 
     public static float CapCentreOffset(Font f) => InkCentreOffset(f, "H");
