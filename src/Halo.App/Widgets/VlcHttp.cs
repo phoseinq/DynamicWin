@@ -14,6 +14,12 @@ internal static class VlcHttp
 {
     public static volatile bool Online;
     public static double Rate = 1.0;
+
+    public static int Time;
+    public static int Length;
+    public static volatile string? Resolution;
+    private static long _seekSentAt;
+    private static int _seekTarget = -1;
     public static volatile bool Playing = true;
     public static volatile bool SubsOn = true;
     private static string _lastPlid = "";
@@ -76,12 +82,37 @@ internal static class VlcHttp
             string xml = Get("/requests/status.xml");
             var (rate, playing) = ParseStatus(xml);
             Rate = rate; Playing = playing;
+            var (time, length) = ParseTime(xml);
+            Length = length;
+
+            bool settled = _seekTarget < 0 || Math.Abs(time - _seekTarget) <= 2
+                || Environment.TickCount64 - _seekSentAt > 1500;
+            if (settled) { Time = time; _seekTarget = -1; }
+            Resolution = ParseResolution(xml);
 
             string plid = Regex.Match(xml, @"<currentplid>(-?\d+)</currentplid>").Groups[1].Value;
             if (plid != _lastPlid) { _lastPlid = plid; SubsOn = xml.Contains(">Subtitle<"); }
             Online = true;
         }
         catch { Online = false; }
+    }
+
+    internal static (int time, int length) ParseTime(string xml)
+    {
+        int time = -1, length = 0;
+        var mt = Regex.Match(xml, @"<time>(-?\d+)</time>");
+        if (mt.Success) int.TryParse(mt.Groups[1].Value, out time);
+        var ml = Regex.Match(xml, @"<length>(-?\d+)</length>");
+        if (ml.Success) int.TryParse(ml.Groups[1].Value, out length);
+        if (length < 0) length = 0;
+        return (time, length);
+    }
+
+    internal static string? ParseResolution(string xml)
+    {
+        var m = Regex.Match(xml, @"name=.Video_resolution.>\s*(\d+x\d+)", RegexOptions.IgnoreCase);
+        if (!m.Success) m = Regex.Match(xml, @"name=.Resolution.>\s*(\d+x\d+)", RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     internal static (double rate, bool playing) ParseStatus(string xml)
@@ -103,6 +134,18 @@ internal static class VlcHttp
     public static void SetRate(double r) { Rate = r; Send($"?command=rate&val={r.ToString(CultureInfo.InvariantCulture)}"); }
     public static void TogglePlay() { Playing = !Playing; Send("?command=pl_pause"); }
     public static void Seek(int seconds) { Send($"?command=seek&val={(seconds >= 0 ? "+" : "")}{seconds}S"); }
+
+        public static void SeekTo(float frac)
+    {
+        int len = Length;
+        if (len <= 0) return;
+        frac = Math.Clamp(frac, 0f, 1f);
+        int target = (int)(frac * len);
+        Time = target;
+        _seekTarget = target;
+        _seekSentAt = Environment.TickCount64;
+        Send($"?command=seek&val={(int)(frac * 100)}%");
+    }
 
     public static void CycleSubtitle() { SubsOn = !SubsOn; Send("?command=key&val=subtitle-track"); }
 

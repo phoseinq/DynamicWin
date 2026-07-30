@@ -45,9 +45,7 @@ internal static class Almanac
     {
         try
         {
-            if (Place is not { Length: > 0 } city) return;
-            _coords ??= Geocode(city);
-            if (_coords is not { } c) return;
+            if (Coords() is not { } c) return;
             var url = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code,is_day"
                 + "&latitude=" + c.lat.ToString("0.####", CultureInfo.InvariantCulture)
                 + "&longitude=" + c.lon.ToString("0.####", CultureInfo.InvariantCulture);
@@ -59,6 +57,56 @@ internal static class Almanac
                 !cur.TryGetProperty("is_day", out var day) || day.GetInt32() != 0);
         }
         catch { }
+    }
+
+        private static (double lat, double lon)? Coords()
+    {
+        if (_coords is { } cached) return cached;
+        if (DeviceLocation() is { } live)
+        {
+            _coords = live;
+            FromDevice = true;
+            if (PlaceCountry is null && Place is { Length: > 0 } named) _ = Geocode(named);
+            return _coords;
+        }
+        if (Place is not { Length: > 0 } city) return null;
+        _coords = Geocode(city);
+        return _coords;
+    }
+
+        internal static volatile bool FromDevice;
+
+    private static (double lat, double lon)? DeviceLocation()
+    {
+        try
+        {
+            if (!LocationAllowed()) return null;
+            var geo = new Windows.Devices.Geolocation.Geolocator
+            {
+                DesiredAccuracy = Windows.Devices.Geolocation.PositionAccuracy.Default,
+
+                ReportInterval = 0,
+            };
+            var task = geo.GetGeopositionAsync(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(8)).AsTask();
+            if (!task.Wait(TimeSpan.FromSeconds(9))) return null;
+            var p = task.Result?.Coordinate?.Point?.Position;
+            return p is { } pos ? (pos.Latitude, pos.Longitude) : null;
+        }
+        catch { return null; }
+    }
+
+    private static bool LocationAllowed()
+    {
+        try
+        {
+            const string key = @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location";
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(key);
+            if (k?.GetValue("Value") as string is { } v)
+                return string.Equals(v, "Allow", StringComparison.OrdinalIgnoreCase);
+            using var m = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(key);
+            return string.Equals(m?.GetValue("Value") as string, "Allow", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private static (double lat, double lon)? Geocode(string city)

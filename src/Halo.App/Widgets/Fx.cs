@@ -217,6 +217,38 @@ internal static class Fx
 
     public static float InkCentreOffset(Font f, string s) => InkCentreOffsets(f, s).Y;
 
+        public static void PathProgress(Graphics g, GraphicsPath path, float frac, Pen pen)
+    {
+        if (frac <= 0f) return;
+        using var flat = (GraphicsPath)path.Clone();
+        flat.Flatten(null, 0.2f);
+        var pts = flat.PathPoints;
+        if (pts.Length < 2) return;
+
+        float total = 0f;
+        var seg = new float[pts.Length];
+        for (int i = 1; i < pts.Length; i++)
+        {
+            float dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
+            seg[i] = MathF.Sqrt(dx * dx + dy * dy);
+            total += seg[i];
+        }
+        if (total <= 0f) return;
+
+        float want = Math.Clamp(frac, 0f, 1f) * total, run = 0f;
+        for (int i = 1; i < pts.Length; i++)
+        {
+            if (run + seg[i] <= want) { g.DrawLine(pen, pts[i - 1], pts[i]); run += seg[i]; continue; }
+
+            float k = seg[i] > 0f ? (want - run) / seg[i] : 0f;
+            if (k > 0.001f)
+                g.DrawLine(pen, pts[i - 1], new PointF(
+                    pts[i - 1].X + (pts[i].X - pts[i - 1].X) * k,
+                    pts[i - 1].Y + (pts[i].Y - pts[i - 1].Y) * k));
+            return;
+        }
+    }
+
         public static void GlyphCentred(Graphics g, RectangleF r, string glyph, Font f, Brush brush)
     {
         var off = InkCentreOffsets(f, glyph);

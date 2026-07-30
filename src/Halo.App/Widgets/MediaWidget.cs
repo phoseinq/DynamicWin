@@ -31,6 +31,9 @@ internal sealed class MediaWidget : IWidget
     private GlobalSystemMediaTransportControlsSessionPlaybackStatus _status;
     private byte[]? _thumb;
     private TimeSpan _pos, _end;
+    private TimeSpan _start, _minSeek, _maxSeek;
+    private TimeSpan? _seekPending;
+    private DateTime _seekSentAt;
     private DateTime _posAt;
     private int _version;
 
@@ -204,8 +207,20 @@ internal sealed class MediaWidget : IWidget
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return;
-                _pos = t.Position;
+
+                _start = t.StartTime;
+                _minSeek = t.MinSeekTime;
+                _maxSeek = t.MaxSeekTime;
                 _end = t.EndTime;
+
+                if (_seekPending is { } target)
+                {
+                    var slack = TimeSpan.FromMilliseconds(1500);
+                    bool arrived = (t.Position - target).Duration() <= TimeSpan.FromSeconds(2);
+                    if (!arrived && DateTime.UtcNow - _seekSentAt < slack) { _version++; return; }
+                    _seekPending = null;
+                }
+                _pos = t.Position;
                 _posAt = DateTime.UtcNow;
                 _version++;
             }
@@ -221,7 +236,8 @@ internal sealed class MediaWidget : IWidget
             if (_title == null) return;
             _title = _artist = _trackKey = null;
             _thumb = null;
-            _pos = _end = TimeSpan.Zero;
+            _pos = _end = _start = _minSeek = _maxSeek = TimeSpan.Zero;
+            _seekPending = null;
             _version++;
         }
     }
@@ -251,13 +267,22 @@ internal sealed class MediaWidget : IWidget
     private void SeekBy(int secs)
     {
         var s = Cur();
-        TimeSpan pos, end; bool playing; DateTime at;
-        lock (_lock) { pos = _pos; end = _end; playing = _playing; at = _posAt; }
+        TimeSpan pos; bool playing; DateTime at;
+        lock (_lock) { pos = _pos; playing = _playing; at = _posAt; }
         if (s == null) return;
         var cur = playing ? pos + (DateTime.UtcNow - at) : pos;
-        var target = cur + TimeSpan.FromSeconds(secs);
-        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
-        if (end > TimeSpan.Zero && target > end) target = end;
+        SeekTo(s, cur + TimeSpan.FromSeconds(secs));
+    }
+
+    private void SeekTo(GlobalSystemMediaTransportControlsSession s, TimeSpan target)
+    {
+        TimeSpan start, end, lo, hi;
+        lock (_lock) { start = _start; end = _end; lo = _minSeek; hi = _maxSeek; }
+        var floor = lo > TimeSpan.Zero ? lo : start;
+        var ceil = hi > TimeSpan.Zero ? hi : end;
+        if (target < floor) target = floor;
+        if (ceil > TimeSpan.Zero && target > ceil) target = ceil;
+        lock (_lock) { _seekPending = target; _seekSentAt = DateTime.UtcNow; }
         try { _ = s.TryChangePlaybackPositionAsync(target.Ticks); } catch { }
     }
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
@@ -267,17 +292,38 @@ internal sealed class MediaWidget : IWidget
     private void Seek(float f)
     {
         var s = Cur();
-        TimeSpan end; lock (_lock) { end = _end; }
-        if (s == null || end <= TimeSpan.Zero) return;
-        try { _ = s.TryChangePlaybackPositionAsync((long)(Math.Clamp(f, 0f, 1f) * end.Ticks)); } catch { }
+        TimeSpan start, end; lock (_lock) { start = _start; end = _end; }
+        if (s == null || end <= start) return;
+        SeekTo(s, start + TimeSpan.FromTicks((long)(Math.Clamp(f, 0f, 1f) * (end - start).Ticks)));
     }
 
     private static (RectangleF bar, RectangleF mute) VolLayout(int w) => (new RectangleF(62, 178, 96, 20), new RectangleF(24, 172, 32, 32));
     private static RectangleF SeekRect(int w) { float tx = 180; return new RectangleF(tx, 108, w - tx - 26, 18); }
 
-    private enum Btn { Prev, Play, Next, Back10, Fwd10, Cc, Speed }
+    private enum Btn { Prev, Play, Next, Back10, Fwd10, Cc }
 
-    private static readonly double[] Rates = { 1.0, 1.25, 1.5, 1.75, 2.0 };
+    private static readonly double[] Rates = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0 };
+    private const float SpeedW = 44f, SpeedH = 22f, MenuW = 60f, ItemH = 21f, MenuPad = 5f;
+    private bool _speedOpen;
+    private float _speedT;
+
+    private static RectangleF SpeedRect(int w) => new(w - 26f - SpeedW, 27f, SpeedW, SpeedH);
+    private static RectangleF MenuRect(int w)
+        => new(w - 26f - MenuW, 27f + SpeedH + 5f, MenuW, Rates.Length * ItemH + MenuPad * 2f);
+    private static RectangleF ItemRect(int w, int i)
+    {
+        var m = MenuRect(w);
+        return new RectangleF(m.X, m.Y + MenuPad + i * ItemH, m.Width, ItemH);
+    }
+
+    private void SetRate(double r)
+    {
+        var s = Cur();
+        if (s == null) return;
+        lock (_lock) { _rate = r; }
+        try { _ = s.TryChangePlaybackRateAsync(r); } catch { }
+        Bump();
+    }
 
     private Btn[] Layout()
     {
@@ -288,21 +334,8 @@ internal sealed class MediaWidget : IWidget
         if (seekOk) l.Add(Btn.Back10);
         l.Add(Btn.Play);
         if (seekOk) l.Add(Btn.Fwd10);
-        if (rateOk) l.Add(Btn.Speed);
         if (SubtitleKey(app) != 0) l.Add(Btn.Cc);
         return l.ToArray();
-    }
-
-    private void CycleSpeed()
-    {
-        var s = Cur();
-        if (s == null) return;
-        double cur; lock (_lock) { cur = _rate; }
-        double next = Rates[0];
-        foreach (var r in Rates) if (r > cur + 0.01) { next = r; break; }
-        lock (_lock) { _rate = next; }
-        try { _ = s.TryChangePlaybackRateAsync(next); } catch { }
-        Bump();
     }
 
     private static string RateText(double r) =>
@@ -328,6 +361,81 @@ internal sealed class MediaWidget : IWidget
         catch { return false; }
     }
 
+    internal static string MetaLine(string? title, string? artist, string? size, string? resolution = null)
+    {
+        var parts = new List<string>(4);
+
+        if (!string.IsNullOrWhiteSpace(artist)) parts.Add(artist!.Trim());
+        else if (Group(title) is { } grp) parts.Add(grp);
+
+        if ((HeightLabel(resolution) ?? resolution ?? Quality(title)) is { } q) parts.Add(q);
+        if (Source(title) is { } src) parts.Add(src);
+        if (!string.IsNullOrWhiteSpace(size)) parts.Add(size!);
+
+        return parts.Count == 0 ? "·" : string.Join("  ·  ", parts);
+    }
+
+    private static readonly (string token, string label)[] Qualities =
+    {
+        ("2160p", "4K"), ("4320p", "8K"), ("1440p", "1440p"), ("1080p", "1080p"), ("720p", "720p"),
+        ("576p", "576p"), ("480p", "480p"), ("360p", "360p"), ("uhd", "4K"),
+    };
+    internal static string? Quality(string? title)
+    {
+        if (string.IsNullOrEmpty(title)) return null;
+        var t = title.ToLowerInvariant();
+        foreach (var (token, label) in Qualities) if (t.Contains(token)) return label;
+        return null;
+    }
+
+        internal static string? HeightLabel(string? resolution)
+    {
+        if (string.IsNullOrWhiteSpace(resolution)) return null;
+        int x = resolution.IndexOf('x');
+        if (x <= 0 || !int.TryParse(resolution.AsSpan(x + 1), out int hgt) || hgt <= 0) return null;
+        return hgt >= 4000 ? "8K" : hgt >= 2000 ? "4K" : hgt + "p";
+    }
+
+    private static readonly (string token, string label)[] Sources =
+    {
+        ("remux", "Remux"), ("bluray", "BluRay"), ("blu-ray", "BluRay"), ("brrip", "BRRip"),
+        ("bdrip", "BDRip"), ("web-dl", "WEB-DL"), ("webdl", "WEB-DL"), ("webrip", "WEBRip"),
+        ("hdtv", "HDTV"), ("dvdrip", "DVDRip"), ("hdcam", "CAM"), ("camrip", "CAM"),
+    };
+    internal static string? Source(string? title)
+    {
+        if (string.IsNullOrEmpty(title)) return null;
+        var t = title.ToLowerInvariant();
+        foreach (var (token, label) in Sources) if (t.Contains(token)) return label;
+        return null;
+    }
+
+    internal static string? Group(string? title)
+    {
+        if (string.IsNullOrEmpty(title)) return null;
+        var name = title;
+        int dot = name.LastIndexOf('.');
+        if (dot > 0 && name.Length - dot <= 5) name = name.Substring(0, dot);
+        var bits = name.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (bits.Length < 4) return null;
+        var last = bits[^1].Trim();
+        if (last.Length is < 3 or > 18) return null;
+        foreach (var ch in last) if (!char.IsLetterOrDigit(ch) && ch != '-' && ch != '_') return null;
+
+        var lower = last.ToLowerInvariant();
+        if (Quality(lower) != null || Source(lower) != null) return null;
+        foreach (var noise in new[] { "x264", "x265", "hevc", "av1", "aac", "ac3", "dts", "mp3", "10bit" })
+            if (lower == noise) return null;
+        return last;
+    }
+
+    private string? FileFacts()
+    {
+        string? title; lock (_lock) title = _title;
+        var size = MediaFileInfo.Size(title, Bump);
+        return size is { } b ? MediaFileInfo.Human(b) : null;
+    }
+
     private static bool IsVideoApp(string app) =>
         app.Contains("vlc") || app.Contains("mpc") || app.Contains("mpv") || app.Contains("potplayer")
         || app.Contains("wmplayer") || app.Contains("kmplayer") || app.Contains("gom")
@@ -345,6 +453,17 @@ internal sealed class MediaWidget : IWidget
 
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
+
+        if (_speedOpen && _speedT > 0.5f)
+        {
+            var items = new List<(RectangleF, Action<PointF>)>(Rates.Length);
+            for (int i = 0; i < Rates.Length; i++)
+            {
+                double pick = Rates[i];
+                items.Add((ItemRect(w, i), _ => SetRate(pick)));
+            }
+            return items;
+        }
         var (vbar, mute) = VolLayout(w);
         var seek = SeekRect(w);
         var list = new List<(RectangleF, Action<PointF>)>
@@ -364,7 +483,6 @@ internal sealed class MediaWidget : IWidget
                 Btn.Next => Next,
                 Btn.Back10 => () => SeekBy(-10),
                 Btn.Fwd10 => () => SeekBy(10),
-                Btn.Speed => CycleSpeed,
                 Btn.Cc => () => SendHotkey(SubtitleKey(App)),
                 _ => Toggle,
             };
@@ -431,11 +549,11 @@ internal sealed class MediaWidget : IWidget
     public void DrawContent(Graphics g, int w, int h, float fade)
     {
         if (fade <= 0.01f) return;
-        string? title, artist; bool playing; TimeSpan pos, end; DateTime posAt;
+        string? title, artist; bool playing; TimeSpan pos, end, start; DateTime posAt;
         lock (_lock)
         {
             title = _title; artist = _artist; playing = _playing;
-            pos = _pos; end = _end; posAt = _posAt;
+            pos = _pos; end = _end; start = _start; posAt = _posAt;
         }
         if (title == null) return;
 
@@ -448,6 +566,9 @@ internal sealed class MediaWidget : IWidget
         DrawArt(g, artX, artY, artSize, fade);
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
+        bool rateOk0; lock (_lock) rateOk0 = _rateEnabled;
+        bool showSpeed = rateOk0 && IsVideo();
+        if (showSpeed) tw -= SpeedW + 12f;
         using var titleF = new Font("Segoe UI Semibold", 22f, GraphicsUnit.Pixel);
         using var bodyF = new Font("Segoe UI", 15f, GraphicsUnit.Pixel);
         using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
@@ -457,12 +578,13 @@ internal sealed class MediaWidget : IWidget
         bool onTitle = WidgetInput.Over && titleRow.Contains(WidgetInput.Mouse);
         using (var tb = new SolidBrush(Mul(White, fade)))
             DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, onTitle, dt);
-        if (!string.IsNullOrEmpty(artist))
-            using (var ab = new SolidBrush(Mul(Dim, fade)))
-                DrawLine(g, artist, bodyF, ab, tx, 66, tw);
+
+        using (var ab = new SolidBrush(Mul(Dim, fade)))
+            DrawLine(g, MetaLine(title, artist, FileFacts()), bodyF, ab, tx, 66, tw);
 
         var now = playing ? pos + (DateTime.UtcNow - posAt) : pos;
-        float frac = end > TimeSpan.Zero ? (float)Math.Clamp(now / end, 0, 1) : 0f;
+
+        float frac = end > start ? (float)Math.Clamp((now - start) / (end - start), 0, 1) : 0f;
         int epoch; lock (_lock) epoch = _trackEpoch;
         if (epoch != _shownEpoch) { _shownEpoch = epoch; _fracShown = frac; }
         _fracShown = _fracShown < 0 ? frac : Ease(_fracShown, frac, dt, 0.10f);
@@ -491,10 +613,11 @@ internal sealed class MediaWidget : IWidget
             using var eb = new SolidBrush(Mul(Dim, fade));
             float ty = barCy + bh / 2f + 3f;
 
-            var shown = _scrubbing ? end * _scrubFrac : now;
+            var span = end - start;
+            var shown = _scrubbing ? span * _scrubFrac : now - start;
             g.DrawString(Fmt(shown), timeF, eb, tx, ty);
-            var ts = g.MeasureString(Fmt(end), timeF);
-            g.DrawString(Fmt(end), timeF, eb, tx + tw - ts.Width, ty);
+            var ts = g.MeasureString(Fmt(span), timeF);
+            g.DrawString(Fmt(span), timeF, eb, tx + tw - ts.Width, ty);
         }
 
         var (vbar, mute) = VolLayout(w);
@@ -555,26 +678,89 @@ internal sealed class MediaWidget : IWidget
             if (kind == Btn.Cc) { Fx.DrawCcMark(g, rr, a); continue; }
             if (kind == Btn.Back10) { Fx.DrawSeekArrow(g, rr, forward: false, a); continue; }
             if (kind == Btn.Fwd10) { Fx.DrawSeekArrow(g, rr, forward: true, a); continue; }
-            if (kind == Btn.Speed) { double rate; lock (_lock) { rate = _rate; } DrawRateLabel(g, rr, rate, a); continue; }
             bool isPlay = kind == Btn.Play;
             string glyph = isPlay ? Glyph(playing ? 0xE769 : 0xE768)
                 : kind == Btn.Prev ? Glyph(0xE892) : Glyph(0xE893);
             DrawGlyphSoft(g, rr, glyph, (isPlay ? 22f : 17f) * sc, a, isPlay && !playing ? 1.5f : 0f);
         }
+
+        DrawSpeed(g, w, fade, dt, showSpeed);
+    }
+
+    private void DrawSpeed(Graphics g, int w, float fade, float dt, bool show)
+    {
+        if (!show)
+        {
+            _speedOpen = false;
+            _speedT = Ease(_speedT, 0f, dt, 0.05f);
+            if (_speedT < 0.01f) { _speedT = 0f; return; }
+        }
+        var label = SpeedRect(w);
+        var menu = MenuRect(w);
+        if (show)
+        {
+            var hot = label; hot.Inflate(10f, 8f);
+            bool over = WidgetInput.Over
+                && (hot.Contains(WidgetInput.Mouse) || (_speedOpen && menu.Contains(WidgetInput.Mouse)));
+            _speedOpen = over;
+            _speedT = Ease(_speedT, over ? 1f : 0f, dt, 0.05f);
+        }
+
+        double rate; lock (_lock) rate = _rate;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+
+        if (show)
+        {
+
+            using var lf = new Font("Segoe UI Semibold", 13f, GraphicsUnit.Pixel);
+            using var lb = new SolidBrush(Mul(White, fade * (0.62f + 0.38f * _speedT)));
+            using var sf = new StringFormat(StringFormat.GenericTypographic)
+            { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center };
+            var textBox = new RectangleF(label.X, label.Y, label.Width - 11f, label.Height);
+            g.DrawString(RateText(rate), lf, lb, textBox, sf);
+            float cx = label.Right - 5f, cy = label.Y + label.Height / 2f + 1f - 2f * _speedT;
+            using var cp = new Pen(Mul(White, fade * (0.45f + 0.4f * _speedT)), 1.4f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLines(cp, new[] { new PointF(cx - 3.5f, cy - 1.5f), new PointF(cx, cy + 2f),
+                                    new PointF(cx + 3.5f, cy - 1.5f) });
+        }
+
+        if (_speedT <= 0.01f) return;
+
+        float a = fade * _speedT;
+        var m = menu; m.Offset(0f, -6f * (1f - _speedT));
+        using (var shadow = new SolidBrush(Color.FromArgb((int)(70 * a), 0, 0, 0)))
+        using (var sp = Fx.Rounded(new RectangleF(m.X + 1f, m.Y + 2f, m.Width, m.Height), 11f))
+            g.FillPath(shadow, sp);
+        using (var back = new SolidBrush(Color.FromArgb((int)(232 * a), 28, 28, 32)))
+        using (var mp = Fx.Rounded(m, 11f))
+            g.FillPath(back, mp);
+        using (var edge = new Pen(Color.FromArgb((int)(46 * a), 255, 255, 255), 1f))
+        using (var mp2 = Fx.Rounded(m, 11f))
+            g.DrawPath(edge, mp2);
+
+        using var itemF = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        using var isf = new StringFormat(StringFormat.GenericTypographic)
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        for (int i = 0; i < Rates.Length; i++)
+        {
+            var r = ItemRect(w, i); r.Offset(0f, -6f * (1f - _speedT));
+            bool cur = Math.Abs(Rates[i] - rate) < 0.01;
+            bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
+            if (hov)
+                using (var hb = new SolidBrush(Color.FromArgb((int)(26 * a), 255, 255, 255)))
+                using (var hp = Fx.Rounded(new RectangleF(r.X + 3f, r.Y, r.Width - 6f, r.Height), 7f))
+                    g.FillPath(hb, hp);
+
+            using (var tb2 = new SolidBrush(Mul(White, a * (cur || hov ? 0.98f : 0.66f))))
+                g.DrawString(RateText(Rates[i]), itemF, tb2, r, isf);
+            if (cur)
+                using (var db = new SolidBrush(Mul(_accent == White ? White : _accent, a * 0.95f)))
+                    g.FillEllipse(db, r.X + 7f, r.Y + r.Height / 2f - 2f, 4f, 4f);
+        }
     }
 
     private static string Glyph(int codepoint) => ((char)codepoint).ToString();
-
-    private void DrawRateLabel(Graphics g, RectangleF r, double rate, float fade)
-    {
-        string t = RateText(rate);
-        float px = r.Height * (t.Length >= 5 ? 0.26f : 0.32f);
-        using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
-        using var b = new SolidBrush(Mul(White, fade * 0.92f));
-        using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(t, f, b, r, sf);
-    }
 
     private readonly float[] _btnHover = new float[8];
     private float _volHover, _seekHover;
@@ -670,11 +856,11 @@ internal sealed class MediaWidget : IWidget
     {
         get
         {
-            TimeSpan pos, end; bool playing; DateTime at; string? t;
-            lock (_lock) { pos = _pos; end = _end; playing = _playing; at = _posAt; t = _title; }
-            if (t == null || end <= TimeSpan.Zero) return -1f;
+            TimeSpan pos, end, start; bool playing; DateTime at; string? t;
+            lock (_lock) { pos = _pos; end = _end; start = _start; playing = _playing; at = _posAt; t = _title; }
+            if (t == null || end <= start) return -1f;
             var now = playing ? pos + (DateTime.UtcNow - at) : pos;
-            return (float)Math.Clamp(now / end, 0, 1);
+            return (float)Math.Clamp((now - start) / (end - start), 0, 1);
         }
     }
 
@@ -685,8 +871,22 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
+        float prog = RingProgress;
+
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
+
+        if (prog >= 0f)
+        {
+            var ringRect = new RectangleF(x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
+            using var ringPath = Fx.Rounded(ringRect, sz * 0.28f + 2.5f);
+            using (var track = new Pen(Mul(Track, fade * 0.9f), 1.7f))
+                g.DrawPath(track, ringPath);
+            using var pen = new Pen(Mul(_accent == White ? White : _accent, fade * 0.95f), 1.9f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            Fx.PathProgress(g, ringPath, prog, pen);
+        }
         DrawEqualizer(g, w - 14f, h / 2f, fade, playing);
     }
 

@@ -71,6 +71,45 @@ internal sealed class VlcWidget : IWidget
     private readonly MediaSessions _sessions;
     private readonly float[] _hover = new float[NBtn];
 
+    private int _seenTime = -1;
+    private long _seenAt;
+    private bool _scrubbing, _wasDown;
+    private float _scrubFrac, _seekHover, _fracShown = -1f;
+    private long _dtTick;
+
+    private float Dt()
+    {
+        long now = Environment.TickCount64;
+        float dt = _dtTick == 0 ? 1f / 60f : Math.Clamp((now - _dtTick) / 1000f, 0.001f, 0.1f);
+        _dtTick = now;
+        return dt;
+    }
+
+    private static float Ease(float cur, float target, float dt, float tau)
+        => cur + (target - cur) * (1f - MathF.Exp(-dt / MathF.Max(0.0001f, tau)));
+
+    private float Elapsed()
+    {
+        int seen = VlcHttp.Time;
+        if (seen < 0) { _seenTime = -1; return -1f; }
+        if (seen != _seenTime) { _seenTime = seen; _seenAt = Environment.TickCount64; }
+        float extra = VlcHttp.Online && VlcHttp.Playing ? (Environment.TickCount64 - _seenAt) / 1000f : 0f;
+        return seen + extra * (float)Math.Max(0.25, VlcHttp.Rate);
+    }
+
+    private float Progress()
+    {
+        int len = VlcHttp.Length;
+        float el = Elapsed();
+        if (len <= 0 || el < 0f) return -1f;
+        return Math.Clamp(el / len, 0f, 1f);
+    }
+
+    private static string Fmt(TimeSpan t) => t.TotalHours >= 1
+        ? ((int)t.TotalHours) + t.ToString(@"\:mm\:ss") : t.ToString(@"m\:ss");
+
+    private static RectangleF SeekRect(int w) { float tx = 26 + 132 + 22; return new RectangleF(tx, 108, w - tx - 26, 18); }
+
     public VlcWidget(MediaSessions sessions)
     {
         _sessions = sessions;
@@ -92,6 +131,8 @@ internal sealed class VlcWidget : IWidget
         ? (int)(VlcHttp.Rate * 100) + (VlcHttp.Playing ? 1 : 0) + (VlcHttp.SubsOn ? 2 : 0) : 0);
     public Color? Ring => IsActive ? Orange : null;
 
+    public float RingProgress => IsActive ? Progress() : -1f;
+
     private static readonly double[] SpeedPresets = { 1.0, 1.25, 1.5, 2.0 };
 
     private static readonly (string label, int taps)[] Speeds = { ("1×", 0), ("1.2×", 2), ("1.45×", 4), ("1.95×", 7) };
@@ -109,14 +150,20 @@ internal sealed class VlcWidget : IWidget
     public IReadOnlyList<(RectangleF rect, Action<PointF> onClick)> Buttons(int w, int h)
     {
         var r = BtnRects(w, h);
-        return new (RectangleF, Action<PointF>)[]
+        var seek = SeekRect(w);
+        var list = new List<(RectangleF, Action<PointF>)>();
+
+        if (VlcHttp.Online && VlcHttp.Length > 0)
+            list.Add((seek, pt => VlcHttp.SeekTo((pt.X - seek.X) / Math.Max(1f, seek.Width))));
+        list.AddRange(new (RectangleF, Action<PointF>)[]
         {
             (r[0], _ => Seek(-10)),
             (r[1], _ => Play()),
             (r[2], _ => Seek(10)),
             (r[3], _ => CycleSpeed()),
             (r[4], _ => Subtitle()),
-        };
+        });
+        return list;
     }
 
     public void DrawContent(Graphics g, int w, int h, float fade)
@@ -148,8 +195,51 @@ internal sealed class VlcWidget : IWidget
         using (var sf = new StringFormat(StringFormat.GenericTypographic)
         { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap | (Fx.IsRtl(name) ? StringFormatFlags.DirectionRightToLeft : 0) })
             g.DrawString(name, titleF, tb, new RectangleF(tx, 40, tw, 30), sf);
+
+        string? res = VlcHttp.Online ? VlcHttp.Resolution : null;
+        string info = MediaWidget.MetaLine(name, null, MediaFileInfo.Size(name, VlcMonitor.Poke) is { } sz
+            ? MediaFileInfo.Human(sz) : null, res);
         using (var lb = new SolidBrush(Mul(Dim, fade)))
-            g.DrawString("VLC media player", bodyF, lb, tx, 76);
+            g.DrawString(info, bodyF, lb, tx, 76);
+
+        float dt = Dt();
+        var seek = SeekRect(w);
+        float frac = Progress();
+        if (frac >= 0f)
+        {
+            if (_fracShown < 0f) _fracShown = frac;
+            var hit = seek; hit.Inflate(6f, 10f);
+            bool on = WidgetInput.Over && hit.Contains(WidgetInput.Mouse);
+            if (WidgetInput.Down && !_wasDown && on && VlcHttp.Online) _scrubbing = true;
+            if (_scrubbing)
+            {
+                _scrubFrac = Math.Clamp((WidgetInput.Mouse.X - seek.X) / Math.Max(1f, seek.Width), 0f, 1f);
+                if (!WidgetInput.Down) { VlcHttp.SeekTo(_scrubFrac); _scrubbing = false; _fracShown = _scrubFrac; }
+            }
+            _wasDown = WidgetInput.Down;
+            _seekHover = Ease(_seekHover, _scrubbing ? 1f : 0f, dt, 0.07f);
+            _fracShown = _scrubbing ? _scrubFrac : Ease(_fracShown, frac, dt, 0.10f);
+
+            const float barCy = 118.5f, bhRest = 5f;
+            float bh = bhRest * (1f + 2f * _seekHover);
+            float by = barCy - bh / 2f;
+            using (var tb2 = new SolidBrush(Mul(Color.FromArgb(46, 255, 255, 255), fade)))
+                g.FillRectangle(tb2, tx, by, tw, bh);
+            if (_fracShown > 0f)
+                using (var fb2 = new SolidBrush(Mul(White, fade)))
+                    g.FillRectangle(fb2, tx, by, tw * _fracShown, bh);
+
+            int len = VlcHttp.Length;
+            using var timeF = new Font("Segoe UI", 12f, GraphicsUnit.Pixel);
+            using var eb = new SolidBrush(Mul(Dim, fade));
+            float ty = barCy + bh / 2f + 3f;
+            var shown = TimeSpan.FromSeconds(_scrubbing ? _scrubFrac * len : Math.Max(0f, Elapsed()));
+            g.DrawString(Fmt(shown), timeF, eb, tx, ty);
+            var total = Fmt(TimeSpan.FromSeconds(len));
+            var ts = g.MeasureString(total, timeF);
+            g.DrawString(total, timeF, eb, tx + tw - ts.Width, ty);
+        }
+        else _wasDown = WidgetInput.Down;
 
         var rects = BtnRects(w, h);
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -194,6 +284,8 @@ internal sealed class VlcWidget : IWidget
         string? name = VlcMonitor.Name;
         if (name == null) return;
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
+        float prog = Progress();
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.34f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 30, Orange);
         var icon = IconImage;
         if (icon != null)
@@ -203,6 +295,16 @@ internal sealed class VlcWidget : IWidget
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.DrawImage(icon, x + 2, y + 2, sz - 4, sz - 4);
             g.ResetClip();
+        }
+        if (prog >= 0f)
+        {
+            var ringRect = new RectangleF(x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
+            using var ringPath = Fx.Rounded(ringRect, sz * 0.28f + 2.5f);
+            using (var track = new Pen(Mul(Color.FromArgb(46, 255, 255, 255), fade * 0.9f), 1.7f))
+                g.DrawPath(track, ringPath);
+            using var pen = new Pen(Mul(Orange, fade * 0.95f), 1.9f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            Fx.PathProgress(g, ringPath, prog, pen);
         }
         using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
