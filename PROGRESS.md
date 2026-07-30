@@ -129,20 +129,34 @@ A held line whose room has since shrunk is re-rolled rather than drawn too small
 elapsed clock grows a digit mid-hold. `Fact` respects the same budget, so "writing SomethingLong.cs…"
 gives way to the voice. The font floor is 12.5px, and reaching it should now be rare.
 
-### The pinned pill vanished in a fullscreen video
+### A pinned pill over fullscreen video: three attempts, one kept, and a platform wall
 The pin already forces the fullscreen-hide off (`bool fullscreen = !_pinned && IsFullscreen(fg)`), so the
-pill was not being hidden — it was being **buried**, and two things did it.
+pill was never being *hidden* in a fullscreen video. Everything below was an attempt to work out what was
+happening instead. **It is still not visible there, and the honest conclusion is that it cannot be made to
+be** — recorded here so nobody spends another evening on it.
 
-`ProbeBehind` hides the window for 12ms to see what is behind it, then calls `SW_SHOWNOACTIVATE`. That
-re-inserts the window at the *bottom of the topmost band*. It runs on every foreground change — and
-entering a fullscreen video **is** a foreground change — so the pill dropped underneath the player at
-exactly the wrong moment and stayed there until the next once-a-second `AssertTopmost`. A probe has to leave
-the z-order as it found it, so it re-asserts now.
+**Kept.** `ProbeBehind` hides the window for 12ms to see what is behind it, then calls
+`SW_SHOWNOACTIVATE`, which re-inserts it at the *bottom of the topmost band*. It runs on every foreground
+change, so any window that is itself topmost could end up over the pill until the next once-a-second
+`AssertTopmost`. A probe must leave the z-order as it found it, so it re-asserts now. That is a real fix on
+its own merits and has nothing to do with fullscreen.
 
-And once a second is enough to *recover* a buried pill but not to *hold* one over a fullscreen video: the
-player keeps re-asserting itself, and DWM's independent-flip path stops compositing anything over a
-fullscreen surface until an overlapping topmost window insists. While pinned and something is covering the
-screen, it now insists every frame — one `SetWindowPos` with no move, size or activate.
+**Reverted.** Asserting `HWND_TOPMOST` *every frame* while pinned and covered. Changed nothing, and paid a
+syscall per frame for a premise that turned out to be wrong.
+
+**Reverted.** Dropping `WDA_EXCLUDEFROMCAPTURE` while pinned over a fullscreen app, on the theory that a
+capture-excluded window is handled outside the composed frame and so is never composited over a flip-model
+surface. It was a good theory and it is **wrong**: measured on the real thing, the pill still did not appear.
+It also cost the glass its screen-grab fast path (`_capturable` disables it) and put the pill into screen
+recordings, so it was a real cost for no gain — exactly the kind of trade to undo rather than keep "just in
+case".
+
+What is left is the platform: over a fullscreen flip-model surface DWM composites the shell's own z-bands
+and nothing else, and the band above one belongs to **uiAccess-signed** apps installed under `Program Files`
+— which an unpackaged app living in `LOCALAPPDATA` cannot be. That is how the taskbar and Game Bar manage
+it. `SetWindowBand` without uiAccess fails, and true exclusive-fullscreen DirectX cannot be overlaid by any
+ordinary window at all. So: fullscreen video keeps the screen, the once-a-second assert stays for ordinary
+windows, and the pill comes back when the video does not own the screen any more.
 
 ### The fallback icon, and why the real one never came
 Two separate faults, reported together.

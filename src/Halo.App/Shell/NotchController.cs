@@ -680,13 +680,15 @@ internal sealed class NotchController
         var fg = Win32.GetForegroundWindow();
         DetectAgentCancel(fg);
         DetectLanguageChange(fg);
-        bool coveringApp = _notch.IsFullscreen(fg);
-        bool fullscreen = !_pinned && coveringApp;             // pinned: stay over games/movies
-        // Once a second is enough to recover a buried pill, but not to HOLD one over a fullscreen video: the
-        // player keeps re-asserting itself, and dwm's independent-flip path stops compositing anything over
-        // a fullscreen surface until a topmost window overlapping it insists. While pinned and something is
-        // covering the screen, insist every frame - it is one SetWindowPos with no move, size or activate.
-        if (_pinned && coveringApp) _notch.AssertTopmost();
+        // A pinned pill still does not appear over a fullscreen video, and it is not for want of trying here:
+        // asserting HWND_TOPMOST every single frame changed nothing, and neither did dropping
+        // WDA_EXCLUDEFROMCAPTURE (both tried, both measured, both reverted - the second one cost the glass
+        // its fast path for nothing). Over a fullscreen flip-model surface dwm composites the shell's own
+        // z-bands and nothing else, and a band above one belongs to uiAccess-signed apps installed under
+        // Program Files - which an unpackaged app in LOCALAPPDATA cannot be. So the once-a-second assert in
+        // CheckAlerts stays, which is what recovers a pill buried by ordinary windows, and fullscreen video
+        // is left as the platform's answer rather than papered over with something that breaks other things.
+        bool fullscreen = !_pinned && _notch.IsFullscreen(fg); // pinned: stay over games/movies
         var active = fullscreen ? [] : ActiveIndices();
         // a live/queued toast overrides the fullscreen hide: the pill stays empty (active = [])
         // but the banner still wakes and renders over the game
