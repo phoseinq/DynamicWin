@@ -591,6 +591,28 @@ internal static class Fx
     private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
 
     /// <summary>
+    /// How many characters of ordinary lowercase text fit in <paramref name="avail"/> pixels at
+    /// <paramref name="px"/>, measured with the real font rather than guessed from an average. The voice has
+    /// to know its budget BEFORE it picks a line (see <c>MoodContext.MaxChars</c>), or the renderer ends up
+    /// shrinking a too-long line until it is present but unreadable.
+    /// </summary>
+    internal static int FitChars(Graphics g, float avail, float px)
+    {
+        if (avail <= 4f || px <= 1f) return 0;
+        try
+        {
+            using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+            // a sample of the kind of text these lines actually are: one glyph would be meaningless on a
+            // proportional face, and "iiii" or "MMMM" would each be wrong in a different direction
+            const string sample = "the quick brown fox jumps over it";
+            float em = g.MeasureString(sample, f, int.MaxValue, StringFormat.GenericTypographic).Width
+                / sample.Length;
+            return em > 0.5f ? (int)MathF.Floor(avail / em) : 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>
     /// The colour for a mood slot — the ring's hue comes from the SAME slot the words come from, so the
     /// two cannot drift: whatever the pill is saying, the ring is the colour of that. Four flat states
     /// could not carry this; a dozen can, because each one is a thing the product also names out loud.

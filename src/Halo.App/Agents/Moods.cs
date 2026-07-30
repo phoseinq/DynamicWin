@@ -37,7 +37,12 @@ internal readonly record struct MoodContext(
     int? Hour = null,
     // what the tool is acting on - the file, the program, the host. Part of the situation like everything
     // else here, which is why it rides in the context rather than as another parameter on Line().
-    string? Target = null);
+    string? Target = null,
+    // How many characters will actually FIT, measured by the caller against the space it has at the
+    // smallest font it is willing to draw. 0 = unlimited (tests, the expanded panel). Without this the
+    // voice picked a nineteen-character line for a gap that holds twelve and the renderer shrank the font
+    // to 9px to make it true - the words were all there and none of them could be read.
+    int MaxChars = 0);
 
 internal static class Moods
 {
@@ -565,17 +570,20 @@ internal static class Moods
         // key == slot means nothing in the ladder had anything to say, so the fact gets its turn. A fact is
         // not held for a minute the way a rolled line is - it is not a mood, it is what is happening, so it
         // changes when the tool does.
-        if (key == slot && Fact(slot, ctx.Target) is { } f) return f;
+        if (key == slot && Fact(slot, ctx.Target, ctx.MaxChars) is { } f) return f;
         string? stale = null;
         lock (Gate)
         {
             if (Held.TryGetValue(key, out var h))
             {
-                if (now - h.at < Hold) return h.line;
+                // a held line whose room has since shrunk is re-rolled rather than drawn too small: the
+                // elapsed clock grows a digit and the gap it leaves the words gets narrower mid-hold
+                if (now - h.at < Hold && (ctx.MaxChars <= 0 || h.line.Length <= ctx.MaxChars))
+                    return h.line;
                 stale = h.line;   // expired: reroll, but away from the line that was just up
             }
         }
-        var picked = Pick(key, stale);
+        var picked = Pick(key, stale, ctx.MaxChars);
         lock (Gate) Held[key] = (picked, now);
         return picked;
     }
@@ -593,7 +601,7 @@ internal static class Moods
     /// not fit the pill — a line the renderer has to clip reads as a fault, and the voice is a better
     /// answer than a chopped filename.
     /// </summary>
-    internal static string? Fact(string? slot, string? target)
+    internal static string? Fact(string? slot, string? target, int maxChars = 0)
     {
         if (string.IsNullOrWhiteSpace(target)) return null;
         var verb = slot switch
@@ -612,7 +620,8 @@ internal static class Moods
         };
         if (verb is null) return null;
         var line = verb + target.Trim() + "…";
-        return line.Length <= MaxWidth ? line : null;
+        int ceiling = maxChars > 0 ? Math.Min(maxChars, MaxWidth) : MaxWidth;
+        return line.Length <= ceiling ? line : null;
     }
 
     internal static string PrettyTool(string? tool)
@@ -635,10 +644,24 @@ internal static class Moods
     /// line that just expired: a reroll landing on it again looks exactly like the frozen pill this whole
     /// mechanism exists to prevent, and with a two-line set that is a coin flip every minute.
     /// </summary>
-    internal static string Pick(string key, string? avoid = null)
+    internal static string Pick(string key, string? avoid = null, int maxChars = 0)
     {
         var set = Set(key);
         if (set.Length == 0) return Fixed(key);
+        // Only the lines that fit are candidates. Every set keeps a few short ones ("hmm…", "reading…",
+        // "digging…"), so a tight pill still gets the voice - just its terser half. If nothing fits, the
+        // shortest line in the set is the closest thing to the truth that can be read at all.
+        if (maxChars > 0)
+        {
+            var fits = Array.FindAll(set, s => s.Length <= maxChars);
+            if (fits.Length == 0)
+            {
+                var shortest = set[0];
+                foreach (var s in set) if (s.Length < shortest.Length) shortest = s;
+                return shortest;
+            }
+            set = fits;
+        }
         lock (Gate)
         {
             int i = Rng.Next(set.Length);

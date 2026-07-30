@@ -16,6 +16,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
     private static readonly Color Red = Color.FromArgb(229, 72, 77);
     private static readonly Color Mint = Color.FromArgb(82, 224, 163);   // just compacted: there is room again
+    private const float MinVerbPx = 12.5f;   // below this the voice is present rather than readable
     private static readonly Color Track = Color.FromArgb(38, 255, 255, 255);
     private static readonly Color White = Color.FromArgb(238, 255, 255, 255);
     private static readonly Color Dim = Color.FromArgb(150, 255, 255, 255);
@@ -147,6 +148,22 @@ internal sealed class ClaudeCodeWidget : IWidget
         // so "thinking" read as a shadow around the icon and the user reported the ring never turning yellow.
         using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
+        // A SECOND colour on the same ring: the spent share of the context window, as an arc from 12 o'clock
+        // in the band colour the /compact warning fires on. The circle says what it is doing; the arc says
+        // how much room is left, which is the more actionable of the two and which the collapsed pill could
+        // not say at all - the words had to carry it alone. Hidden whenever a state owns the whole ring
+        // (outage, spent limit, running compact), because then the ring is already the message.
+        //
+        // It is a SEPARATE, thinner ring 3px outside the base one, not a fatter stroke on the same circle:
+        // drawn on top, a 92% arc covered the whole base ring, so the activity hue vanished and a full red
+        // sweep read as an outage. Two concentric rings keep both readable, which is what the expanded
+        // panel's three arcs already do.
+        double ctxArc = ContextFrac(st);
+        if (!RingIsTheMessage(st) && ctxArc > 0.02)
+            using (var arc = new Pen(Mul(ContextColour(ctxArc), fade * 0.8f), 1.7f)
+                   { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawArc(arc, x - 5.5f, y - 5.5f, sz + 11f, sz + 11f,
+                    -90f, (float)Math.Clamp(ctxArc, 0.0, 1.0) * 360f);
         if (ClaudeIcon != null) DrawIcon(g, ClaudeIcon, x, y, sz, fade, sz / 2f); // circular
         else
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))
@@ -154,7 +171,20 @@ internal sealed class ClaudeCodeWidget : IWidget
 
         // balanced zones: verb hugs the icon, the timer owns the right edge — text length changes
         // never leave a lopsided gap. Moods (idle/offline) centre in the whole free space instead.
-        var mood = Mood(st);
+        //
+        // The layout is measured BEFORE the words are chosen, because the gap is what decides how long a
+        // line may be. It used to run the other way round: the voice picked a nineteen-character line, the
+        // gap held twelve, and the renderer shrank the font until it fitted - 9px, which is present rather
+        // than readable. Now the words are chosen to fit and the font stays legible.
+        string el0 = LimitHit ? LimitReset() : Elapsed(st);
+        if (Compacting(st) && !LimitHit && el0.Length > 0) el0 = CompactPct(st!) + " · " + el0;
+        float textX0 = x + sz + 11;
+        if (st?.State == "waiting_input") textX0 += 16;
+        using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
+        float elW0 = el0.Length > 0
+            ? g.MeasureString(el0, elFont, int.MaxValue, StringFormat.GenericTypographic).Width : 0;
+        float avail0 = (w - 14) - textX0 - (elW0 > 0 ? elW0 + 10 : 0);
+        var mood = Mood(st) with { MaxChars = Fx.FitChars(g, avail0, MinVerbPx) };
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
             "working" => ToolVerb(Glow(st).Tool, mood),
@@ -162,8 +192,7 @@ internal sealed class ClaudeCodeWidget : IWidget
             "waiting_input" => "your move ;)",
             _ => IdleMood(st, mood),
         });
-        string el = LimitHit ? LimitReset() : Elapsed(st); // limit shows regardless of session state
-        if (Compacting(st) && !LimitHit && el.Length > 0) el = CompactPct(st!) + " · " + el;
+        string el = el0;  // limit shows regardless of session state; measured above, before the wording
         if (verb != _shownKey) { _shownKey = verb; _appear = 0f; } // timer ticking doesn't retrigger
         else if (_appear < 1f) _appear = Math.Min(1f, _appear + 0.1f);
         float e = 1f - MathF.Pow(1f - _appear, 3);
@@ -180,7 +209,10 @@ internal sealed class ClaudeCodeWidget : IWidget
         using (var fm = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel))
         {
             var m0 = g.MeasureString(verb, fm, int.MaxValue, StringFormat.GenericTypographic);
-            if (m0.Width > avail && m0.Width > 0) px = Math.Max(9f, px * avail / m0.Width);
+            // the floor was 9px, which is where "the words are there" stops meaning "the words can be read".
+            // Now that the wording is chosen against the space it will get (MoodContext.MaxChars), shrinking
+            // this far should be rare - and when it does happen the line stays legible instead.
+            if (m0.Width > avail && m0.Width > 0) px = Math.Max(MinVerbPx, px * avail / m0.Width);
         }
         using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade * e));

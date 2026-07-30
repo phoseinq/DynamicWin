@@ -2,7 +2,7 @@
 
 ## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
 
-Release 0 warnings / 0 errors, **365 tests** (up from 259; five new test files). Deployed by DLL hot-swap
+Release 0 warnings / 0 errors, **371 tests** (up from 259; five new test files). Deployed by DLL hot-swap
 and relaunched. **Mirror published to `origin/V3`.**
 
 ### "still cooking…" forever — the bug under the feature request
@@ -98,8 +98,47 @@ with a stale service. Past 30 seconds pending, the quiet-gap rule is dropped —
 cheaper than a session of them. The cooldown is *not* dropped; it exists to stop restart thrash and
 outranks the sound. Both rules stay pure and unit-tested in `ApplyDelayMs`.
 
-Not verified by ear from here — the change is reasoned from the service's read-once behaviour and the
-gate's own log, so it wants a listen.
+**And it was still audible after all that** — reported again, which killed the theory. All 139 learned apps
+had `ShowBanner=0` *and* `Sound=0` in the registry, the service had been restarted, no banner ever
+appeared, and the sound still did. So whatever honours `ShowBanner` is not what decides the sound, and the
+per-app `Sound` value — which Windows itself writes — is not the switch.
+
+The switch that is: the **global** one, Settings › System › Notifications › "Allow notifications to play
+sounds", a single DWORD (`NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND`) at the root of the same key, absent
+by default and absent-means-on. It is a global change and it is treated like every other one here: the
+original is recorded before it is touched, so `Restore()` puts it back — and since it was *unset*, restore
+means deleting it, returning Windows to its own default. Halo has taken over presenting these
+notifications, so the OS playing its own sound over Halo's silent banner is a duplicate, not a feature.
+
+Verified live: `silenced global notification sound (was unset)` in the log, `= 0` in the registry, `global`
+recorded in `banner-orig.tsv` with an empty original, and the launch restart now firing in the same second
+as `enable` instead of twelve seconds later.
+
+### The words were all there and none of them could be read
+Reported: the text on the collapsed pill becomes unreadable when it shrinks. It did, and the order of
+operations was the bug — the voice picked a line, *then* the renderer measured it against the gap and
+shrank the font to fit, with a floor of **9px**. A nineteen-character line in twelve characters of room is
+9px, which is present rather than readable.
+
+Now the layout is measured **before** the words are chosen: `Fx.FitChars` asks the real font how many
+characters fit in the real gap at the smallest size worth drawing, and that budget rides in
+`MoodContext.MaxChars`. `Pick` only considers lines that fit — every set keeps a few short ones, so a tight
+pill still gets the voice, just its terser half ("hmm, ok…", "sifting…", "on fumes…") — and if nothing
+fits, the shortest line in the set is drawn, because a too-long true line still beats a made-up short one.
+A held line whose room has since shrunk is re-rolled rather than drawn too small, which happens when the
+elapsed clock grows a digit mid-hold. `Fact` respects the same budget, so "writing SomethingLong.cs…"
+gives way to the voice. The font floor is 12.5px, and reaching it should now be rare.
+
+### A second colour on the ring
+"More colours around the ring", so: the spent share of the **context window** as a thin arc from 12
+o'clock, in the band colour the `/compact` warning fires on (blue → amber → red). The pill's ring now
+carries two facts at once — the circle is what it is doing, the arc is how much room is left — and the
+collapsed pill could not say the second one at all before; the words had to carry it alone.
+
+It is a *separate, thinner ring 3px outside* the base one, not a fatter stroke on the same circle. Drawn on
+the same circle first, a 92% arc covered the whole base ring: the activity hue vanished and a full red
+sweep read as an outage, which is the one thing red is reserved for. Two concentric rings keep both
+readable — the same thing the expanded panel's three arcs already do.
 
 ### One mapping for the words and the colour
 `ToolSlot(tool)` is now the single place a tool becomes a slot, on both widgets, and **both** the wording

@@ -75,7 +75,8 @@ internal static class BannerGate
             // reported bug. The refresh restart is now the first thing that happens, and the quiet gap goes
             // back to governing the restarts that follow.
             foreach (var aumid in new List<string>(_orig.Keys))
-                WriteZero(aumid);        // re-assert (usually already 0)
+                if (aumid != GlobalKey) WriteZero(aumid);   // re-assert (usually already 0)
+            SilenceGlobalSound();
         }
         SeedKnownApps();                 // and pre-empt everything Windows already knows about
 
@@ -194,6 +195,53 @@ internal static class BannerGate
         catch (Exception ex) { Log($"suppress {aumid} failed: {ex.Message}"); return false; }
     }
 
+    // The per-app trio was not enough, reported twice from a machine where all 139 learned apps already had
+    // ShowBanner=0 AND Sound=0 in the registry and the service had been restarted: no banner ever appeared
+    // and the sound still did. So whatever honours ShowBanner is not what decides the sound, and the switch
+    // that does is the global one - Settings › System › Notifications › "Allow notifications to play sounds"
+    // - which lives here as a single DWORD and is absent by default (absent = sounds on).
+    //
+    // It is a global change and it is treated like every other one here: the original is recorded before it
+    // is touched, and Restore() puts it back (deleting it if we were the ones who introduced it). Halo has
+    // taken over presenting these notifications, so the OS playing its own sound over Halo's silent banner
+    // is a duplicate, not a feature.
+    private const string GlobalSoundValue = "NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND";
+    private const string GlobalKey = "global";   // not a valid AUMID, so it cannot collide with an app
+
+    private static bool SilenceGlobalSound()
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(SettingsPath, writable: true);
+            if (k == null) return false;
+            var now = k.GetValue(GlobalSoundValue) as int?;
+            if (now == 0) return false;                       // already silent, nothing to apply
+            if (!_orig.ContainsKey(GlobalKey))
+            {
+                _orig[GlobalKey] = now;                       // null = we introduced it → Restore removes it
+                AppendState(GlobalKey, now);
+            }
+            k.SetValue(GlobalSoundValue, 0, RegistryValueKind.DWord);
+            Log($"silenced global notification sound (was {now?.ToString() ?? "unset"})");
+            return true;
+        }
+        catch (Exception ex) { Log("global sound off failed: " + ex.Message); return false; }
+    }
+
+    private static void RestoreGlobalSound()
+    {
+        if (!_orig.TryGetValue(GlobalKey, out var prior)) return;
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(SettingsPath, writable: true);
+            if (k == null) return;
+            if (prior is int p) k.SetValue(GlobalSoundValue, p, RegistryValueKind.DWord);
+            else k.DeleteValue(GlobalSoundValue, throwOnMissingValue: false);
+            Log("restored global notification sound");
+        }
+        catch { }
+    }
+
     // WpnUserService only re-reads per-app settings on restart, so coalesce a burst of new suppressions
     // into a single restart once the notifications have gone quiet.
     private static void ScheduleApply()
@@ -247,8 +295,10 @@ internal static class BannerGate
     {
         lock (_lock)
         {
+            RestoreGlobalSound();
             foreach (var (aumid, prior) in _orig)
             {
+                if (aumid == GlobalKey) continue;   // not an app: handled above, and has no key of its own
                 try
                 {
                     using var k = Registry.CurrentUser.OpenSubKey(SettingsPath + "\\" + aumid, writable: true);

@@ -108,3 +108,48 @@ public class ToolTargetTests
         Assert.Equal("brainstorming…", Moods.Fact("skill", "brainstorming"));
     }
 }
+
+// The pill's gap is narrow and it narrows further when the elapsed clock grows a digit. The words are now
+// chosen against the room they will actually get, because the alternative was what shipped: a nineteen
+// character line in twelve characters of space, and a renderer shrinking the font to 9px to make that true.
+public class FittingTests
+{
+    [Theory]
+    [InlineData(8)]
+    [InlineData(11)]
+    [InlineData(14)]
+    [InlineData(22)]
+    public void EverySlotCanSpeakWithinABudget(int budget)
+    {
+        foreach (var slot in new[] { "unknown", "running", "reading", "writing", "digging", "delegating",
+                                     "compacting", "idle", "asking", "consulting", "watching" })
+        {
+            var line = Moods.Pick(slot, avoid: null, maxChars: budget);
+            // the shortest line in a set is the floor: if even that does not fit, it is still what gets
+            // drawn, because a too-long true line beats a made-up short one
+            int floor = int.MaxValue;
+            foreach (var s in Moods.Set(slot)) floor = System.Math.Min(floor, s.Length);
+            Assert.True(line.Length <= System.Math.Max(budget, floor),
+                $"{slot} answered '{line}' ({line.Length}) for a budget of {budget}");
+        }
+    }
+
+    // a fact is a fact, but it still has to be readable: too long for the room means the voice answers
+    [Fact]
+    public void ATightBudgetTurnsAFactBackIntoTheVoice()
+    {
+        Assert.Null(Moods.Fact("writing", "SomethingLong.cs", maxChars: 10));
+        Assert.Equal("writing Fx.cs…", Moods.Fact("writing", "Fx.cs", maxChars: 14));
+    }
+
+    // and the held line is re-rolled when its room shrinks, rather than being drawn too small
+    [Fact]
+    public void AHeldLineGivesWayWhenTheRoomShrinks()
+    {
+        var now = System.DateTime.UtcNow;
+        var roomy = Moods.Line("digging", new MoodContext(Hour: 14, MaxChars: 22), now);
+        var tight = Moods.Line("digging", new MoodContext(Hour: 14, MaxChars: 9), now);
+        Assert.True(tight.Length <= 9, $"'{tight}' is too long for the space it was given");
+        if (roomy.Length > 9) Assert.NotEqual(roomy, tight);
+    }
+}
