@@ -44,7 +44,8 @@ internal static class BannerGate
         {
 
             foreach (var aumid in new List<string>(_orig.Keys))
-                WriteZero(aumid);
+                if (aumid != GlobalKey) WriteZero(aumid);
+            SilenceGlobalSound();
         }
         SeedKnownApps();
 
@@ -135,6 +136,43 @@ internal static class BannerGate
         catch (Exception ex) { Log($"suppress {aumid} failed: {ex.Message}"); return false; }
     }
 
+    private const string GlobalSoundValue = "NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND";
+    private const string GlobalKey = "global";
+
+    private static bool SilenceGlobalSound()
+    {
+        try
+        {
+            using var k = Registry.CurrentUser.CreateSubKey(SettingsPath, writable: true);
+            if (k == null) return false;
+            var now = k.GetValue(GlobalSoundValue) as int?;
+            if (now == 0) return false;
+            if (!_orig.ContainsKey(GlobalKey))
+            {
+                _orig[GlobalKey] = now;
+                AppendState(GlobalKey, now);
+            }
+            k.SetValue(GlobalSoundValue, 0, RegistryValueKind.DWord);
+            Log($"silenced global notification sound (was {now?.ToString() ?? "unset"})");
+            return true;
+        }
+        catch (Exception ex) { Log("global sound off failed: " + ex.Message); return false; }
+    }
+
+    private static void RestoreGlobalSound()
+    {
+        if (!_orig.TryGetValue(GlobalKey, out var prior)) return;
+        try
+        {
+            using var k = Registry.CurrentUser.OpenSubKey(SettingsPath, writable: true);
+            if (k == null) return;
+            if (prior is int p) k.SetValue(GlobalSoundValue, p, RegistryValueKind.DWord);
+            else k.DeleteValue(GlobalSoundValue, throwOnMissingValue: false);
+            Log("restored global notification sound");
+        }
+        catch { }
+    }
+
     private static void ScheduleApply()
     {
         lock (_lock)
@@ -183,8 +221,10 @@ internal static class BannerGate
     {
         lock (_lock)
         {
+            RestoreGlobalSound();
             foreach (var (aumid, prior) in _orig)
             {
+                if (aumid == GlobalKey) continue;
                 try
                 {
                     using var k = Registry.CurrentUser.OpenSubKey(SettingsPath + "\\" + aumid, writable: true);

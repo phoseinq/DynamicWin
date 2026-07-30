@@ -492,6 +492,21 @@ internal static class Fx
 
     private static readonly Color RingHot = Color.FromArgb(255, 122, 36);
 
+        internal static int FitChars(Graphics g, float avail, float px)
+    {
+        if (avail <= 4f || px <= 1f) return 0;
+        try
+        {
+            using var f = new Font("Segoe UI Semibold", px, GraphicsUnit.Pixel);
+
+            const string sample = "the quick brown fox jumps over it";
+            float em = g.MeasureString(sample, f, int.MaxValue, StringFormat.GenericTypographic).Width
+                / sample.Length;
+            return em > 0.5f ? (int)MathF.Floor(avail / em) : 0;
+        }
+        catch { return 0; }
+    }
+
         internal static Color SlotColor(string? slot) => slot switch
     {
         "running" => Color.FromArgb(62, 207, 92),
