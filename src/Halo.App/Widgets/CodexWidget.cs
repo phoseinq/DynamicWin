@@ -158,13 +158,6 @@ internal sealed class CodexWidget : IWidget
 
         using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
-
-        double ctxArc = ContextFrac(st);
-        if (!RingIsTheMessage(st) && ctxArc > 0.02)
-            using (var arc = new Pen(Mul(ContextColour(ctxArc), fade * 0.8f), 1.7f)
-                   { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawArc(arc, x - 5.5f, y - 5.5f, sz + 11f, sz + 11f,
-                    -90f, (float)Math.Clamp(ctxArc, 0.0, 1.0) * 360f);
         if (OpenAiIcon != null) DrawIcon(g, OpenAiIcon, x, y, sz, fade, sz / 2f);
         else
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))

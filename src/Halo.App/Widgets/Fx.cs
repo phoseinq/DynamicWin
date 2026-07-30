@@ -510,16 +510,19 @@ internal static class Fx
         internal static Color SlotColor(string? slot) => slot switch
     {
         "running" => Color.FromArgb(62, 207, 92),
-        "reading" or "peeking" or "fetching" or "searching"
-            => Color.FromArgb(53, 208, 232),
+        "reading" or "peeking" => Color.FromArgb(53, 208, 232),
+        "fetching" or "searching" => Color.FromArgb(20, 190, 175),
         "writing" or "patching" or "publishing"
             => Color.FromArgb(169, 139, 255),
 
-        "digging" or "reviewing" or "planning" or "plotting" or "skill"
-            => Color.FromArgb(191, 215, 62),
+        "digging" or "reviewing" => Color.FromArgb(170, 220, 50),
+        "planning" or "plotting" or "skill"
+            => Color.FromArgb(240, 196, 60),
 
-        "delegating" or "consulting" or "watching"
+        "delegating" or "consulting"
             => Color.FromArgb(190, 80, 175),
+
+        "watching" => Color.FromArgb(150, 160, 200),
         "asking" => Color.FromArgb(255, 95, 138),
         "unknown" => Color.FromArgb(255, 150, 26),
         "compacting" => Color.FromArgb(91, 157, 255),
