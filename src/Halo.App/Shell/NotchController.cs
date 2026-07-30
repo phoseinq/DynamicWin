@@ -193,7 +193,6 @@ internal sealed class NotchController
     private Win32.POINT _holdAnchor;
     private int _moveGrabDX; // cursor-X − pill-centre at grab, so the pill doesn't jump on pickup
     private bool _pinned;   // pin button: keep the pill on top of everything, even fullscreen apps
-    private bool _capturableNow;   // the affinity actually applied, so the flag is only pushed when it changes
     private float _pinHov;  // eased 0..1 hover brightness, so the glyph breathes instead of snapping
     private float _shrink;  // no-app tuck-away: 0 = normal pill, 1 = invisible alpha≈1 drop-catch strip
     private bool _empty; // no active widgets: pill stays visible but renders blank
@@ -296,7 +295,6 @@ internal sealed class NotchController
         LoadOffset(); // restore where the user last parked the pill
         LoadRecordable();
         _notch.SetCapturable(_recordable);
-        _capturableNow = _recordable;
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f; // boot straight into the right size, no opening animation
         if (!_empty) _primary = active[0];
@@ -689,20 +687,6 @@ internal sealed class NotchController
         // a fullscreen surface until a topmost window overlapping it insists. While pinned and something is
         // covering the screen, insist every frame - it is one SetWindowPos with no move, size or activate.
         if (_pinned && coveringApp) _notch.AssertTopmost();
-
-        // ...and topmost was still not enough, because the pill also carries WDA_EXCLUDEFROMCAPTURE. That
-        // flag is not only about screenshots: a window excluded from capture is handled outside the normal
-        // composed frame, and over a fullscreen flip-model surface (a video player, a game) dwm does not
-        // bring it back in - so the pill is not buried, it is not composited at all, and no z-order call can
-        // win that. A pinned pill over a fullscreen app therefore trades the exclusion away, which is the
-        // lesser loss: the cost is appearing in screen recordings for as long as that app is fullscreen, and
-        // the alternative is the pin not working, which is the whole point of the pin.
-        bool wantCapturable = _recordable || (_pinned && coveringApp);
-        if (wantCapturable != _capturableNow)
-        {
-            _capturableNow = wantCapturable;
-            _notch.SetCapturable(wantCapturable);
-        }
         var active = fullscreen ? [] : ActiveIndices();
         // a live/queued toast overrides the fullscreen hide: the pill stays empty (active = [])
         // but the banner still wakes and renders over the game
@@ -1544,7 +1528,6 @@ internal sealed class NotchController
                 _pinHoldFired = true;
                 _recordable = !_recordable;
                 SaveRecordable();
-                _capturableNow = _recordable;
                 _notch.SetCapturable(_recordable);
             }
             return true;
