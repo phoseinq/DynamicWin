@@ -108,6 +108,7 @@ internal static class Program
                     status["state"] = "working";
                     status["lastPrompt"] = Truncate(Field("prompt"), 120);
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = DateTimeOffset.UtcNow.ToString("o");
                     status["message"] = null;
                     RecordProcess(status, codex);
@@ -116,11 +117,14 @@ internal static class Program
                 case "tool":
                     status["state"] = "working";
                     status["currentTool"] = Field("tool_name");
+                    status["toolTarget"] = ToolTarget(input?["tool_name"]?.GetValue<string>(),
+                        AsObject(input?["tool_input"]));
                     break;
                 case "tool-done":
                     status["state"] = "working";
 
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
@@ -150,6 +154,7 @@ internal static class Program
                 case "stop":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = null;
                     status["message"] = null;
                     UpdateContext(status, Field("transcript_path"));
@@ -157,6 +162,7 @@ internal static class Program
                 case "session-end":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = null;
                     break;
                 default:
@@ -239,6 +245,83 @@ internal static class Program
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, status.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.Move(tmp, path, overwrite: true);
+    }
+
+    internal static JsonObject? AsObject(JsonNode? node)
+    {
+        if (node is JsonObject o) return o;
+        try
+        {
+            if (node is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s))
+                return JsonNode.Parse(s) as JsonObject;
+        }
+        catch { }
+        return null;
+    }
+
+    internal static string? ToolTarget(string? tool, JsonObject? input)
+    {
+        if (tool is null || input is null) return null;
+        string? Str(string key)
+        {
+            try { return input[key]?.GetValue<string>()?.Trim() is { Length: > 0 } v ? v : null; }
+            catch { return null; }
+        }
+
+        var raw = tool switch
+        {
+            "Edit" or "Write" or "MultiEdit" or "NotebookEdit" or "Read" => Leaf(Str("file_path")),
+            "Bash" or "PowerShell" => Program_(Str("command")),
+            "Grep" or "Glob" => Str("pattern"),
+            "WebFetch" => Host(Str("url")),
+            "WebSearch" => Str("query"),
+            "Task" or "Agent" => Str("subagent_type"),
+            "Skill" or "SlashCommand" => Str("skill") ?? Str("command"),
+            _ => null,
+        };
+        return Truncate(raw, 24);
+    }
+
+    private static string? Leaf(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var s = path.Replace('\\', '/').TrimEnd('/');
+        var i = s.LastIndexOf('/');
+        var leaf = i >= 0 ? s.Substring(i + 1) : s;
+        return leaf.Length > 0 ? leaf : null;
+    }
+
+    private static string? Program_(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return null;
+        var line = command.Trim();
+        if (line.IndexOfAny(new[] { '|', ';', '&' }) >= 0) return null;
+
+        if (line[0] is '"' or '\'')
+        {
+            var end = line.IndexOf(line[0], 1);
+            return end > 1 ? Clean(line.Substring(1, end - 1)) : null;
+        }
+        foreach (var word in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word.Contains('=')) continue;
+            if (Clean(word.Trim('"', '\'', '(')) is { } name) return name;
+        }
+        return null;
+
+        static string? Clean(string word)
+        {
+            var leaf = Leaf(word);
+            if (string.IsNullOrEmpty(leaf)) return null;
+            if (leaf.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) leaf = leaf[..^4];
+            return leaf.Length is > 0 and <= 14 ? leaf : null;
+        }
+    }
+
+    private static string? Host(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        try { return new Uri(url).Host is { Length: > 0 } h ? h : null; } catch { return null; }
     }
 
     private static string? Truncate(string? s, int max)

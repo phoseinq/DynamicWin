@@ -522,7 +522,8 @@ internal static class Fx
         if (hueIsFree)
         {
             var target = HueLerp(UsageAmber, RingHot, squeeze);
-            c = HueLerp(c, target, MathF.Max(0.85f * squeeze, 0.30f * drag * (1f - squeeze)));
+
+            c = HueLerp(c, target, MathF.Max(0.45f * squeeze, 0.18f * drag * (1f - squeeze)));
         }
 
         RgbToHsv(c, out float h, out float s, out float v);

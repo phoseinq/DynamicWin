@@ -129,7 +129,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         var mood = Mood(st);
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st?.CurrentTool, mood),
+            "working" => ToolVerb(Glow(st).Tool, mood),
             "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
             _ => IdleMood(st, mood),
@@ -727,7 +727,27 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     private MoodContext Mood(CcStatus? st) => new(
         Running(st), (float)ContextFrac(st), UsageFrac(),
-        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour);
+        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour, Glow(st).Target);
+
+    private const int AfterglowMs = 9_000;
+    private string? _glowTool, _glowTarget, _glowTurn;
+    private long _glowAt;
+
+    private (string? Tool, string? Target) Glow(CcStatus? st)
+    {
+        var turn = st?.StartedAt;
+        if (turn != _glowTurn) { _glowTurn = turn; _glowTool = _glowTarget = null; }
+        if (st?.CurrentTool is { Length: > 0 } cur)
+        {
+            _glowTool = cur;
+            _glowTarget = st.ToolTarget;
+            _glowAt = Environment.TickCount64;
+            return (cur, _glowTarget);
+        }
+
+        if (Shown(st) != "working") { _glowTool = _glowTarget = null; return (null, null); }
+        return Environment.TickCount64 - _glowAt <= AfterglowMs ? (_glowTool, _glowTarget) : (null, null);
+    }
 
     private string? _runsTurn;
     private string? _runsTool;
@@ -748,23 +768,24 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static bool RingIsTheMessage(CcStatus? st)
         => NetMon.ApiDown || NetMon.NetDown || LimitHit || Compacting(st);
 
-    private static Color RingBase(CcStatus? st)
+    private static Color RingBase(CcStatus? st, string? tool)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White
 
          : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
          : JustCompacted(st) ? Mint
-         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(tool))
          : White;
 
     private Color RingColor(CcStatus? st)
     {
-        var b = RingBase(st);
+        var tool = Glow(st).Tool;
+        var b = RingBase(st, tool);
         if (RingIsTheMessage(st)) return b;
 
         bool hueIsFree = st?.State != "waiting_input"
-            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+            && (Shown(st) != "working" || string.IsNullOrEmpty(tool));
         return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 

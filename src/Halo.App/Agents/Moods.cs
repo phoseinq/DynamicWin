@@ -9,7 +9,9 @@ internal readonly record struct MoodContext(
     float UsageFrac = 0f,
     long PromptTokens = 0,
     int ToolRuns = 0,
-    int? Hour = null);
+    int? Hour = null,
+
+    string? Target = null);
 
 internal static class Moods
 {
@@ -82,17 +84,18 @@ internal static class Moods
         {
             "reading…", "skimming…", "having a look…", "eyes on it…", "studying…", "parsing it…",
             "reading up…", "absorbing…", "scanning…", "poring over it…",
-            "reading the manual…", "eyeing the wiring…",
+            "reading the manual…", "eyeing the wiring…", "analyzing…",
         },
         ["running"] = new[]
         {
             "running…", "executing…", "in flight…", "crunching…", "under way…", "churning…",
             "processing…", "off it goes…", "shell's busy…", "in progress…",
-            "on the hob…", "in the oven…", "cranking it…",
+            "on the hob…", "in the oven…", "cranking it…", "working…",
         },
         ["digging"] = new[]
         {
             "digging…", "rummaging…", "spelunking…", "sifting…", "prospecting…", "foraging…",
+            "indexing…",
             "poking around…", "on the trail…", "combing code…", "raking through…",
             "torch and gloves…", "under the floor…", "behind the panel…", "hood's up…",
             "hmm, where…", "it's in here…",
@@ -139,6 +142,8 @@ internal static class Moods
             "having a think…", "turning it over…",
             "measuring up…", "eyeing it up…", "head-scratching…",
             "hmm, ok…", "erm…", "uhh…", "let's see…", "right then…", "so…",
+
+            "reflecting…", "synthesizing…", "undulating…",
         },
         ["compacting"] = new[]
         {
@@ -165,7 +170,7 @@ internal static class Moods
         ["reviewing"] = new[]
         {
             "reviewing…", "checking the work…", "inspecting…", "snagging…", "second look…",
-            "going over it…",
+            "going over it…", "analyzing…",
         },
         ["publishing"] = new[]
         {
@@ -174,7 +179,7 @@ internal static class Moods
         ["consulting"] = new[]
         {
             "consulting…", "asking a tool…", "asking next door…", "phoning a friend…",
-            "calling the desk…",
+            "calling the desk…", "connecting…",
         },
         ["peeking"] = new[]
         {
@@ -456,6 +461,8 @@ internal static class Moods
             key = candidate;
             break;
         }
+
+        if (key == slot && Fact(slot, ctx.Target) is { } f) return f;
         string? stale = null;
         lock (Gate)
         {
@@ -470,7 +477,29 @@ internal static class Moods
         return picked;
     }
 
-        internal static string PrettyTool(string? tool)
+        internal static string? Fact(string? slot, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return null;
+        var verb = slot switch
+        {
+            "writing" => "writing ",
+            "patching" => "patching ",
+            "reading" => "reading ",
+            "peeking" => "peeking at ",
+            "running" => "running ",
+            "digging" => "digging ",
+            "fetching" => "fetching ",
+            "searching" => "searching ",
+            "delegating" or "consulting" => "asking ",
+            "skill" => "",
+            _ => null,
+        };
+        if (verb is null) return null;
+        var line = verb + target.Trim() + "…";
+        return line.Length <= MaxWidth ? line : null;
+    }
+
+    internal static string PrettyTool(string? tool)
     {
         var t = (tool ?? "").Trim();
         if (t.Length == 0) return Fixed("unknown");

@@ -22,13 +22,19 @@ internal static class BannerGate
     private static long _lastRestart = -60_000;
     private static long _lastToast = -QuietGapMs;
     private static bool _applyPending;
+    private static long _applySince;
 
     private const int QuietGapMs = 12_000;
     private const int CooldownMs = 60_000;
+    private const int MaxDeferMs = 30_000;
 
     internal static int ApplyDelayMs(long now, long lastRestart, long lastToast,
-                                     int quietGap = QuietGapMs, int cooldown = CooldownMs)
-        => (int)Math.Max(quietGap - (now - lastToast), Math.Max(cooldown - (now - lastRestart), 0));
+                                     int quietGap = QuietGapMs, int cooldown = CooldownMs,
+                                     long pendingSince = 0, int maxDefer = MaxDeferMs)
+    {
+        long quiet = pendingSince > 0 && now - pendingSince >= maxDefer ? 0 : quietGap - (now - lastToast);
+        return (int)Math.Max(quiet, Math.Max(cooldown - (now - lastRestart), 0));
+    }
 
     public static void Enable()
     {
@@ -37,7 +43,6 @@ internal static class BannerGate
         lock (_lock)
         {
 
-            _lastToast = Environment.TickCount64;
             foreach (var aumid in new List<string>(_orig.Keys))
                 WriteZero(aumid);
         }
@@ -109,7 +114,8 @@ internal static class BannerGate
     {
         lock (_lock)
             if (_applyPending)
-                _applyTimer?.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+                _applyTimer?.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                                 pendingSince: _applySince),
                                     Timeout.Infinite);
     }
 
@@ -134,8 +140,10 @@ internal static class BannerGate
         lock (_lock)
         {
             _applyTimer ??= new Timer(_ => DoApply(), null, Timeout.Infinite, Timeout.Infinite);
+            if (!_applyPending) _applySince = Environment.TickCount64;
             _applyPending = true;
-            _applyTimer.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+            _applyTimer.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                            pendingSince: _applySince),
                                Timeout.Infinite);
         }
     }
@@ -145,10 +153,12 @@ internal static class BannerGate
         lock (_lock)
         {
 
-            int wait = ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast);
+            int wait = ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                    pendingSince: _applySince);
             if (wait > 0) { _applyTimer?.Change(wait, Timeout.Infinite); return; }
             _lastRestart = Environment.TickCount64;
             _applyPending = false;
+            _applySince = 0;
         }
         Log("applying → WpnUserService restart (listener self-heals)");
         RestartService();

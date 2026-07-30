@@ -165,7 +165,7 @@ internal sealed class CodexWidget : IWidget
         var mood = Mood(st);
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st?.CurrentTool, mood),
+            "working" => ToolVerb(Glow(st), mood),
             "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
             _ => IdleMood(st, mood),
@@ -714,22 +714,23 @@ internal sealed class CodexWidget : IWidget
     private static bool RingIsTheMessage(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown || LimitHit || Compacting(st);
 
-    private static Color RingBase(CodexSnapshot? st)
+    private static Color RingBase(CodexSnapshot? st, string? tool)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
          : LimitHit ? White
 
          : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
          : JustCompacted(st) ? Mint
-         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(tool))
          : White;
 
     private Color RingColor(CodexSnapshot? st)
     {
-        var b = RingBase(st);
+        var tool = Glow(st);
+        var b = RingBase(st, tool);
         if (RingIsTheMessage(st)) return b;
         bool hueIsFree = st?.State != "waiting_input"
-            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+            && (Shown(st) != "working" || string.IsNullOrEmpty(tool));
         return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 
@@ -804,6 +805,24 @@ internal sealed class CodexWidget : IWidget
 
     private static TimeSpan? Running(CodexSnapshot? st) =>
         st?.StartedAt is { } t ? DateTimeOffset.UtcNow - t : null;
+
+    private const int AfterglowMs = 9_000;
+    private string? _glowTool;
+    private DateTimeOffset? _glowTurn;
+    private long _glowAt;
+
+    private string? Glow(CodexSnapshot? st)
+    {
+        if (st?.StartedAt != _glowTurn) { _glowTurn = st?.StartedAt; _glowTool = null; }
+        if (st?.CurrentTool is { Length: > 0 } cur)
+        {
+            _glowTool = cur;
+            _glowAt = Environment.TickCount64;
+            return cur;
+        }
+        if (Shown(st) != "working") { _glowTool = null; return null; }
+        return Environment.TickCount64 - _glowAt <= AfterglowMs ? _glowTool : null;
+    }
 
     private MoodContext Mood(CodexSnapshot? st) => new(
         Running(st), (float)ContextFrac(st), UsageFrac(),
