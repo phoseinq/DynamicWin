@@ -179,6 +179,7 @@ internal sealed class NotchController
     private Win32.POINT _holdAnchor;
     private int _moveGrabDX;
     private bool _pinned;
+    private bool _capturableNow;
     private float _pinHov;
     private float _shrink;
     private bool _empty;
@@ -276,6 +277,7 @@ internal sealed class NotchController
         LoadOffset();
         LoadRecordable();
         _notch.SetCapturable(_recordable);
+        _capturableNow = _recordable;
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f;
         if (!_empty) _primary = active[0];
@@ -617,6 +619,13 @@ internal sealed class NotchController
         bool fullscreen = !_pinned && coveringApp;
 
         if (_pinned && coveringApp) _notch.AssertTopmost();
+
+        bool wantCapturable = _recordable || (_pinned && coveringApp);
+        if (wantCapturable != _capturableNow)
+        {
+            _capturableNow = wantCapturable;
+            _notch.SetCapturable(wantCapturable);
+        }
         var active = fullscreen ? [] : ActiveIndices();
 
         bool notifLive = _notif != null || _notifSrc.HasPending;
@@ -1371,6 +1380,7 @@ internal sealed class NotchController
                 _pinHoldFired = true;
                 _recordable = !_recordable;
                 SaveRecordable();
+                _capturableNow = _recordable;
                 _notch.SetCapturable(_recordable);
             }
             return true;
