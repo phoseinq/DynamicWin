@@ -1,5 +1,74 @@
 # Halo — progress
 
+## 2026-07-30 (evening) - the media panel: a speed menu, a second line, a seek bar that works, and VLC
+
+### The speed chip became a menu, and lost its circle
+It was a glass chip in the transport row that **cycled** on every click: four clicks from 1x to 2x, no way to
+see the choices, and no way back except all the way round. It is now a bare label at the top right - no chip,
+no ring, because it is a menu handle rather than a button - with a chevron, and pointing at it drops the whole
+list: **1x, 1.25x, 1.5x, 1.75x, 2x, 2.5x, 3x**. The current rate is marked with a dot rather than by being
+the brightest row, or "which am I on" and "which am I about to pick" would be the same signal. Hovering
+either the label or the list keeps it open, so the pointer can travel between them; while it is open it owns
+the pointer, because a click landing on what is *under* a menu is the oldest bug in menus.
+
+Top right, not in the transport row, for a reason that is pure geometry: the row sits at y=158 in a 220-tall
+panel, so a list opening *downward* from it had 22px to live in. From the title row it has 150.
+
+### A second line under the name
+A release filename is a sentence about the file - `Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media` says the
+year, the resolution, the source and who put it out - and all of it was being dropped. The line now reads
+**"Film2Media - 1080p - BluRay"**, and a single dot when nothing is known, so the row keeps its height and
+nothing below it moves.
+
+What may be read and what may not is the whole design, and it is a test: a publisher is only claimed for a
+name that really is a dotted release (`Spy.mkv`, `Interstellar (2014).mp4` and `My holiday video.mp4` all
+yield nothing), and a trailing codec or quality token is never mistaken for one. A resolution the *player*
+reports beats one parsed from a name, since a name can lie.
+
+**The file size** is the part SMTC cannot answer: there is no path anywhere in that API. The shell knows,
+though - anything opened from Explorer leaves a shortcut in Recent, named after the file, carrying its target.
+`MediaFileInfo` matches the title against Recent, pulls paths out of the `.lnk` (both the ansi and the utf-16
+copy, by scanning for drive-letter paths) and then **only believes one if the file is really there and really
+has that name**. The verification is the point: a crude extraction plus a hard check beats a correct parse
+with no check, because the failure mode here is a fabricated number on the pill. Cached, misses included, and
+it runs off the render path and bumps `Version` when it lands.
+
+### The seek bar's two bugs, both in the same missing concept
+Reported: on Windows Media Player, seeking forward works but the bar glitches backwards; seeking **backwards
+does nothing at all**.
+
+One cause underneath both: the timeline is not `[0, EndTime]`. SMTC also reports `StartTime`, `MinSeekTime`
+and `MaxSeekTime`, and Media Player uses them - so a backward target computed as `frac x EndTime` landed
+*before* `MinSeekTime` and was rejected outright, while a forward target still fell inside the range and
+worked. Every position is now expressed against the real seekable span: the fraction shown, the timestamps,
+the +-10s buttons, the ring, and the seek itself, which clamps to `[MinSeekTime, MaxSeekTime]`.
+
+The glitch was the other half: a player emits a timeline update with the OLD position while a seek is in
+flight, and taking it at face value dragged the bar back before the real update arrived. A seek now records
+its target, and until the reported position is near it (or 1.5s passes) the stale updates are dropped.
+
+### VLC has a seek bar now
+VLC does not speak SMTC - it has its own widget and an http channel - so it had +-10s buttons and no bar at
+all. Its status document carries everything needed and more than SMTC gives: whole-second `time` and
+`length`, and the **real stream resolution** out of the demuxer rather than a filename's claim. So: position
+and length are polled, `SeekTo(frac)` sends a percentage, the panel draws the same bar with the same
+press-and-drag-and-commit-on-release, and the same "ignore the poll that overtakes my own seek" guard. Its
+second line reuses the media panel's parsers, with the real resolution preferred. The poll is about once a
+second, so the bar extrapolates between readings - including by the playback rate - or it would step.
+
+### Video progress on the collapsed pill, twice
+Like the agent pills: the spent fraction as the pill's **own background** (`Fx.PillBar`), and the same
+fraction **around the art** - which is a rounded square, so `Fx.PathProgress` strokes a fraction of its
+outline (flatten, walk the length, cut the last segment where the fraction actually falls) instead of an arc
+that has nothing to draw on. Both for the SMTC widget and for VLC.
+
+### The clock's weather asks the machine where it is
+It geocoded the city guessed from the timezone, which gave every city in a zone the same reading. Now:
+Windows Location first when the user has it switched on - read from the consent store rather than assumed, so
+a denied or switched-off service is a silent fall back to the timezone rather than a prompt - and the
+timezone city remains both the fallback and the banner's *label*, since a fix carries coordinates and no
+name. Verified live with `--probe-almanac`: `source = windows location`.
+
 ## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
 
 Release 0 warnings / 0 errors, **372 tests** (up from 259; five new test files). Deployed by DLL hot-swap

@@ -291,6 +291,44 @@ internal static class Fx
     public static float InkCentreOffset(Font f, string s) => InkCentreOffsets(f, s).Y;
 
     /// <summary>
+    /// Stroke the first <paramref name="frac"/> of a path's perimeter, clockwise from its start point — a
+    /// progress ring for something that is not a circle. The collapsed pill's art is a rounded square, so
+    /// <c>DrawArc</c> has nothing to draw on; flattening the path and walking its length does.
+    /// </summary>
+    public static void PathProgress(Graphics g, GraphicsPath path, float frac, Pen pen)
+    {
+        if (frac <= 0f) return;
+        using var flat = (GraphicsPath)path.Clone();
+        flat.Flatten(null, 0.2f);
+        var pts = flat.PathPoints;
+        if (pts.Length < 2) return;
+
+        float total = 0f;
+        var seg = new float[pts.Length];              // length of the segment ENDING at i
+        for (int i = 1; i < pts.Length; i++)
+        {
+            float dx = pts[i].X - pts[i - 1].X, dy = pts[i].Y - pts[i - 1].Y;
+            seg[i] = MathF.Sqrt(dx * dx + dy * dy);
+            total += seg[i];
+        }
+        if (total <= 0f) return;
+
+        float want = Math.Clamp(frac, 0f, 1f) * total, run = 0f;
+        for (int i = 1; i < pts.Length; i++)
+        {
+            if (run + seg[i] <= want) { g.DrawLine(pen, pts[i - 1], pts[i]); run += seg[i]; continue; }
+            // the last segment is cut where the fraction actually falls, or the ring would advance in
+            // visible steps of whatever the flattening happened to produce
+            float k = seg[i] > 0f ? (want - run) / seg[i] : 0f;
+            if (k > 0.001f)
+                g.DrawLine(pen, pts[i - 1], new PointF(
+                    pts[i - 1].X + (pts[i].X - pts[i - 1].X) * k,
+                    pts[i - 1].Y + (pts[i].Y - pts[i - 1].Y) * k));
+            return;
+        }
+    }
+
+    /// <summary>
     /// One icon-font glyph, centred on its own ink inside <paramref name="r"/> — the thing every fallback
     /// glyph wants and that three places had each worked out separately (the copy pill, LocalBadge, and the
     /// media art). DrawString rather than a filled path, so small glyphs keep their hinting.

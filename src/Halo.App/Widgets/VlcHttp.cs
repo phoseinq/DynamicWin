@@ -19,6 +19,14 @@ internal static class VlcHttp
 {
     public static volatile bool Online;        // http reachable → Rate/Playing are live and commands go over http
     public static double Rate = 1.0;           // last read playback rate (1.0 = normal)
+    // VLC does not speak SMTC, so none of the media widget's timeline exists here - but its http status
+    // carries all of it, and better than SMTC does: seconds elapsed, total seconds, and the real stream
+    // resolution straight out of the demuxer rather than guessed from a filename.
+    public static int Time;                    // seconds elapsed (-1 = unknown)
+    public static int Length;                  // seconds total (0 = unknown / live stream)
+    public static volatile string? Resolution; // e.g. "1920x1080", from the stream info
+    private static long _seekSentAt;           // a seek in flight: ignore the stale poll that follows it
+    private static int _seekTarget = -1;
     public static volatile bool Playing = true; // last read transport state
     public static volatile bool SubsOn = true;  // subtitle on/off — a LOCAL guess (VLC exposes no live spu track)
     private static string _lastPlid = "";       // playlist item id — detect a new media item to re-seed SubsOn
@@ -90,6 +98,14 @@ internal static class VlcHttp
             string xml = Get("/requests/status.xml");
             var (rate, playing) = ParseStatus(xml);
             Rate = rate; Playing = playing;
+            var (time, length) = ParseTime(xml);
+            Length = length;
+            // a poll that overtakes our own seek would drag the bar back to where it came from for one frame,
+            // which is exactly the glitch this bar has on the SMTC side
+            bool settled = _seekTarget < 0 || Math.Abs(time - _seekTarget) <= 2
+                || Environment.TickCount64 - _seekSentAt > 1500;
+            if (settled) { Time = time; _seekTarget = -1; }
+            Resolution = ParseResolution(xml);
             // VLC exposes no live spu-track field, so SubsOn can't be read — re-seed it to VLC's default
             // each time a NEW media item starts (a soft-sub track auto-shows), then follow our own toggles.
             string plid = Regex.Match(xml, @"<currentplid>(-?\d+)</currentplid>").Groups[1].Value;
@@ -97,6 +113,26 @@ internal static class VlcHttp
             Online = true;
         }
         catch { Online = false; }
+    }
+
+    // <time> and <length> are whole seconds; both are 0 for a stream with no duration
+    internal static (int time, int length) ParseTime(string xml)
+    {
+        int time = -1, length = 0;
+        var mt = Regex.Match(xml, @"<time>(-?\d+)</time>");
+        if (mt.Success) int.TryParse(mt.Groups[1].Value, out time);
+        var ml = Regex.Match(xml, @"<length>(-?\d+)</length>");
+        if (ml.Success) int.TryParse(ml.Groups[1].Value, out length);
+        if (length < 0) length = 0;
+        return (time, length);
+    }
+
+    // the video track's real size, out of the stream info block VLC publishes with the status
+    internal static string? ParseResolution(string xml)
+    {
+        var m = Regex.Match(xml, @"name=.Video_resolution.>\s*(\d+x\d+)", RegexOptions.IgnoreCase);
+        if (!m.Success) m = Regex.Match(xml, @"name=.Resolution.>\s*(\d+x\d+)", RegexOptions.IgnoreCase);
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     internal static (double rate, bool playing) ParseStatus(string xml)
@@ -120,6 +156,19 @@ internal static class VlcHttp
     public static void SetRate(double r) { Rate = r; Send($"?command=rate&val={r.ToString(CultureInfo.InvariantCulture)}"); }
     public static void TogglePlay() { Playing = !Playing; Send("?command=pl_pause"); }
     public static void Seek(int seconds) { Send($"?command=seek&val={(seconds >= 0 ? "+" : "")}{seconds}S"); }
+
+    /// <summary>Jump to a fraction of the file. VLC takes a percentage directly, so no clamping games.</summary>
+    public static void SeekTo(float frac)
+    {
+        int len = Length;
+        if (len <= 0) return;
+        frac = Math.Clamp(frac, 0f, 1f);
+        int target = (int)(frac * len);
+        Time = target;                       // show it immediately; the poll reconciles
+        _seekTarget = target;
+        _seekSentAt = Environment.TickCount64;
+        Send($"?command=seek&val={(int)(frac * 100)}%");
+    }
     // cycle subtitle track (Off → 1 → 2 → Off), same action as the 'V' hotkey but over http (no focus steal).
     // ponytail: SubsOn is a local guess (no readable spu track) — exact for one subtitle track, approximate
     // for a file with several.

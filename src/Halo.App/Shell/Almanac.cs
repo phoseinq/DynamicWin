@@ -73,9 +73,7 @@ internal static class Almanac
     {
         try
         {
-            if (Place is not { Length: > 0 } city) return;
-            _coords ??= Geocode(city);
-            if (_coords is not { } c) return;
+            if (Coords() is not { } c) return;
             var url = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code,is_day"
                 + "&latitude=" + c.lat.ToString("0.####", CultureInfo.InvariantCulture)
                 + "&longitude=" + c.lon.ToString("0.####", CultureInfo.InvariantCulture);
@@ -87,6 +85,72 @@ internal static class Almanac
                 !cur.TryGetProperty("is_day", out var day) || day.GetInt32() != 0);
         }
         catch { }   // a failed probe is normal here: the banner just carries no weather
+    }
+
+    /// <summary>
+    /// Where to ask about the weather. Windows Location first, when the user has it switched on: it is the
+    /// real answer, and a timezone is a very coarse one — every city in a zone got the same reading. The
+    /// timezone city remains the fallback, and it is still what the banner is LABELLED with: the device gives
+    /// coordinates and no name, and reverse geocoding would mean introducing another service for a word that
+    /// is almost always the same word.
+    ///
+    /// The country still comes from geocoding that city even when the coordinates came from the device,
+    /// because units and the calendar hang off it and a fix carries no country.
+    /// </summary>
+    private static (double lat, double lon)? Coords()
+    {
+        if (_coords is { } cached) return cached;
+        if (DeviceLocation() is { } live)
+        {
+            _coords = live;
+            FromDevice = true;
+            if (PlaceCountry is null && Place is { Length: > 0 } named) _ = Geocode(named);
+            return _coords;
+        }
+        if (Place is not { Length: > 0 } city) return null;
+        _coords = Geocode(city);
+        return _coords;
+    }
+
+    /// <summary>True when the reading is from the machine's own location rather than from its timezone.</summary>
+    internal static volatile bool FromDevice;
+
+    // A denied or switched-off location service is the normal case, not an error - so this is one probe, one
+    // catch, and a silent fall back to the timezone. Blocking for a few seconds is fine: it runs on the
+    // refresh timer, which already waits on an http call.
+    private static (double lat, double lon)? DeviceLocation()
+    {
+        try
+        {
+            if (!LocationAllowed()) return null;
+            var geo = new Windows.Devices.Geolocation.Geolocator
+            {
+                DesiredAccuracy = Windows.Devices.Geolocation.PositionAccuracy.Default,
+                // a reading up to ten minutes old is the same weather, and asking for fresher spins the radios
+                ReportInterval = 0,
+            };
+            var task = geo.GetGeopositionAsync(TimeSpan.FromMinutes(10), TimeSpan.FromSeconds(8)).AsTask();
+            if (!task.Wait(TimeSpan.FromSeconds(9))) return null;
+            var p = task.Result?.Coordinate?.Point?.Position;
+            return p is { } pos ? (pos.Latitude, pos.Longitude) : null;
+        }
+        catch { return null; }
+    }
+
+    // The system switch, read rather than assumed: if location is off or this app is denied, asking would
+    // throw (or worse, prompt). "Allow" is the only value that means yes.
+    private static bool LocationAllowed()
+    {
+        try
+        {
+            const string key = @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location";
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(key);
+            if (k?.GetValue("Value") as string is { } v)
+                return string.Equals(v, "Allow", StringComparison.OrdinalIgnoreCase);
+            using var m = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(key);
+            return string.Equals(m?.GetValue("Value") as string, "Allow", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     // the city name is all we have, so the geocoder turns it into a point. Cached for the process - the
