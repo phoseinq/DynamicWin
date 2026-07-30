@@ -34,7 +34,10 @@ internal readonly record struct MoodContext(
     float UsageFrac = 0f,
     long PromptTokens = 0,
     int ToolRuns = 0,
-    int? Hour = null);
+    int? Hour = null,
+    // what the tool is acting on - the file, the program, the host. Part of the situation like everything
+    // else here, which is why it rides in the context rather than as another parameter on Line().
+    string? Target = null);
 
 internal static class Moods
 {
@@ -118,17 +121,18 @@ internal static class Moods
         {
             "reading…", "skimming…", "having a look…", "eyes on it…", "studying…", "parsing it…",
             "reading up…", "absorbing…", "scanning…", "poring over it…",
-            "reading the manual…", "eyeing the wiring…",
+            "reading the manual…", "eyeing the wiring…", "analyzing…",
         },
         ["running"] = new[]
         {
             "running…", "executing…", "in flight…", "crunching…", "under way…", "churning…",
             "processing…", "off it goes…", "shell's busy…", "in progress…",
-            "on the hob…", "in the oven…", "cranking it…",
+            "on the hob…", "in the oven…", "cranking it…", "working…",
         },
         ["digging"] = new[]
         {
             "digging…", "rummaging…", "spelunking…", "sifting…", "prospecting…", "foraging…",
+            "indexing…",
             "poking around…", "on the trail…", "combing code…", "raking through…",
             "torch and gloves…", "under the floor…", "behind the panel…", "hood's up…",
             "hmm, where…", "it's in here…",
@@ -177,6 +181,8 @@ internal static class Moods
             "having a think…", "turning it over…",
             "measuring up…", "eyeing it up…", "head-scratching…",
             "hmm, ok…", "erm…", "uhh…", "let's see…", "right then…", "so…",
+            // claude code's own spinner words, which is where this whole voice came from
+            "reflecting…", "synthesizing…", "undulating…",
         },
         ["compacting"] = new[]
         {
@@ -205,7 +211,7 @@ internal static class Moods
         ["reviewing"] = new[]
         {
             "reviewing…", "checking the work…", "inspecting…", "snagging…", "second look…",
-            "going over it…",
+            "going over it…", "analyzing…",
         },
         ["publishing"] = new[]
         {
@@ -214,7 +220,7 @@ internal static class Moods
         ["consulting"] = new[]
         {
             "consulting…", "asking a tool…", "asking next door…", "phoning a friend…",
-            "calling the desk…",
+            "calling the desk…", "connecting…",
         },
         ["peeking"] = new[]
         {
@@ -535,6 +541,16 @@ internal static class Moods
     /// As above, on an injected clock. The hold is a minute, so this is the only way a test can watch a
     /// line expire - and expiry is the half of this that broke in the field.
     /// </summary>
+    /// <summary>
+    /// The wording for a slot in a situation, on an injected clock.
+    ///
+    /// Precedence is <b>situation, then fact, then voice</b>, so the line always says the most specific
+    /// true thing about right now. A band wins, because a session about to run out of room is bigger news
+    /// than which file is being edited. With nothing situational to report, <c>Fact</c> takes it — "running
+    /// dotnet…" beats every wording of "running…", which cannot tell a three-second `git status` from a
+    /// two-minute build. With no fact either (thinking, between tools, a payload that named nothing) the
+    /// voice speaks, which is most of the time and is where the character lives.
+    /// </summary>
     internal static string Line(string slot, in MoodContext ctx, DateTime now)
     {
         var key = slot;
@@ -546,6 +562,10 @@ internal static class Moods
             key = candidate;
             break;
         }
+        // key == slot means nothing in the ladder had anything to say, so the fact gets its turn. A fact is
+        // not held for a minute the way a rolled line is - it is not a mood, it is what is happening, so it
+        // changes when the tool does.
+        if (key == slot && Fact(slot, ctx.Target) is { } f) return f;
         string? stale = null;
         lock (Gate)
         {
@@ -567,6 +587,34 @@ internal static class Moods
     /// become spaces, and the whole thing is cut to the pill's ceiling rather than clipped mid-word by the
     /// renderer, which reads as a rendering fault rather than as a long name.
     /// </summary>
+    /// <summary>
+    /// "writing Fx.cs…", from a slot and whatever the tool named. Null when the slot has no verb for this
+    /// (thinking is not doing anything TO something), when there is no target, or when the two together do
+    /// not fit the pill — a line the renderer has to clip reads as a fault, and the voice is a better
+    /// answer than a chopped filename.
+    /// </summary>
+    internal static string? Fact(string? slot, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return null;
+        var verb = slot switch
+        {
+            "writing" => "writing ",
+            "patching" => "patching ",
+            "reading" => "reading ",
+            "peeking" => "peeking at ",
+            "running" => "running ",
+            "digging" => "digging ",
+            "fetching" => "fetching ",
+            "searching" => "searching ",
+            "delegating" or "consulting" => "asking ",
+            "skill" => "",          // the skill names itself; "skill brainstorming" says the word twice
+            _ => null,
+        };
+        if (verb is null) return null;
+        var line = verb + target.Trim() + "…";
+        return line.Length <= MaxWidth ? line : null;
+    }
+
     internal static string PrettyTool(string? tool)
     {
         var t = (tool ?? "").Trim();

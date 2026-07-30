@@ -110,6 +110,7 @@ internal static class Program
                     status["state"] = "working";
                     status["lastPrompt"] = Truncate(Field("prompt"), 120);
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = DateTimeOffset.UtcNow.ToString("o"); // turn start, for elapsed time
                     status["message"] = null;
                     RecordProcess(status, codex);
@@ -118,6 +119,8 @@ internal static class Program
                 case "tool":
                     status["state"] = "working";
                     status["currentTool"] = Field("tool_name");
+                    status["toolTarget"] = ToolTarget(input?["tool_name"]?.GetValue<string>(),
+                        AsObject(input?["tool_input"]));
                     break;
                 case "tool-done":
                     status["state"] = "working";
@@ -125,6 +128,7 @@ internal static class Program
                     // tool calls, not just at turn start. (Was kept to avoid flicker, but the user wants
                     // "thinking" to read yellow; the next tool sets it green again.)
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
@@ -160,6 +164,7 @@ internal static class Program
                 case "stop":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = null;
                     status["message"] = null;
                     UpdateContext(status, Field("transcript_path"));
@@ -167,6 +172,7 @@ internal static class Program
                 case "session-end":
                     status["state"] = "idle";
                     status["currentTool"] = null;
+                    status["toolTarget"] = null;
                     status["startedAt"] = null;
                     break;
                 default:
@@ -251,6 +257,102 @@ internal static class Program
         var tmp = path + ".tmp";
         File.WriteAllText(tmp, status.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         File.Move(tmp, path, overwrite: true);
+    }
+
+    /// <summary>
+    /// What the tool is acting ON, from the hook's tool_input, in a form short enough for a 220px pill.
+    /// "running…" cannot tell a three-second `git status` from a two-minute `dotnet build`, and that is the
+    /// one thing the pill could not say about a tool call. A different key per tool because there is no
+    /// general answer: a file for the file tools, the PROGRAM for a shell command (not the whole line - the
+    /// verb is the news and the flags are noise), the host for a fetch, the pattern for a search.
+    ///
+    /// Returns null rather than guessing whenever the shape is not what is expected: an empty pill line is
+    /// honest, an invented one is not, and the widget has a voice to fall back on.
+    /// </summary>
+    // tool_input arrives as an object from some surfaces and as a JSON STRING from others - measured live:
+    // the field was written but always null, because `as JsonObject` on a stringified payload is null and
+    // the extractor then had nothing to read. Accept both rather than guess which surface is talking.
+    internal static JsonObject? AsObject(JsonNode? node)
+    {
+        if (node is JsonObject o) return o;
+        try
+        {
+            if (node is JsonValue v && v.TryGetValue<string>(out var s) && !string.IsNullOrWhiteSpace(s))
+                return JsonNode.Parse(s) as JsonObject;
+        }
+        catch { }
+        return null;
+    }
+
+    internal static string? ToolTarget(string? tool, JsonObject? input)
+    {
+        if (tool is null || input is null) return null;
+        string? Str(string key)
+        {
+            try { return input[key]?.GetValue<string>()?.Trim() is { Length: > 0 } v ? v : null; }
+            catch { return null; }   // a non-string under a key we expected to be one
+        }
+
+        var raw = tool switch
+        {
+            "Edit" or "Write" or "MultiEdit" or "NotebookEdit" or "Read" => Leaf(Str("file_path")),
+            "Bash" or "PowerShell" => Program_(Str("command")),
+            "Grep" or "Glob" => Str("pattern"),
+            "WebFetch" => Host(Str("url")),
+            "WebSearch" => Str("query"),
+            "Task" or "Agent" => Str("subagent_type"),
+            "Skill" or "SlashCommand" => Str("skill") ?? Str("command"),
+            _ => null,
+        };
+        return Truncate(raw, 24);
+    }
+
+    // the file, not the path: a pill has room for "Fx.cs" and none at all for the repo it lives in
+    private static string? Leaf(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var s = path.Replace('\\', '/').TrimEnd('/');
+        var i = s.LastIndexOf('/');
+        var leaf = i >= 0 ? s.Substring(i + 1) : s;
+        return leaf.Length > 0 ? leaf : null;
+    }
+
+    // the program a shell line runs, which survives env prefixes ("VAR=x cmd"), paths and quoting. Anything
+    // with a pipe or a chain is more than one program, so it names none of them.
+    private static string? Program_(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return null;
+        var line = command.Trim();
+        if (line.IndexOfAny(new[] { '|', ';', '&' }) >= 0) return null;
+
+        // a quoted program keeps its spaces. Splitting on whitespace first turned
+        // "C:\Program Files\nodejs\npm.cmd" install into the word `"C:\Program`, whose leaf is "Program" -
+        // not a program, and on the pill it would have read as one.
+        if (line[0] is '"' or '\'')
+        {
+            var end = line.IndexOf(line[0], 1);
+            return end > 1 ? Clean(line.Substring(1, end - 1)) : null;
+        }
+        foreach (var word in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word.Contains('=')) continue;                       // an env prefix, not the program
+            if (Clean(word.Trim('"', '\'', '(')) is { } name) return name;
+        }
+        return null;
+
+        static string? Clean(string word)
+        {
+            var leaf = Leaf(word);
+            if (string.IsNullOrEmpty(leaf)) return null;
+            if (leaf.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) leaf = leaf[..^4];
+            return leaf.Length is > 0 and <= 14 ? leaf : null;
+        }
+    }
+
+    private static string? Host(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        try { return new Uri(url).Host is { Length: > 0 } h ? h : null; } catch { return null; }
     }
 
     private static string? Truncate(string? s, int max)

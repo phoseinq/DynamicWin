@@ -295,22 +295,24 @@ internal static class Program
             // palette - one row per colour family, so they can be compared side by side, which is the only
             // way to tell whether they are actually distinguishable at 20px. The second block is the same
             // green shell command under rising pressure.
-            (string label, string state, string? tool, int agoMin, long ctxUsed, float usage)[] rows =
+            (string label, string state, string? tool, int agoMin, long ctxUsed, float usage, string? target)[] rows =
             {
-                ("idle", "idle", null, 0, 120_000, 0.30f),
-                ("thinking", "working", null, 0, 120_000, 0.30f),
-                ("shell", "working", "Bash", 0, 120_000, 0.30f),
-                ("reading", "working", "Read", 0, 120_000, 0.30f),
-                ("writing", "working", "Edit", 0, 120_000, 0.30f),
-                ("surveying", "working", "Grep", 0, 120_000, 0.30f),
-                ("subagent", "working", "Task", 0, 120_000, 0.30f),
-                ("an mcp server", "working", "mcp__serena__find_symbol", 0, 120_000, 0.30f),
-                ("a tool with no slot", "working", "SomeOtherTool", 0, 120_000, 0.30f),
-                ("your turn", "waiting_input", null, 0, 120_000, 0.30f),
-                ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f),
-                ("shell, context 92%", "working", "Bash", 1, 920_000, 0.30f),
-                ("shell, usage 96%", "working", "Bash", 1, 120_000, 0.96f),
-                ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f),
+                ("idle", "idle", null, 0, 120_000, 0.30f, null),
+                ("thinking", "working", null, 0, 120_000, 0.30f, null),
+                ("shell", "working", "Bash", 0, 120_000, 0.30f, null),
+                ("shell, named", "working", "Bash", 0, 120_000, 0.30f, "dotnet"),
+                ("reading", "working", "Read", 0, 120_000, 0.30f, null),
+                ("reading, named", "working", "Read", 0, 120_000, 0.30f, "Moods.cs"),
+                ("writing, named", "working", "Edit", 0, 120_000, 0.30f, "Fx.cs"),
+                ("surveying", "working", "Grep", 0, 120_000, 0.30f, null),
+                ("subagent", "working", "Task", 0, 120_000, 0.30f, "Explore"),
+                ("an mcp server", "working", "mcp__serena__find_symbol", 0, 120_000, 0.30f, null),
+                ("a tool with no slot", "working", "SomeOtherTool", 0, 120_000, 0.30f, null),
+                ("your turn", "waiting_input", null, 0, 120_000, 0.30f, null),
+                ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f, null),
+                ("named, but context 92%", "working", "Edit", 1, 920_000, 0.30f, "Fx.cs"),
+                ("shell, usage 96%", "working", "Bash", 1, 120_000, 0.96f, null),
+                ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f, null),
             };
             const int pw = 220, ph = 40, gap = 12, labelW = 168, scale = 2;
             int width = labelW + pw + 20, height = rows.Length * (ph + gap) + gap;
@@ -328,7 +330,7 @@ internal static class Program
             System.IO.Directory.CreateDirectory(root);
             float y = gap;
             int n = 0;
-            foreach (var (label, state, tool, agoMin, ctxUsed, usage) in rows)
+            foreach (var (label, state, tool, agoMin, ctxUsed, usage, target) in rows)
             {
                 var now = DateTimeOffset.UtcNow;
                 // one file and one widget PER ROW: the tool-run counter is per-widget state, and a shared
@@ -343,6 +345,7 @@ internal static class Program
                   "updatedAt": "{{now:o}}",
                   "startedAt": "{{now.AddMinutes(-agoMin):o}}",
                   {{(tool is null ? "" : $"\"currentTool\": \"{tool}\",")}}
+                  {{(target is null ? "" : $"\"toolTarget\": \"{target}\",")}}
                   "session": { "contextUsed": {{ctxUsed}}, "contextMax": 1000000, "promptTokens": 12000 }
                 }
                 """);

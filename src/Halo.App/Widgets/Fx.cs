@@ -658,7 +658,10 @@ internal static class Fx
         if (hueIsFree)
         {
             var target = HueLerp(UsageAmber, RingHot, squeeze);
-            c = HueLerp(c, target, MathF.Max(0.85f * squeeze, 0.30f * drag * (1f - squeeze)));
+            // 0.85 turned the thinking amber fully orange from about 60% context on, and since thinking is
+            // where a turn spends most of its time, "the ring is always orange" was the honest report of it.
+            // Halved: amber stays amber, and the orange is kept for the top of the band where it is news.
+            c = HueLerp(c, target, MathF.Max(0.45f * squeeze, 0.18f * drag * (1f - squeeze)));
         }
 
         // For everyone else pressure goes where it cannot be mistaken for a different state: the same lamp

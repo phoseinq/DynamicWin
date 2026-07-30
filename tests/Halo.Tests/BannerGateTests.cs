@@ -18,15 +18,14 @@ public class BannerGateTests
         Assert.Equal(Quiet, BannerGate.ApplyDelayMs(now: 0, lastRestart: -Cooldown, lastToast: 0));
     }
 
-    // Enable() stamps lastToast at launch so the startup restart — the one that makes a service started
-    // by logon actually re-read the zeros already sitting in the registry — cannot fire into a sound that
-    // was already playing when Halo came up.
+    // Enable() USED to stamp lastToast at launch, so the startup restart - the one that makes a service
+    // started by logon re-read the zeros already sitting in the registry - waited out a full quiet gap
+    // before firing. The politeness cost a 12 second hole at every start in which the stale service was
+    // still the one deciding, and every toast arriving in it banged at full volume. Nothing pending, no
+    // recent restart, no toast on record now means: go.
     [Fact]
-    public void Startup_apply_waits_rather_than_firing_into_a_sound_in_flight()
-    {
-        Assert.Equal(Quiet, BannerGate.ApplyDelayMs(now: 0, lastRestart: -Cooldown, lastToast: 0));
-        Assert.Equal(0, BannerGate.ApplyDelayMs(now: Quiet, lastRestart: -Cooldown, lastToast: 0));
-    }
+    public void Startup_refreshes_the_stale_service_immediately()
+        => Assert.Equal(0, BannerGate.ApplyDelayMs(now: 0, lastRestart: -Cooldown, lastToast: -Quiet));
 
     [Fact]
     public void A_later_toast_pushes_a_pending_restart_back_out()
@@ -40,6 +39,27 @@ public class BannerGateTests
     {
         Assert.Equal(0, BannerGate.ApplyDelayMs(now: Quiet, lastRestart: -Cooldown, lastToast: 0));
     }
+
+    // ...but not forever. On a machine that toasts every few seconds each arrival pushed the pending
+    // restart back by the whole gap, so it could starve and the session ran on with a service whose cache
+    // predates every zero in the registry - which is the reported symptom, a notification sound that keeps
+    // coming while no banner ever appears. One truncated sound is cheaper than a session of them.
+    [Fact]
+    public void A_pending_restart_cannot_be_deferred_forever()
+    {
+        // pending for 25s and toasts still arriving: still politely waiting
+        Assert.Equal(Quiet, BannerGate.ApplyDelayMs(now: 25_000, lastRestart: -Cooldown, lastToast: 25_000,
+            pendingSince: 0 + 1));
+        // pending for 31s: the gap is dropped and it goes
+        Assert.Equal(0, BannerGate.ApplyDelayMs(now: 31_000, lastRestart: -Cooldown, lastToast: 31_000,
+            pendingSince: 1));
+    }
+
+    // the cooldown is NOT dropped by that: it exists to stop restart thrash and outranks the sound
+    [Fact]
+    public void The_starvation_guard_still_respects_the_cooldown()
+        => Assert.Equal(20_000, BannerGate.ApplyDelayMs(now: 40_000, lastRestart: 0, lastToast: 40_000,
+            pendingSince: 1));
 
     [Fact]
     public void Cooldown_still_applies_when_the_gap_has_already_passed()

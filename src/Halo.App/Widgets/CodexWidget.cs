@@ -180,7 +180,7 @@ internal sealed class CodexWidget : IWidget
         var mood = Mood(st);
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st?.CurrentTool, mood),
+            "working" => ToolVerb(Glow(st), mood),
             "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
             _ => IdleMood(st, mood),
@@ -825,22 +825,23 @@ internal sealed class CodexWidget : IWidget
     private static bool RingIsTheMessage(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown || LimitHit || Compacting(st);
 
-    private static Color RingBase(CodexSnapshot? st)
+    private static Color RingBase(CodexSnapshot? st, string? tool)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown ? Red
          : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
                                             // activity and left the pill looking busy while it was waiting on a reset.
          : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
          : JustCompacted(st) ? Mint
-         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(tool))
          : White;
 
     private Color RingColor(CodexSnapshot? st)
     {
-        var b = RingBase(st);
+        var tool = Glow(st);
+        var b = RingBase(st, tool);
         if (RingIsTheMessage(st)) return b;
         bool hueIsFree = st?.State != "waiting_input"
-            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+            && (Shown(st) != "working" || string.IsNullOrEmpty(tool));
         return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 
@@ -931,6 +932,27 @@ internal sealed class CodexWidget : IWidget
 
     // the twin of ClaudeCodeWidget.Mood: every field is a figure the panel already draws, so the voice
     // and the rings cannot disagree about the situation
+    // the twin of ClaudeCodeWidget.Glow, and for the same reason: between two tool calls codex clears the
+    // tool too, so the palette would only ever flash. No target on this side - codex's tool payload does not
+    // carry one - so the words here are always the voice, never the fact.
+    private const int AfterglowMs = 9_000;
+    private string? _glowTool;
+    private DateTimeOffset? _glowTurn;
+    private long _glowAt;
+
+    private string? Glow(CodexSnapshot? st)
+    {
+        if (st?.StartedAt != _glowTurn) { _glowTurn = st?.StartedAt; _glowTool = null; }
+        if (st?.CurrentTool is { Length: > 0 } cur)
+        {
+            _glowTool = cur;
+            _glowAt = Environment.TickCount64;
+            return cur;
+        }
+        if (Shown(st) != "working") { _glowTool = null; return null; }
+        return Environment.TickCount64 - _glowAt <= AfterglowMs ? _glowTool : null;
+    }
+
     private MoodContext Mood(CodexSnapshot? st) => new(
         Running(st), (float)ContextFrac(st), UsageFrac(),
         st?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour);

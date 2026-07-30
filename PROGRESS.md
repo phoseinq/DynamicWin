@@ -2,7 +2,7 @@
 
 ## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
 
-Release 0 warnings / 0 errors, **343 tests** (up from 259; four new test files). Deployed by DLL hot-swap
+Release 0 warnings / 0 errors, **365 tests** (up from 259; five new test files). Deployed by DLL hot-swap
 and relaunched. **Mirror published to `origin/V3`.**
 
 ### "still cooking…" forever — the bug under the feature request
@@ -33,10 +33,73 @@ finds a set the slot actually has, so a slot needs only the situations worth wor
 The voice itself moved to hands-on work — a kitchen, a toolbox, a job on the bench — because a metaphor
 carries information a synonym does not: "kettle's on…" tells you to go away for a minute, "still
 running…" does not. `@tight` is the bench being covered, `@thin` is rationing, `@again` is the same
-drill. Half of `unknown` is now just the noise a person makes while thinking, which is the honest content
+drill. Claude Code's own spinner words are in there too - reflecting, synthesizing, analyzing, indexing, connecting, undulating - and half of `unknown` is now just the noise a person makes while thinking, which is the honest content
 of a state that has nothing to report — and the hmm gains an *m* per duration band ("hmm…" → "hmmm…" →
 "hmmmm…"), which is length as information and the one joke here that survives being read twice.
 **78 keys.**
+
+### The pill can finally say WHAT, not just what kind
+`ToolTarget` in `Halo.Hooks` forwards what a tool is acting on, taken from the `tool_input` the hook was
+already receiving and throwing away: the **file** for the file tools, the **program** for a shell command,
+the **host** for a fetch, the pattern for a search, the subagent for a `Task`. So the pill reads
+**"running dotnet…"**, "reading Moods.cs…", "writing Fx.cs…", "asking Explore…" — because "running…" could
+not tell a three-second `git status` from a two-minute build, which was the one thing it could not say.
+
+Precedence in `Moods.Line` is **situation → fact → voice**, so the line is always the most specific true
+thing about right now. A band still wins (a session about to run out of room is bigger news than which
+file is open — verified in the sheet: at 92% context the violet writing ring says "margins are gone…", not
+the filename). With nothing situational, the fact wins. With no fact — thinking, between tools, a payload
+that named nothing — the voice speaks, which is still most of the time.
+
+Everything about it degrades to null rather than guessing: a chained command names none of its programs, a
+`file_path` that isn't a string names nothing, a fact too long for 22px falls back to the voice rather than
+being clipped (a clipped line reads as a rendering fault). One real bug the tests caught first: a quoted
+program path, `"C:\Program Files\nodejs\npm.cmd" install`, split on whitespace and named **"Program"** —
+a wrong fact, which is worse than no fact.
+
+Two things had to be measured live rather than reasoned about. `tool_input` arrives as an object from some
+surfaces and as a JSON *string* from others, so `AsObject` accepts both. And every early live check read
+`"toolTarget": null` and looked like a failure — until the payload dump showed the extractor was right and
+the *observations* were wrong: each command I was reading the file with contained a `|` or an `&&`, so the
+extractor was correctly refusing to name one program out of several. `Get-Content <path>`, with neither,
+wrote `"toolTarget": "Get-Content"` first time.
+
+Codex gets none of this: its tool payload carries no target, so that widget's words are always the voice.
+A field that is permanently null is worse than an absent one.
+
+### The ring was orange 90% of the time, and the cause was not the palette
+Reported from the live pill, and true. The hook clears `currentTool` the moment a tool finishes, and the
+gap that follows — the model writing its next move — is many times longer than the call itself. So a ring
+keyed on the *current* tool spent almost all of its life on the tool-less amber, and with pressure warming
+that amber, a seven-colour palette was something the eye never actually saw.
+
+Two changes. The last tool is now held for **9 seconds** after it ends (`Glow`), for the words and the
+colour together, because the agent that has just read a file is still working on that file — and a state
+nobody ever sees is not a state. And the free-hue warm lerp went **0.85 → 0.45**: at 0.85 the thinking
+amber was fully orange from about 60% context on, and since thinking is where a turn spends most of its
+time, "always orange" was the honest report of it. Amber stays amber now; orange is kept for the top of
+the band, where it is news.
+
+### The notification sound that kept coming while no banner ever appeared
+Reported: banners suppressed, but a short sound most of the time. `Sound=0` was already being written
+per-app (with `ShowBanner` and `AllowUrgentNotifications`), and the registry was correct for 139 apps — so
+the registry was never the problem. The gate's own log had the answer: every launch printed
+`loaded 139 learned app(s)` and then took twelve seconds to reach `applying → WpnUserService restart`.
+
+`WpnUserService` reads these settings once, when *it* starts, and it is started by logon — so until that
+restart the deciding service has never seen a single zero. `Enable()` was stamping `_lastToast = now` at
+launch, out of politeness: "a sound might be in flight, don't cut it". The cost of that politeness was a
+twelve-second hole at every start in which every arriving toast banged at full volume. The refresh restart
+is now the first thing that happens.
+
+Second, the deferral could **starve**: each new toast pushed the pending restart back by the whole quiet
+gap, so on a machine that toasts every few seconds the restart might never land and the session ran on
+with a stale service. Past 30 seconds pending, the quiet-gap rule is dropped — one truncated sound is
+cheaper than a session of them. The cooldown is *not* dropped; it exists to stop restart thrash and
+outranks the sound. Both rules stay pure and unit-tested in `ApplyDelayMs`.
+
+Not verified by ear from here — the change is reasoned from the service's read-once behaviour and the
+gate's own log, so it wants a listen.
 
 ### One mapping for the words and the colour
 `ToolSlot(tool)` is now the single place a tool becomes a slot, on both widgets, and **both** the wording

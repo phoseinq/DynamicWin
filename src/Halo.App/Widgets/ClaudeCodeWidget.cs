@@ -157,7 +157,7 @@ internal sealed class ClaudeCodeWidget : IWidget
         var mood = Mood(st);
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
-            "working" => ToolVerb(st?.CurrentTool, mood),
+            "working" => ToolVerb(Glow(st).Tool, mood),
             "compacting" when Compacting(st) => Moods.Line("compacting", mood),
             "waiting_input" => "your move ;)",
             _ => IdleMood(st, mood),
@@ -894,7 +894,33 @@ internal sealed class ClaudeCodeWidget : IWidget
     // pill and anything else that asks cannot disagree about what the situation is.
     private MoodContext Mood(CcStatus? st) => new(
         Running(st), (float)ContextFrac(st), UsageFrac(),
-        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour);
+        st?.Session?.PromptTokens ?? 0, ToolRuns(st), DateTime.Now.Hour, Glow(st).Target);
+
+    // The hook clears currentTool the moment a tool finishes, and the gap that follows - the model writing
+    // its next move - is many times longer than the call itself. So a ring keyed on the CURRENT tool spent
+    // almost all of its life on the tool-less amber, and with pressure warming that amber the pill read as
+    // permanently orange: a seven-colour palette that the eye never actually saw. The last tool is held for
+    // a few seconds after it ends, for the words and the colour together, because the agent that just read
+    // a file is still working on that file - and a state nobody ever sees is not a state.
+    private const int AfterglowMs = 9_000;
+    private string? _glowTool, _glowTarget, _glowTurn;
+    private long _glowAt;
+
+    private (string? Tool, string? Target) Glow(CcStatus? st)
+    {
+        var turn = st?.StartedAt;
+        if (turn != _glowTurn) { _glowTurn = turn; _glowTool = _glowTarget = null; }   // a new turn starts cold
+        if (st?.CurrentTool is { Length: > 0 } cur)
+        {
+            _glowTool = cur;
+            _glowTarget = st.ToolTarget;
+            _glowAt = Environment.TickCount64;
+            return (cur, _glowTarget);
+        }
+        // idle, waiting, compacting: nothing is running, so there is nothing to hold over
+        if (Shown(st) != "working") { _glowTool = _glowTarget = null; return (null, null); }
+        return Environment.TickCount64 - _glowAt <= AfterglowMs ? (_glowTool, _glowTarget) : (null, null);
+    }
 
     // Tool hand-offs inside the current turn, so the voice can notice a loop. Counted off the status the
     // pill already reads per frame rather than plumbed through the hooks, and keyed by the turn's own
@@ -932,14 +958,14 @@ internal sealed class ClaudeCodeWidget : IWidget
     // their own hue instead of everything busy being green. waiting_input is the one state that reads as
     // urgent rather than as activity, so it takes the pink that means "this one is addressed to you" -
     // sharing amber with "thinking" hid the only state that is actually waiting on a human.
-    private static Color RingBase(CcStatus? st)
+    private static Color RingBase(CcStatus? st, string? tool)
         => NetMon.ApiDown || NetMon.NetDown ? Red
          : LimitHit ? White                 // out of juice: nothing can run, so the ring reads idle. Amber implied
                                             // activity and left the pill looking busy while it was waiting on a reset.
          : st?.State == "waiting_input" ? Fx.SlotColor("asking")
          : Compacting(st) ? Blue
          : JustCompacted(st) ? Mint         // 20 seconds of "there is room again", which used to look idle
-         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(st?.CurrentTool))
+         : Shown(st) == "working" ? Fx.SlotColor(ToolSlot(tool))
          : White;
 
     // …and what it shows, which is that meaning ridden by the same situation the voice reads: warmer as
@@ -948,12 +974,13 @@ internal sealed class ClaudeCodeWidget : IWidget
     // per-session state.
     private Color RingColor(CcStatus? st)
     {
-        var b = RingBase(st);
+        var tool = Glow(st).Tool;
+        var b = RingBase(st, tool);
         if (RingIsTheMessage(st)) return b;
         // only thinking and idle hand their hue over to pressure: the tool hues are carrying which activity
         // this is, and waiting_input's pink is carrying that it is your turn (see Fx.MoodRing)
         bool hueIsFree = st?.State != "waiting_input"
-            && (Shown(st) != "working" || string.IsNullOrEmpty(st?.CurrentTool));
+            && (Shown(st) != "working" || string.IsNullOrEmpty(tool));
         return Fx.MoodRing(b, Mood(st), hueIsFree);
     }
 

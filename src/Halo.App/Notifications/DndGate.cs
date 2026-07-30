@@ -35,6 +35,7 @@ internal static class BannerGate
     private static long _lastRestart = -60_000;
     private static long _lastToast = -QuietGapMs;
     private static bool _applyPending;
+    private static long _applySince;   // when the pending restart was first asked for, so it cannot starve
 
     // Windows starts a toast's sound the moment the toast fires; the suppression for an app we have not
     // seen before is written afterwards, and the service restart that applies it was killing whatever was
@@ -44,12 +45,22 @@ internal static class BannerGate
     // other, and 12s clears even the long ringtones (Phone Link, Teams).
     private const int QuietGapMs = 12_000;
     private const int CooldownMs = 60_000;
+    private const int MaxDeferMs = 30_000;   // past this the quiet gap has cost more than it is worth
 
-    // pure, so the two rules that were fighting each other can be tested without a registry or a service:
-    // never restart inside a sound, and never restart more than once a minute. Both must have elapsed.
+    // pure, so the rules that were fighting each other can be tested without a registry or a service:
+    // never restart inside a sound, never restart more than once a minute, and - the one added after the
+    // sound kept getting through - never defer forever. On a machine that toasts every few seconds, every
+    // arrival pushed the pending restart back by the whole quiet gap, so the restart could starve and the
+    // session ran on with a service whose cache predates every zero in the registry. Truncating one sound
+    // is cheaper than a session of them, so past maxDefer the quiet-gap rule is dropped. The cooldown is
+    // not dropped: that one exists to stop restart thrash and outranks the sound.
     internal static int ApplyDelayMs(long now, long lastRestart, long lastToast,
-                                     int quietGap = QuietGapMs, int cooldown = CooldownMs)
-        => (int)Math.Max(quietGap - (now - lastToast), Math.Max(cooldown - (now - lastRestart), 0));
+                                     int quietGap = QuietGapMs, int cooldown = CooldownMs,
+                                     long pendingSince = 0, int maxDefer = MaxDeferMs)
+    {
+        long quiet = pendingSince > 0 && now - pendingSince >= maxDefer ? 0 : quietGap - (now - lastToast);
+        return (int)Math.Max(quiet, Math.Max(cooldown - (now - lastRestart), 0));
+    }
 
     public static void Enable()
     {
@@ -57,9 +68,12 @@ internal static class BannerGate
         LoadState();                     // apps we've learned to silence across past sessions
         lock (_lock)
         {
-            // treat launch as "a sound may be in flight": the first apply then waits out the quiet gap
-            // instead of firing instantly into whatever was playing when Halo started
-            _lastToast = Environment.TickCount64;
+            // Launch used to stamp _lastToast = now, on the theory that a sound might be in flight and the
+            // first restart should not cut it. The cost of that politeness was a ~12 second hole at every
+            // start in which the stale service - the one that has never read a single zero - was still the
+            // one deciding, so every toast arriving in the window banged at full volume. That hole is the
+            // reported bug. The refresh restart is now the first thing that happens, and the quiet gap goes
+            // back to governing the restarts that follow.
             foreach (var aumid in new List<string>(_orig.Keys))
                 WriteZero(aumid);        // re-assert (usually already 0)
         }
@@ -154,7 +168,8 @@ internal static class BannerGate
     {
         lock (_lock)
             if (_applyPending)
-                _applyTimer?.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+                _applyTimer?.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                                 pendingSince: _applySince),
                                     Timeout.Infinite);
     }
 
@@ -186,8 +201,10 @@ internal static class BannerGate
         lock (_lock)
         {
             _applyTimer ??= new Timer(_ => DoApply(), null, Timeout.Infinite, Timeout.Infinite);
+            if (!_applyPending) _applySince = Environment.TickCount64;
             _applyPending = true;
-            _applyTimer.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast),
+            _applyTimer.Change(ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                            pendingSince: _applySince),
                                Timeout.Infinite);
         }
     }
@@ -198,10 +215,12 @@ internal static class BannerGate
         {
             // a toast may have landed while we waited — re-check both rules rather than assume the
             // delay we armed is still the right one
-            int wait = ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast);
+            int wait = ApplyDelayMs(Environment.TickCount64, _lastRestart, _lastToast,
+                                    pendingSince: _applySince);
             if (wait > 0) { _applyTimer?.Change(wait, Timeout.Infinite); return; }
             _lastRestart = Environment.TickCount64;
             _applyPending = false;
+            _applySince = 0;
         }
         Log("applying → WpnUserService restart (listener self-heals)");
         RestartService();
