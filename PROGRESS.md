@@ -145,16 +145,32 @@ treated as no budget at all — that is the pill animating, not a genuine eight-
 A test now walks every set and fails on any line that is merely the name of a state. A verb with an
 ellipsis ("working…") is voice; a bare state name is a leak.
 
-### A second colour on the ring
-"More colours around the ring", so: the spent share of the **context window** as a thin arc from 12
-o'clock, in the band colour the `/compact` warning fires on (blue → amber → red). The pill's ring now
-carries two facts at once — the circle is what it is doing, the arc is how much room is left — and the
-collapsed pill could not say the second one at all before; the words had to carry it alone.
+### Ten states, ten colours — and no second ring
+"More colours around the ring" meant *more of Claude's states carrying their own colour*, not another ring,
+so the context arc that went in first came straight back out. What replaced it: the families were split
+back apart, from seven to **ten**.
 
-It is a *separate, thinner ring 3px outside* the base one, not a fatter stroke on the same circle. Drawn on
-the same circle first, a 92% arc covered the whole base ring: the activity hue vanished and a full red
-sweep read as an outage, which is the one thing red is reserved for. Two concentric rings keep both
-readable — the same thing the expanded panel's three arcs already do.
+| | |
+|---|---|
+| green | a shell command is executing |
+| cyan | reading what is already here |
+| **teal** | fetching from outside — split out of cyan |
+| violet | writing, patching, publishing |
+| lime | digging and reviewing — shifted greener to make room |
+| **gold** | planning, plotting, a skill — split out of lime |
+| magenta | a subagent or an mcp server is doing it |
+| **slate** | watching, waiting on something outside — deliberately the quietest hue, which is what the state means |
+| pink | your turn |
+| amber | thinking, nothing to show yet |
+
+Plus the four whose colour *is* the message and never modulate: red outage, white spent-limit, blue running
+compact, mint just-compacted. **Fourteen** on the ring in total.
+
+The number is bounded by measurement, not taste. The same two tests that forced thirteen down to seven
+earlier now pass at ten: every pair 85 apart in RGB, and every modulated colour still nearer its own calm
+self than anyone else's. Ten passes where thirteen failed for two reasons — the pressure modulation is
+gentle now (when thirteen was tried, warmth was overwriting the hue and a squeezed green landed on lime),
+and each addition had to move its neighbour rather than being wedged between two of them.
 
 ### One mapping for the words and the colour
 `ToolSlot(tool)` is now the single place a tool becomes a slot, on both widgets, and **both** the wording
@@ -172,10 +188,9 @@ answers "who is doing this". Underscores become spaces and the whole thing is cu
 rather than clipped mid-word by the renderer, which reads as a rendering fault.
 
 ### The ring is a palette now, and pressure is not allowed to lie with it
-`Fx.SlotColor` gives seven activity families — green shell, cyan taking-in, violet putting-out, lime
-surveying, deep magenta somebody-else's-turn, pink **your** turn, amber thinking — plus the four whose
-colour *is* the message and are exempt from any modulation: red outage, white spent-limit, blue running
-compact, and a new **mint** for the twenty seconds after a compact, which used to look idle.
+`Fx.SlotColor` started at seven activity families and is now at ten (see above) — plus the four whose colour
+*is* the message and are exempt from any modulation: red outage, white spent-limit, blue running compact,
+and a **mint** for the twenty seconds after a compact, which used to look idle.
 
 Getting pressure to coexist with that took three tries, and each failure was a different kind of lie:
 
@@ -195,9 +210,8 @@ saturation and value: the same lamp turned up, never a different lamp.
 
 `SlotColorTests.AWarmedSlotNeverLooksLikeADifferentSlot` is the invariant, at five pressures × two times
 of day: however lit it gets, a slot must stay nearer its own calm colour than anyone else's. It is also
-what forced the palette down from thirteen hues to seven — thirteen is 27° apart, and reading-cyan and
-fetching-teal were one colour on a 2px ring. A ninth hue would have had to be squeezed between two
-neighbours; a seventh family did not.
+what forced the palette down from thirteen hues to seven, before the gentler modulation let it back up to
+ten: thirteen is 27° apart, and reading-cyan and fetching-teal were one colour on a 2px ring.
 
 Two more bugs the tests caught before the screen did: chaining two lerps off the state colour landed a
 squeezed green on **yellow**, and the HSV round trip **dropped alpha**, so the deliberately-not-opaque
@@ -211,7 +225,7 @@ under rising pressure. It immediately earned itself: the first pass produced pil
 words**, because the line fades in over frames (`_appear`) and a single-frame render draws it at alpha 0 —
 it now warms up on a throwaway surface.
 
-Rendered at 01:15, which is why the time-of-day band is all over it: idle → "night shift" (white);
+Twenty rows now, one per colour first and then the facts and the pressure bands. Rendered at 01:15 on the first pass, which is why the time-of-day band is all over that one: idle → "night shift" (white);
 thinking → "night thoughts…" (amber); shell → "the night shift…" (green); reading → "eyeing the wiring…"
 (cyan); writing → "by lamplight…" (violet); surveying → "on the trail…" (lime); subagent → "passing it
 on…" (magenta); an MCP tool → "calling the desk…"; an unmapped tool → "someothertool…" (green); waiting →

@@ -148,22 +148,6 @@ internal sealed class ClaudeCodeWidget : IWidget
         // so "thinking" read as a shadow around the icon and the user reported the ring never turning yellow.
         using (var pen = new Pen(Mul(RingColor(st), fade * 0.9f), 1.9f))
             g.DrawEllipse(pen, x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
-        // A SECOND colour on the same ring: the spent share of the context window, as an arc from 12 o'clock
-        // in the band colour the /compact warning fires on. The circle says what it is doing; the arc says
-        // how much room is left, which is the more actionable of the two and which the collapsed pill could
-        // not say at all - the words had to carry it alone. Hidden whenever a state owns the whole ring
-        // (outage, spent limit, running compact), because then the ring is already the message.
-        //
-        // It is a SEPARATE, thinner ring 3px outside the base one, not a fatter stroke on the same circle:
-        // drawn on top, a 92% arc covered the whole base ring, so the activity hue vanished and a full red
-        // sweep read as an outage. Two concentric rings keep both readable, which is what the expanded
-        // panel's three arcs already do.
-        double ctxArc = ContextFrac(st);
-        if (!RingIsTheMessage(st) && ctxArc > 0.02)
-            using (var arc = new Pen(Mul(ContextColour(ctxArc), fade * 0.8f), 1.7f)
-                   { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                g.DrawArc(arc, x - 5.5f, y - 5.5f, sz + 11f, sz + 11f,
-                    -90f, (float)Math.Clamp(ctxArc, 0.0, 1.0) * 360f);
         if (ClaudeIcon != null) DrawIcon(g, ClaudeIcon, x, y, sz, fade, sz / 2f); // circular
         else
             using (var db = new SolidBrush(Mul(RingColor(st), fade)))

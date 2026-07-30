@@ -617,35 +617,39 @@ internal static class Fx
     /// two cannot drift: whatever the pill is saying, the ring is the colour of that. Four flat states
     /// could not carry this; a dozen can, because each one is a thing the product also names out loud.
     ///
-    /// Grouped by what the agent is doing to your work rather than by tool: taking things in is cyan,
-    /// putting things out is violet, running something is green, looking through things is lime, handing it
-    /// to somebody else is magenta, thinking about it is amber. A slot with no colour of its own is green,
-    /// which is simply "working".
+    /// Grouped by what the agent is doing to your work rather than by tool: running something is green,
+    /// reading what is here is cyan, fetching from outside is teal, putting something back out is violet,
+    /// looking through things is lime, laying a plan is gold, somebody else doing it is magenta, waiting on
+    /// something outside is slate, your turn is pink, thinking is amber. A slot with no colour of its own is
+    /// green, which is simply "working".
     ///
-    /// EIGHT families and not one per slot, which is where this started: thirteen hues in 360 degrees is
-    /// 27 degrees apart, and on a 2px ring at 20px across, reading-cyan and fetching-teal were the same
-    /// colour. A test holds every pair 85 apart in rgb, and consolidating is what made that pass honestly
-    /// rather than by loosening the threshold.
+    /// TEN of them, and the number is bounded by measurement rather than taste: a test holds every pair 85
+    /// apart in rgb and every modulated colour nearer its own calm self than anyone else's, and the first
+    /// attempt at thirteen failed it — 27 degrees apart is one colour on a 2px ring. Ten passes because the
+    /// pressure modulation is gentle now (it was overwriting the hue when this was first tried) and because
+    /// each addition moved its neighbour: the lime went greener to make room for the gold.
     /// </summary>
     internal static Color SlotColor(string? slot) => slot switch
     {
         "running" => Color.FromArgb(62, 207, 92),                  // green: something is executing
-        "reading" or "peeking" or "fetching" or "searching"
-            => Color.FromArgb(53, 208, 232),                       // cyan: taking something in
+        "reading" or "peeking" => Color.FromArgb(53, 208, 232),     // cyan: taking in what is here
+        "fetching" or "searching" => Color.FromArgb(20, 190, 175),  // teal: taking in from outside
         "writing" or "patching" or "publishing"
             => Color.FromArgb(169, 139, 255),                      // violet: putting something back out
-        // lime is "working it out without touching anything yet" - looking through the code, laying a plan,
-        // following a recipe. It was its own gold at first and gold does not fit on this wheel: 15 degrees
-        // from the amber of thinking, and its dimmed night version drifted nearer to that amber than to
-        // itself. A ninth hue would have to be squeezed between two neighbours; a seventh family does not.
-        "digging" or "reviewing" or "planning" or "plotting" or "skill"
-            => Color.FromArgb(191, 215, 62),                       // lime: surveying, nothing changed yet
+        // lime shifted greener to make room for the gold beside it: at (191,215,62) it was 70 units from the
+        // gold and the two read as one colour on the ring
+        "digging" or "reviewing" => Color.FromArgb(170, 220, 50),   // lime: looking through what is here
+        "planning" or "plotting" or "skill"
+            => Color.FromArgb(240, 196, 60),                       // gold: laying it out before doing it
         // a DEEP magenta, not the bright one it started as: "somebody else's turn" and "your turn" sit next
         // to each other on the wheel, and at full pressure the bright magenta came out nearer the pink than
         // its own calm colour. They differ in lightness as well as hue now, which is the part that survives
         // being saturated and dimmed.
-        "delegating" or "consulting" or "watching"
-            => Color.FromArgb(190, 80, 175),                       // magenta: it is somebody else's turn
+        "delegating" or "consulting"
+            => Color.FromArgb(190, 80, 175),                       // magenta: somebody else is doing it
+        // deliberately the quietest hue here, because that is what the state means: nothing of ours is
+        // running, we are waiting on something outside
+        "watching" => Color.FromArgb(150, 160, 200),               // slate: waiting on something else
         "asking" => Color.FromArgb(255, 95, 138),                  // pink: this one is addressed to YOU
         "unknown" => Color.FromArgb(255, 150, 26),                 // amber: thinking, nothing to show yet
         "compacting" => Color.FromArgb(91, 157, 255),              // blue, as it has always been
