@@ -46,9 +46,27 @@ internal static class MediaFileInfo
 
     internal static bool LooksLikeFile(string title)
     {
-        var t = title.ToLowerInvariant();
+        var t = title.Trim();
+        if (t.Length is < 6 or > 200 || t.IndexOfAny(new[] { '/', '\\' }) >= 0) return false;
+        if (HasVideoExt(t)) return true;
+
+        return t.Split('.', StringSplitOptions.RemoveEmptyEntries).Length >= 4;
+    }
+
+    private static bool HasVideoExt(string name)
+    {
+        var t = name.ToLowerInvariant();
         foreach (var e in VideoExt) if (t.EndsWith(e, StringComparison.Ordinal)) return true;
         return false;
+    }
+
+    internal static bool SameFile(string candidatePath, string title)
+    {
+        var name = Path.GetFileName(candidatePath);
+        if (string.Equals(name, title, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!HasVideoExt(name)) return false;
+        var stem = name.Substring(0, name.LastIndexOf('.'));
+        return string.Equals(stem, title, StringComparison.OrdinalIgnoreCase);
     }
 
     private static long? Lookup(string title)
@@ -60,10 +78,10 @@ internal static class MediaFileInfo
         var exact = Path.Combine(recent, title + ".lnk");
         if (File.Exists(exact) && Verify(exact, title) is { } hit) return hit;
 
+        var prefix = HasVideoExt(title) ? title.Substring(0, title.LastIndexOf('.')) : title;
         foreach (var lnk in Directory.EnumerateFiles(recent, "*.lnk"))
         {
-            if (!Path.GetFileName(lnk).StartsWith(Path.GetFileNameWithoutExtension(title),
-                    StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Path.GetFileName(lnk).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (Verify(lnk, title) is { } size) return size;
         }
         return null;
@@ -77,7 +95,7 @@ internal static class MediaFileInfo
 
         foreach (var cand in Paths(bytes))
         {
-            if (!string.Equals(Path.GetFileName(cand), title, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!SameFile(cand, title)) continue;
             try
             {
                 var fi = new FileInfo(cand);

@@ -94,7 +94,8 @@ internal static class Fx
         g.Clip = old;
     }
 
-    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength)
+    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength,
+                               bool alive = false)
     {
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
@@ -169,8 +170,29 @@ internal static class Fx
             g.Clip = old;
         }
 
+        if (alive && fill > 3f)
+        {
+            float breath = 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2600 / 2600f * MathF.Tau);
+            float band = Math.Min(18f, fill);
+            float x0 = fill - band;
+            var lit = Alpha(accent, fade * (0.10f + 0.26f * breath));
+            using var pulse = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, band + 1f, h),
+                Color.FromArgb(0, accent), lit, LinearGradientMode.Horizontal);
+            pulse.InterpolationColors = new ColorBlend(3)
+            {
+                Positions = new[] { 0f, 0.82f, 1f },
+                Colors = new[] { Color.FromArgb(0, accent), lit, Color.FromArgb(0, accent) },
+            };
+            var oldP = g.Clip;
+            g.SetClip(new RectangleF(x0, 0, band, h), CombineMode.Intersect);
+            g.FillPath(pulse, pp);
+            g.Clip = oldP;
+        }
+
         if (fill > 6f)
-            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f, (int)(26 * strength), accent);
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f,
+                 (int)(26 * strength * (alive ? 0.85f + 0.4f * (0.5f - 0.5f * MathF.Cos(
+                     Environment.TickCount64 % 2600 / 2600f * MathF.Tau)) : 1f)), accent);
     }
 
     public static float CenterLift(Font f)

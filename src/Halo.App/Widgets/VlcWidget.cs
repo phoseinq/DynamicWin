@@ -131,6 +131,8 @@ internal sealed class VlcWidget : IWidget
         ? (int)(VlcHttp.Rate * 100) + (VlcHttp.Playing ? 1 : 0) + (VlcHttp.SubsOn ? 2 : 0) : 0);
     public Color? Ring => IsActive ? Orange : null;
 
+    public bool Animating => IsActive && VlcHttp.Online && VlcHttp.Playing;
+
     public float RingProgress => IsActive ? Progress() : -1f;
 
     private static readonly double[] SpeedPresets = { 1.0, 1.25, 1.5, 2.0 };
@@ -285,7 +287,8 @@ internal sealed class VlcWidget : IWidget
         if (name == null) return;
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float prog = Progress();
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.34f);
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.34f,
+            alive: VlcHttp.Online && VlcHttp.Playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 30, Orange);
         var icon = IconImage;
         if (icon != null)

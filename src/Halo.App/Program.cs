@@ -50,7 +50,25 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
 
+        if (args.Length >= 2 && args[0] == "--render-bar") { RenderBar(args[1]); return; }
+
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
+
+        if (args.Length >= 2 && args[0] == "--probe-size")
+        {
+            var title = args[1];
+            Console.WriteLine($"title       {title}");
+            Console.WriteLine($"looks like a file  {Halo.Widgets.MediaFileInfo.LooksLikeFile(title)}");
+            Halo.Widgets.MediaFileInfo.Size(title);
+            for (int i = 0; i < 40; i++)
+            {
+                System.Threading.Thread.Sleep(100);
+                if (Halo.Widgets.MediaFileInfo.Size(title) is { } b)
+                { Console.WriteLine($"size        {b:N0} bytes = {Halo.Widgets.MediaFileInfo.Human(b)}"); return; }
+            }
+            Console.WriteLine("size        (not found)");
+            return;
+        }
 
         if (args.Length >= 2 && args[0] == "--probe-seek") { ProbeSeek(double.Parse(args[1],
             System.Globalization.CultureInfo.InvariantCulture), args.Length > 2 ? int.Parse(args[2]) : 1); return; }
@@ -448,6 +466,38 @@ internal static class Program
             }, 0f, false);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static void RenderBar(string outPath)
+    {
+        const int W = 220, H = 40, Zoom = 2, Rows = 7, Pad = 8;
+        var accent = System.Drawing.Color.FromArgb(228, 168, 64);
+        using var bmp = new System.Drawing.Bitmap(W * Zoom + Pad * 2 + 150,
+            (H * Zoom + Pad) * Rows + Pad, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var g = System.Drawing.Graphics.FromImage(bmp);
+        g.Clear(System.Drawing.Color.FromArgb(255, 18, 18, 21));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var label = new System.Drawing.Font("Segoe UI", 13f, System.Drawing.GraphicsUnit.Pixel);
+        using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(225, 225, 230));
+
+        for (int r = 0; r < Rows; r++)
+        {
+            bool paused = r == Rows - 1;
+            g.DrawString(paused ? "paused" : $"playing +{r * 430}ms", label, lb, 8, Pad + r * (H * Zoom + Pad) + 26);
+            using var pill = new System.Drawing.Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var pg = System.Drawing.Graphics.FromImage(pill))
+            {
+                pg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var back = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 12, 12, 14)))
+                using (var pp = Halo.Widgets.Fx.PillPath(W, H, H / 2f))
+                    pg.FillPath(back, pp);
+                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, 0.42f, accent, 0.34f, alive: !paused);
+            }
+            g.DrawImage(pill, new System.Drawing.Rectangle(150, Pad + r * (H * Zoom + Pad), W * Zoom, H * Zoom));
+            if (!paused) System.Threading.Thread.Sleep(430);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine(outPath);
     }
 
     private static void ProbeSeek(double secs, int count)

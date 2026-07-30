@@ -973,7 +973,7 @@ internal sealed class MediaWidget : IWidget
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float prog = RingProgress;
 
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f);
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f, alive: playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
