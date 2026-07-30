@@ -187,6 +187,11 @@ internal sealed class LayeredNotch
         bool isDesktop = IsDesktopWindow(behind) || IsDesktopWindow(root);
 
         Win32.ShowWindow(Hwnd, Win32.SW_SHOWNOACTIVATE);
+        // A probe has to leave the z-order exactly as it found it. SW_SHOWNOACTIVATE re-inserts the window
+        // at the BOTTOM of the topmost band, so entering a fullscreen video - which is a foreground change,
+        // which is what triggers this probe - dropped the pill underneath the player and left it there until
+        // the next once-a-second assert. Reported as the pinned pill vanishing in a fullscreen video.
+        AssertTopmost();
         behindRoot = isDesktop ? IntPtr.Zero : root;
         return isDesktop;
     }
@@ -795,10 +800,9 @@ internal sealed class LayeredNotch
             DrawCircleImage(g, menu.DropImage, blob.X - r2, blob.Y - r2, r2 * 2, a);
             return;
         }
-        using var f = new Font("Segoe MDL2 Assets", r2 * 0.9f, GraphicsUnit.Pixel);
-        using var ib = new SolidBrush(Color.FromArgb((int)(235 * a), 255, 255, 255));
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(menu.DropIcon, f, ib, new RectangleF(blob.X - r2, blob.Y - r2, r2 * 2, r2 * 2), sf);
+        // ink-centred, like the swap cells right below: StringFormat centring sat this glyph high and left in
+        // its blob, the same fault the fallback art glyph had
+        DrawGlyphCentered(g, menu.DropIcon, blob.X - r2, blob.Y - r2, r2 * 2, r2 * 1.8f, (int)(235 * a));
     }
 
     // Standard metaball connector: fills the gooey bridge between two circles (nothing when apart or fused).

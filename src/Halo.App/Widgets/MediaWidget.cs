@@ -80,7 +80,7 @@ internal sealed class MediaWidget : IWidget
         get
         {
             string? id; lock (_lock) { id = _appId; }
-            var app = AppIcon.ForAumid(id);
+            var app = AppIcon.ForSessionApp(id);
             if (app != null) return app;
             EnsureArt();
             return _art;
@@ -685,7 +685,7 @@ internal sealed class MediaWidget : IWidget
         // album art if the track has any; otherwise the source app's icon (podcasts, some videos and
         // radio streams ship no thumbnail \u2014 the app icon reads far better than a generic music glyph)
         Bitmap? img = CurArt();
-        if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForAumid(id); }
+        if (img == null) { string? id; lock (_lock) { id = _appId; } img = AppIcon.ForSessionApp(id); }
         if (img != null)
         {
             CoverFill(g, img, x, y, size, path, fade);
@@ -832,10 +832,11 @@ internal sealed class MediaWidget : IWidget
     {
         using var f = new Font("Segoe Fluent Icons", px, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
-        // centre via StringFormat (MeasureString padding sat glyphs off-centre in the glass chips)
-        using var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(glyph, f, b, r, sf);
+        // Centred on the glyph's own INK, not by StringFormat. StringFormat centres the line box and the
+        // advance width, and for an icon font neither describes where that particular glyph's ink is - the
+        // fallback art glyph sat visibly high and left of the tile it is supposed to fill. Same conclusion
+        // LocalBadge and the copy pill each reached; it lives in Fx now so it is reached once.
+        Fx.GlyphCentred(g, r, glyph, f, b);
     }
 
     // decode the thumbnail into one or more frames. A single image → one frame; an animated GIF cover →

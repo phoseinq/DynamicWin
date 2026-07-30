@@ -255,28 +255,51 @@ internal static class Fx
     //
     // Returns the offset to ADD to a DrawString origin's y so the glyph's ink centres on that y. Cached:
     // building a GraphicsPath per glyph per frame would be silly on the render path.
-    private static readonly Dictionary<string, float> _inkOffsets = new();
+    private static readonly Dictionary<string, PointF> _inkOffsets = new();
 
-    public static float InkCentreOffset(Font f, string s)
+    /// <summary>
+    /// Both offsets to ADD to a DrawString origin (GenericTypographic, so the origin is the top-left of the
+    /// line box) to put the glyph's ink centre exactly on that point.
+    ///
+    /// The horizontal one matters for the same reason the vertical one does: StringAlignment.Center centres
+    /// the ADVANCE WIDTH, and an icon font's advance says no more about where its ink sits than its line box
+    /// does. A fallback glyph centred that way sat visibly off inside the pill.
+    /// </summary>
+    public static PointF InkCentreOffsets(Font f, string s)
     {
-        if (string.IsNullOrEmpty(s)) return 0f;
+        if (string.IsNullOrEmpty(s)) return PointF.Empty;
         string key = f.FontFamily.Name + "|" + f.Style + "|" + f.Size.ToString("0.##") + "|" + s;
         lock (_inkOffsets)
         {
-            if (_inkOffsets.TryGetValue(key, out float v)) return v;
-            float off = 0f;
+            if (_inkOffsets.TryGetValue(key, out var v)) return v;
+            var off = PointF.Empty;
             try
             {
                 using var path = new GraphicsPath();
                 using var sf = new StringFormat(StringFormat.GenericTypographic);
                 path.AddString(s, f.FontFamily, (int)f.Style, f.Size, PointF.Empty, sf);
                 var b = path.GetBounds();
-                if (b.Height > 0) off = -(b.Top + b.Height / 2f);
+                if (b.Width > 0 && b.Height > 0)
+                    off = new PointF(-(b.Left + b.Width / 2f), -(b.Top + b.Height / 2f));
             }
             catch { }
             _inkOffsets[key] = off;
             return off;
         }
+    }
+
+    public static float InkCentreOffset(Font f, string s) => InkCentreOffsets(f, s).Y;
+
+    /// <summary>
+    /// One icon-font glyph, centred on its own ink inside <paramref name="r"/> — the thing every fallback
+    /// glyph wants and that three places had each worked out separately (the copy pill, LocalBadge, and the
+    /// media art). DrawString rather than a filled path, so small glyphs keep their hinting.
+    /// </summary>
+    public static void GlyphCentred(Graphics g, RectangleF r, string glyph, Font f, Brush brush)
+    {
+        var off = InkCentreOffsets(f, glyph);
+        using var sf = new StringFormat(StringFormat.GenericTypographic) { FormatFlags = StringFormatFlags.NoWrap };
+        g.DrawString(glyph, f, brush, new PointF(r.X + r.Width / 2f + off.X, r.Y + r.Height / 2f + off.Y), sf);
     }
 
     // Same trick for text, but measured on a CAP reference rather than on the string itself: centring a

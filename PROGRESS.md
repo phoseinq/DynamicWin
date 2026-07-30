@@ -129,6 +129,46 @@ A held line whose room has since shrunk is re-rolled rather than drawn too small
 elapsed clock grows a digit mid-hold. `Fact` respects the same budget, so "writing SomethingLong.cs…"
 gives way to the voice. The font floor is 12.5px, and reaching it should now be rare.
 
+### The pinned pill vanished in a fullscreen video
+The pin already forces the fullscreen-hide off (`bool fullscreen = !_pinned && IsFullscreen(fg)`), so the
+pill was not being hidden — it was being **buried**, and two things did it.
+
+`ProbeBehind` hides the window for 12ms to see what is behind it, then calls `SW_SHOWNOACTIVATE`. That
+re-inserts the window at the *bottom of the topmost band*. It runs on every foreground change — and
+entering a fullscreen video **is** a foreground change — so the pill dropped underneath the player at
+exactly the wrong moment and stayed there until the next once-a-second `AssertTopmost`. A probe has to leave
+the z-order as it found it, so it re-asserts now.
+
+And once a second is enough to *recover* a buried pill but not to *hold* one over a fullscreen video: the
+player keeps re-asserting itself, and DWM's independent-flip path stops compositing anything over a
+fullscreen surface until an overlapping topmost window insists. While pinned and something is covering the
+screen, it now insists every frame — one `SetWindowPos` with no move, size or activate.
+
+### The fallback icon, and why the real one never came
+Two separate faults, reported together.
+
+**The alignment.** `MediaWidget.DrawGlyph` centred with `StringFormat`, which centres the *line box* and the
+*advance width* — and for an icon font neither says anything about where that particular glyph's ink sits.
+The new `--render-glyphs` hook shows every fallback glyph at 6× with crosshairs through its tile's true
+centre: all seven sat high, most of them left as well. `Fx.GlyphCentred` centres on the ink in both axes,
+and the sheet's second column puts each glyph on the crosshair. This is the third place to reach that
+conclusion (the copy pill and `LocalBadge` each did their own), so it lives in `Fx` now — and the swap-strip
+cells, which had already learned it, are unchanged. The drop blob had not, and now has.
+
+**Why the icon was missing at all.** `AppIcon.ForAumid` resolves by matching a **running process name** and
+pulling the icon out of its exe, which a packaged app has none of. Measured with the new `--probe-media`
+against the actual session: the player is `Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic`, where
+`AppIcon` returns **NULL** and `ShellIcon` returns 256×256 — and for the *new* `Microsoft.Media.Player` it is
+exactly the other way round. The media widget only ever asked `AppIcon`, so any packaged player with no
+track thumbnail fell through to the glyph. `AppIcon.ForSessionApp` asks the shell first, then the exe: the
+same chain the notification icons have always used. Both resolvers cache their misses, so it is safe per
+frame.
+
+Loose end worth knowing: `MediaSessions.SlotApp` runs the AUMID through `GetFileNameWithoutExtension`, which
+cuts at the last dot — the ZuneMusic session reports its app as
+`microsoft.zunemusic_8wekyb3d8bbwe!microsoft`. It is only used for the focus-hide rule, which therefore
+never matches a packaged player. Left alone for now; it degrades quietly rather than wrongly.
+
 ### The pill said "idle", which is the one word it must never say
 Reported from the live pill, with a screenshot. Two faults meeting:
 

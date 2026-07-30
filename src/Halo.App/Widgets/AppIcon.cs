@@ -14,6 +14,21 @@ internal static class AppIcon
     private static readonly Dictionary<string, Bitmap> _ok = new(StringComparer.OrdinalIgnoreCase);
     private static readonly Dictionary<string, long> _missed = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// A media session's app icon, through both resolvers — which is what it always should have been.
+    ///
+    /// <see cref="ForAumid"/> works by matching a RUNNING PROCESS NAME and pulling the icon out of its exe,
+    /// and a packaged app has no process name to match: measured with <c>--probe-icon</c>, it returns NULL
+    /// for <c>Microsoft.ZuneVideo_8wekyb3d8bbwe!Microsoft.ZuneVideo</c> (Movies &amp; TV) and for ZuneMusic,
+    /// where ShellIcon returns a 256px one — and for the new <c>Microsoft.Media.Player</c> it is exactly the
+    /// other way round. That NULL is why the pill fell through to its fallback glyph while a video played.
+    /// Ask the shell first (bigger art, and it is the one that knows about packaged apps), then the exe.
+    /// Both resolvers cache, including their misses, so this is safe on the render path.
+    /// </summary>
+    public static Bitmap? ForSessionApp(string? aumid)
+        => string.IsNullOrEmpty(aumid) ? null
+         : Halo.Notifications.ShellIcon.ForAumid(aumid) ?? ForAumid(aumid);
+
     public static Bitmap? ForAumid(string? aumid)
     {
         if (string.IsNullOrEmpty(aumid)) return null;

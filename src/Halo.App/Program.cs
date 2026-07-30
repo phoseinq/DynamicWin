@@ -57,6 +57,14 @@ internal static class Program
         // dev hook: `Halo.App --render-copy <out.png>` — the copy-code pill in both states, 4x, with a
         // centre guide. Its glyph and label are 11-12px, so being 1px out is visible and unmeasurable by eye.
         if (args.Length >= 2 && args[0] == "--render-copy") { RenderCopy(args[1]); return; }
+        // dev hook: `Halo.App --render-glyphs <out.png>` — every fallback glyph in its tile at 6x, the old
+        // StringFormat centring beside the ink centring, with crosshairs through the true centre. A glyph
+        // being 2px high in a 20px tile is exactly the kind of claim that cannot be settled by eye.
+        if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
+        // dev hook: `Halo.App --probe-media` — every live SMTC slot, its app id, whether it ships a
+        // thumbnail, and what each icon resolver answers for it. The pill falling back to a glyph is always
+        // one of these three coming back empty, and guessing which is how a whole evening gets spent.
+        if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
         // dev hook: `Halo.App --probe-downloads <out.txt>` — every download each source can see, plus the
         // raw rows out of Chromium's in-progress store. Written to a file because this is a WinExe.
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
@@ -492,6 +500,113 @@ internal static class Program
             }, 0f, false);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    // dev-only: what each live media session actually offers the pill to draw. Three things decide whether
+    // the art tile shows something real or falls back to a glyph — the track's own thumbnail, then the shell's
+    // icon for the app id, then the icon inside the app's exe — and this prints all three per slot.
+    private static void ProbeMedia()
+    {
+        var sessions = new Halo.Widgets.MediaSessions();
+        for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
+
+        for (int slot = 0; slot < Halo.Widgets.MediaSessions.MaxSlots; slot++)
+        {
+            var s = sessions.Session(slot);
+            if (s is null) { Console.WriteLine($"slot {slot}   (empty)"); continue; }
+            string? aumid = null;
+            try { aumid = s.SourceAppUserModelId; } catch { }
+            Console.WriteLine($"slot {slot}   app='{sessions.SlotApp(slot)}'  aumid='{aumid}'");
+
+            bool thumb = false;
+            try
+            {
+                var props = s.TryGetMediaPropertiesAsync().AsTask().GetAwaiter().GetResult();
+                thumb = props?.Thumbnail != null;
+                Console.WriteLine($"          title='{props?.Title}'  thumbnail={(thumb ? "yes" : "NONE")}");
+            }
+            catch (Exception ex) { Console.WriteLine("          properties failed: " + ex.Message); }
+
+            var shell = aumid is null ? null : Halo.Notifications.ShellIcon.ForAumid(aumid);
+            var exe = Halo.Widgets.AppIcon.ForAumid(aumid);
+            var chain = Halo.Widgets.AppIcon.ForSessionApp(aumid);
+            Console.WriteLine($"          ShellIcon={(shell is null ? "NULL" : $"{shell.Width}x{shell.Height}")}"
+                + $"   AppIcon={(exe is null ? "NULL" : $"{exe.Width}x{exe.Height}")}"
+                + $"   chain={(chain is null ? "NULL → the glyph fallback draws" : $"{chain.Width}x{chain.Height}")}");
+        }
+    }
+
+    // dev-only: every fallback glyph the pill can end up showing, in the tile it has to fill, magnified, with
+    // the old StringFormat centring beside the ink centring and crosshairs through the tile's true centre.
+    // The complaint that started it ("the fallback icon is not aligned") is a two-pixel claim about a 20px
+    // tile, which is unsettleable on a 1x screen and obvious at 6x.
+    private static void RenderGlyphs(string outPath)
+    {
+        (string glyph, string name)[] rows =
+        {
+            ("", "media art fallback"),   // MusicInfo — the one that was reported
+            ("", "media (menu)"),
+            ("", "agent fallback"),
+            ("", "download"),
+            ("", "robot / generic agent"),
+            ("", "bluetooth"),
+            ("", "file tray"),
+        };
+        const int Tile = 22, Zoom = 6, Pad = 10, LabelW = 190;
+        int cell = Tile * Zoom;
+        int width = LabelW + Pad * 3 + cell * 2, height = Pad + rows.Length * (cell + Pad);
+
+        using var bmp = new System.Drawing.Bitmap(width, height,
+            System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var g = System.Drawing.Graphics.FromImage(bmp);
+        g.Clear(System.Drawing.Color.FromArgb(255, 24, 24, 28));
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+        using var label = new System.Drawing.Font("Segoe UI", 15f, System.Drawing.GraphicsUnit.Pixel);
+        using var head = new System.Drawing.Font("Segoe UI Semibold", 14f, System.Drawing.GraphicsUnit.Pixel);
+        using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(235, 235, 240));
+        using var white = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+        using var tileBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(40, 255, 255, 255));
+        using var cross = new System.Drawing.Pen(System.Drawing.Color.FromArgb(120, 255, 90, 140), 1f);
+
+        int y = Pad;
+        for (int i = 0; i < rows.Length; i++)
+        {
+            var (glyph, name) = rows[i];
+            g.DrawString(name, label, lb, new System.Drawing.PointF(Pad, y + cell / 2f - 10f));
+            if (i == 0)
+            {
+                g.DrawString("StringFormat", head, lb, new System.Drawing.PointF(LabelW + Pad * 2, 2f));
+                g.DrawString("ink", head, lb, new System.Drawing.PointF(LabelW + Pad * 3 + cell, 2f));
+            }
+
+            for (int col = 0; col < 2; col++)
+            {
+                float tx = LabelW + Pad * 2 + col * (cell + Pad);
+                var tile = new System.Drawing.RectangleF(tx, y, cell, cell);
+                // the tile is drawn at the magnified size and the glyph asked for a magnified em, so what is
+                // being compared is the same geometry the pill uses, six times bigger
+                using (var p = Halo.Widgets.Fx.Rounded(tile, 14f * Zoom)) g.FillPath(tileBrush, p);
+                g.DrawLine(cross, tx, y + cell / 2f, tx + cell, y + cell / 2f);
+                g.DrawLine(cross, tx + cell / 2f, y, tx + cell / 2f, y + cell);
+
+                using var gf = new System.Drawing.Font("Segoe Fluent Icons", Tile * 0.5f * Zoom,
+                    System.Drawing.GraphicsUnit.Pixel);
+                if (col == 0)
+                {
+                    using var sf = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic)
+                    {
+                        Alignment = System.Drawing.StringAlignment.Center,
+                        LineAlignment = System.Drawing.StringAlignment.Center,
+                    };
+                    g.DrawString(glyph, gf, white, tile, sf);
+                }
+                else Halo.Widgets.Fx.GlyphCentred(g, tile, glyph, gf, white);
+            }
+            y += cell + Pad;
+        }
+
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine(outPath);
     }
 
     // dev-only: the copy-code pill, magnified, in both of its states, with a line through the true centre of
