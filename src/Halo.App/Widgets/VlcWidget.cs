@@ -296,16 +296,7 @@ internal sealed class VlcWidget : IWidget
             g.DrawImage(icon, x + 2, y + 2, sz - 4, sz - 4);
             g.ResetClip();
         }
-        if (prog >= 0f)
-        {
-            var ringRect = new RectangleF(x - 2.5f, y - 2.5f, sz + 5f, sz + 5f);
-            using var ringPath = Fx.Rounded(ringRect, sz * 0.28f + 2.5f);
-            using (var track = new Pen(Mul(Color.FromArgb(46, 255, 255, 255), fade * 0.9f), 1.7f))
-                g.DrawPath(track, ringPath);
-            using var pen = new Pen(Mul(Orange, fade * 0.95f), 1.9f)
-            { StartCap = LineCap.Round, EndCap = LineCap.Round };
-            Fx.PathProgress(g, ringPath, prog, pen);
-        }
+
         using var f = new Font("Segoe UI Semibold", 14f, GraphicsUnit.Pixel);
         using var b = new SolidBrush(Mul(White, fade));
         using var sf = new StringFormat(StringFormat.GenericTypographic)

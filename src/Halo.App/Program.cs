@@ -52,6 +52,9 @@ internal static class Program
 
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
 
+        if (args.Length >= 2 && args[0] == "--probe-seek") { ProbeSeek(double.Parse(args[1],
+            System.Globalization.CultureInfo.InvariantCulture)); return; }
+
         if (args.Length >= 2 && args[0] == "--probe-downloads") { ProbeDownloads(args[1]); return; }
 
         if (args.Length >= 1 && args[0] == "--cancel-download") { CancelDownload(); return; }
@@ -447,6 +450,38 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
+    private static void ProbeSeek(double secs)
+    {
+        var sessions = new Halo.Widgets.MediaSessions();
+        for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
+        var s = sessions.Session(0);
+        if (s is null) { Console.WriteLine("no session"); return; }
+
+        var widget = new Halo.Widgets.MediaWidget(sessions, 0);
+
+        using var scratch = new System.Drawing.Bitmap(220, 40,
+            System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var sg = System.Drawing.Graphics.FromImage(scratch);
+        void Pump() { try { widget.DrawCollapsed(sg, 220, 40, 1f); } catch { } }
+        for (int i = 0; i < 20 && widget.RingProgress < 0f; i++) { Pump(); System.Threading.Thread.Sleep(100); }
+
+        var before = s.GetTimelineProperties();
+        var target = before.Position + TimeSpan.FromSeconds(secs);
+        Console.WriteLine($"before   pos={before.Position}  (asking for {target})");
+        bool ok = false;
+        try { ok = s.TryChangePlaybackPositionAsync(target.Ticks).AsTask().GetAwaiter().GetResult(); }
+        catch (Exception ex) { Console.WriteLine("threw: " + ex.Message); }
+        Console.WriteLine($"returned {ok}");
+        for (int i = 1; i <= 6; i++)
+        {
+            System.Threading.Thread.Sleep(400);
+            Pump();
+            var now = s.GetTimelineProperties();
+            Console.WriteLine($"  +{i * 400,4}ms pos={now.Position}  updated={now.LastUpdatedTime:HH:mm:ss.fff}"
+                + $"  widget.RingProgress={widget.RingProgress:0.0000}");
+        }
+    }
+
     private static void ProbeMedia()
     {
         var sessions = new Halo.Widgets.MediaSessions();
@@ -468,6 +503,19 @@ internal static class Program
                 Console.WriteLine($"          title='{props?.Title}'  thumbnail={(thumb ? "yes" : "NONE")}");
             }
             catch (Exception ex) { Console.WriteLine("          properties failed: " + ex.Message); }
+
+            try
+            {
+                var tl = s.GetTimelineProperties();
+                var pb = s.GetPlaybackInfo();
+                Console.WriteLine($"          pos={tl.Position} start={tl.StartTime} end={tl.EndTime}");
+                Console.WriteLine($"          minSeek={tl.MinSeekTime} maxSeek={tl.MaxSeekTime}"
+                    + $"  lastUpdated={tl.LastUpdatedTime:HH:mm:ss}");
+                Console.WriteLine($"          canSeek={pb.Controls.IsPlaybackPositionEnabled}"
+                    + $" canRate={pb.Controls.IsPlaybackRateEnabled} rate={pb.PlaybackRate}"
+                    + $" state={pb.PlaybackStatus} type={pb.PlaybackType}");
+            }
+            catch (Exception ex) { Console.WriteLine("          timeline failed: " + ex.Message); }
 
             var shell = aumid is null ? null : Halo.Notifications.ShellIcon.ForAumid(aumid);
             var exe = Halo.Widgets.AppIcon.ForAumid(aumid);
@@ -817,6 +865,17 @@ internal static class Program
                     Halo.ClaudeCode.IpCountry.Split ? Halo.ClaudeCode.IpCountry.ApiCc : Halo.ClaudeCode.IpCountry.Cc);
                 for (int i = 0; i < 40 && !Halo.ClaudeCode.DnsLeak.Done; i++) System.Threading.Thread.Sleep(500);
             }
+
+            using (var warm = new System.Drawing.Bitmap(560, 220,
+                       System.Drawing.Imaging.PixelFormat.Format32bppPArgb))
+            using (var wg = System.Drawing.Graphics.FromImage(warm))
+                for (int f = 0; f < 45; f++)
+                {
+                    wg.Clear(System.Drawing.Color.FromArgb(20, 20, 22));
+                    try { w.DrawContent(wg, 560, 220, 1f); } catch { }
+                    System.Threading.Thread.Sleep(12);
+                }
+
             using var bmp = new System.Drawing.Bitmap(560 * scale, 220 * scale);
             using (var g = System.Drawing.Graphics.FromImage(bmp))
             {
