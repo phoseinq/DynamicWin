@@ -191,4 +191,17 @@ public class MoodsTests
                 Assert.All(l, c => Assert.True(c == '…' || (c >= ' ' && c <= '~'),
                     $"{k}: unexpected character U+{(int)c:X4} in \"{l}\""));
     }
+
+    // "idle" was a line in the idle set. It is the raw state name - the one thing this table exists to avoid
+    // saying out loud - and it read as a debug string on the pill. It was also the shortest line in its set,
+    // so it won every time the space was tight. A verb with an ellipsis ("working…") is voice; a bare state
+    // name is a leak.
+    [Fact]
+    public void NoLineIsJustTheNameOfAState()
+    {
+        var states = new[] { "idle", "working", "compacting", "waiting_input", "unknown", "error" };
+        foreach (var key in Moods.Keys)
+            foreach (var line in Moods.Set(key))
+                Assert.DoesNotContain(line.Trim().ToLowerInvariant(), states);
+    }
 }

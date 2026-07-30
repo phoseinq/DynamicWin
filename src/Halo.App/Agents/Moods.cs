@@ -78,7 +78,10 @@ internal static class Moods
         ["idle"] = new[]
         {
             "let's work :)", "standing by", "all yours", "nothing on", "clear desk",
-            "say the word", "on standby", "queue's empty", "awaiting orders", "idle", "ready",
+            // "idle" was in here and had to go: it is the raw state name, which is the one thing this whole
+            // table exists to avoid saying out loud. It read as a debug string on the pill - and being the
+            // shortest line in the set, it won every time the space was tight.
+            "say the word", "on standby", "queue's empty", "awaiting orders", "ready",
             "put me to work", "unoccupied", "primed", "twiddling thumbs", "at your service",
             "tools down", "bench is clear", "apron on", "gloves on",
         },

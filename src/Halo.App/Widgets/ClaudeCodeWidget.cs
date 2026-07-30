@@ -184,7 +184,13 @@ internal sealed class ClaudeCodeWidget : IWidget
         float elW0 = el0.Length > 0
             ? g.MeasureString(el0, elFont, int.MaxValue, StringFormat.GenericTypographic).Width : 0;
         float avail0 = (w - 14) - textX0 - (elW0 > 0 ? elW0 + 10 : 0);
-        var mood = Mood(st) with { MaxChars = Fx.FitChars(g, avail0, MinVerbPx) };
+        // The budget only means something once the pill is at its settled collapsed size. Mid-morph w is
+        // transient, and a line picked under a transient budget is then HELD for a minute - which is how
+        // "idle", the shortest line in the set, ended up sitting on a full-width pill. A budget under eight
+        // characters is not a real one either: it means the pill is animating, not that the words must fit
+        // in eight characters.
+        int fit = fade > 0.99f ? Fx.FitChars(g, avail0, MinVerbPx) : 0;
+        var mood = Mood(st) with { MaxChars = fit >= 8 ? fit : 0 };
         string verb = OutageText() ?? (LimitHit ? "outta juice :(" : Shown(st) switch
         {
             "working" => ToolVerb(Glow(st).Tool, mood),

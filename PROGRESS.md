@@ -2,7 +2,7 @@
 
 ## 2026-07-30 — the voice reads the room, the ring rides with it, and the chime says where you are
 
-Release 0 warnings / 0 errors, **371 tests** (up from 259; five new test files). Deployed by DLL hot-swap
+Release 0 warnings / 0 errors, **372 tests** (up from 259; five new test files). Deployed by DLL hot-swap
 and relaunched. **Mirror published to `origin/V3`.**
 
 ### "still cooking…" forever — the bug under the feature request
@@ -128,6 +128,22 @@ fits, the shortest line in the set is drawn, because a too-long true line still 
 A held line whose room has since shrunk is re-rolled rather than drawn too small, which happens when the
 elapsed clock grows a digit mid-hold. `Fact` respects the same budget, so "writing SomethingLong.cs…"
 gives way to the voice. The font floor is 12.5px, and reaching it should now be rare.
+
+### The pill said "idle", which is the one word it must never say
+Reported from the live pill, with a screenshot. Two faults meeting:
+
+**"idle" was a line in the idle set** — the raw state name, which is the entire thing this table exists to
+avoid saying out loud, and it read exactly like the debug string it is. At four characters it was also the
+shortest line in its set.
+
+**And the budget was being measured on a frame the pill never rests at.** `MaxChars` came from the live
+`w`, which is mid-morph for most of an expand or a collapse; a pick made at a transient width is then
+**held for a minute**, so one narrow frame put the shortest line in the set onto a full-width pill. The
+budget is now only taken when the pill is settled (`fade > 0.99`), and a budget under eight characters is
+treated as no budget at all — that is the pill animating, not a genuine eight-character gap.
+
+A test now walks every set and fails on any line that is merely the name of a state. A verb with an
+ellipsis ("working…") is voice; a bare state name is a leak.
 
 ### A second colour on the ring
 "More colours around the ring", so: the spent share of the **context window** as a thin arc from 12
