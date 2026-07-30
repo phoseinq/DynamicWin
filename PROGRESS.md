@@ -144,6 +144,23 @@ player keeps re-asserting itself, and DWM's independent-flip path stops composit
 fullscreen surface until an overlapping topmost window insists. While pinned and something is covering the
 screen, it now insists every frame — one `SetWindowPos` with no move, size or activate.
 
+**Neither was enough, reported back: still nothing in fullscreen.** Which points at the flag the pill has
+carried all along — `WDA_EXCLUDEFROMCAPTURE`. That flag is not only about screenshots: a window excluded
+from capture is handled outside the normal composed frame, and over a fullscreen flip-model surface DWM does
+not bring it back in. So the pill was never *buried* there; it was **not composited at all**, and no z-order
+call can win an argument it is not part of. A pinned pill over a fullscreen app now trades the exclusion
+away and takes it back the moment that app stops being fullscreen. The cost is appearing in screen
+recordings for exactly that window of time, against a pin that otherwise does not work.
+
+The glass degrades while that trade is on — `_capturable` turns off the screen-grab path, so the backdrop
+comes from the window DC and then PrintWindow. Over a fullscreen video that is the right trade too.
+
+Not confirmed by eye from here: verifying it needs someone watching a real fullscreen video. If it is still
+invisible, the only lever left is the shell's z-band (`SetWindowBand` into a UIAccess band, which is how the
+taskbar and Game Bar do it) and that needs a uiAccess-signed app installed under Program Files — not
+available to an unpackaged app in LOCALAPPDATA. True exclusive-fullscreen DirectX cannot be overlaid by any
+ordinary window at all.
+
 ### The fallback icon, and why the real one never came
 Two separate faults, reported together.
 
