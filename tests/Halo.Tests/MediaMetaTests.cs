@@ -124,3 +124,43 @@ public class VlcStatusTests
         Assert.Null(Halo.Widgets.VlcHttp.ParseResolution("<root></root>"));
     }
 }
+
+// The size lookup matches a title against the shell's Recent shortcuts. Both halves of that broke on the one
+// player that prompted it: Windows' Media Player reports the name WITHOUT its extension, so the lookup was
+// gated off entirely and the name never matched the shortcut it was sitting right next to.
+public class MediaFileMatchTests
+{
+    private const string Title = "Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media";   // as SMTC reports it
+
+    [Fact]
+    public void AReleaseNameWithNoExtensionIsStillWorthLookingUp()
+    {
+        Assert.True(MediaFileInfo.LooksLikeFile(Title));
+        Assert.True(MediaFileInfo.LooksLikeFile(Title + ".mkv"));
+    }
+
+    [Theory]
+    [InlineData("Some Song")]
+    [InlineData("track.mp3")]
+    [InlineData("a.b")]
+    [InlineData(@"C:\Videos\film.mkv")]   // a path is not a title
+    public void OrdinaryTitlesAreNot(string title)
+        => Assert.False(MediaFileInfo.LooksLikeFile(title));
+
+    // the shortcut points at the file WITH its extension; the title has none
+    [Fact]
+    public void TheFileIsRecognisedWithOrWithoutTheExtensionTheTitleLacks()
+    {
+        Assert.True(MediaFileInfo.SameFile(@"D:\Films\" + Title + ".mkv", Title));
+        Assert.True(MediaFileInfo.SameFile(@"D:\Films\" + Title, Title));
+        Assert.True(MediaFileInfo.SameFile(@"D:\Films\" + Title.ToUpperInvariant() + ".MKV", Title));
+    }
+
+    // ...but a different film that merely starts the same way is not the same file
+    [Theory]
+    [InlineData(@"D:\Films\Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media.2.mkv")]
+    [InlineData(@"D:\Films\Spy.2015.720p.BluRay.Farsi.Dubbed.Film2Media.mkv")]
+    [InlineData(@"D:\Films\Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media.txt")]
+    public void ANearMissIsNotAMatch(string path)
+        => Assert.False(MediaFileInfo.SameFile(path, Title));
+}

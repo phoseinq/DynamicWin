@@ -1123,7 +1123,8 @@ internal sealed class MediaWidget : IWidget
         // Backmost: how far through the video you are, as the pill's own background — the same "the pill IS
         // the bar" language the agent pills use for a spent usage window, and a better use of it here, since
         // a video's progress is the number you actually keep glancing at.
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f);
+        // alive: the wavefront breathes while it is playing and stands still when it is not
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f, alive: playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 

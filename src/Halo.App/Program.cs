@@ -62,10 +62,32 @@ internal static class Program
         // StringFormat centring beside the ink centring, with crosshairs through the true centre. A glyph
         // being 2px high in a 20px tile is exactly the kind of claim that cannot be settled by eye.
         if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
+        // dev hook: `Halo.App --render-bar <out.png>` — the pill's background progress bar as a filmstrip,
+        // one row per moment across a full breath, with a paused row for comparison. A pulse cannot be judged
+        // from a single still, and "does it look like it is running" is the whole point of it.
+        if (args.Length >= 2 && args[0] == "--render-bar") { RenderBar(args[1]); return; }
         // dev hook: `Halo.App --probe-media` — every live SMTC slot, its app id, whether it ships a
         // thumbnail, and what each icon resolver answers for it. The pill falling back to a glyph is always
         // one of these three coming back empty, and guessing which is how a whole evening gets spent.
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
+        // dev hook: `Halo.App --probe-size "<title>"` — the file-size lookup on its own, without needing a
+        // player to be open. It is a match against the shell's Recent shortcuts, so it is worth being able to
+        // ask it directly rather than only through a live session.
+        if (args.Length >= 2 && args[0] == "--probe-size")
+        {
+            var title = args[1];
+            Console.WriteLine($"title       {title}");
+            Console.WriteLine($"looks like a file  {Halo.Widgets.MediaFileInfo.LooksLikeFile(title)}");
+            Halo.Widgets.MediaFileInfo.Size(title);
+            for (int i = 0; i < 40; i++)
+            {
+                System.Threading.Thread.Sleep(100);
+                if (Halo.Widgets.MediaFileInfo.Size(title) is { } b)
+                { Console.WriteLine($"size        {b:N0} bytes = {Halo.Widgets.MediaFileInfo.Human(b)}"); return; }
+            }
+            Console.WriteLine("size        (not found)");
+            return;
+        }
         // dev hook: `Halo.App --probe-seek <±seconds>` — ask the live session to move by that much and report
         // what it says and what actually happened. Whether a player HONOURS a seek cannot be reasoned about
         // from outside, and two rounds of theorising about it is two rounds too many.
@@ -511,6 +533,38 @@ internal static class Program
     // `--probe-seek <±seconds> [count]` — count>1 fires them back to back, which is the case that broke:
     // each tap has to compute from where the LAST one put us, not from a position the player has not caught
     // up to reporting yet.
+    private static void RenderBar(string outPath)
+    {
+        const int W = 220, H = 40, Zoom = 2, Rows = 7, Pad = 8;
+        var accent = System.Drawing.Color.FromArgb(228, 168, 64);   // the film's own amber, near enough
+        using var bmp = new System.Drawing.Bitmap(W * Zoom + Pad * 2 + 150,
+            (H * Zoom + Pad) * Rows + Pad, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        using var g = System.Drawing.Graphics.FromImage(bmp);
+        g.Clear(System.Drawing.Color.FromArgb(255, 18, 18, 21));
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var label = new System.Drawing.Font("Segoe UI", 13f, System.Drawing.GraphicsUnit.Pixel);
+        using var lb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(225, 225, 230));
+
+        for (int r = 0; r < Rows; r++)
+        {
+            bool paused = r == Rows - 1;
+            g.DrawString(paused ? "paused" : $"playing +{r * 430}ms", label, lb, 8, Pad + r * (H * Zoom + Pad) + 26);
+            using var pill = new System.Drawing.Bitmap(W, H, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var pg = System.Drawing.Graphics.FromImage(pill))
+            {
+                pg.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (var back = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 12, 12, 14)))
+                using (var pp = Halo.Widgets.Fx.PillPath(W, H, H / 2f))
+                    pg.FillPath(back, pp);
+                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, 0.42f, accent, 0.34f, alive: !paused);
+            }
+            g.DrawImage(pill, new System.Drawing.Rectangle(150, Pad + r * (H * Zoom + Pad), W * Zoom, H * Zoom));
+            if (!paused) System.Threading.Thread.Sleep(430);   // walk through one full breath
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine(outPath);
+    }
+
     private static void ProbeSeek(double secs, int count)
     {
         var sessions = new Halo.Widgets.MediaSessions();

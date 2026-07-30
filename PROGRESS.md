@@ -2,6 +2,30 @@
 
 ## 2026-07-30 (evening) - the media panel: a speed menu, a second line, a seek bar that works, and VLC
 
+### The size never showed, because the title has no extension
+The shortcut was sitting right there — `Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media.mkv.lnk`, in Recent,
+pointing at a real 2.2 GB file — and the lookup never so much as started. Windows' Media Player reports the
+name **without** its extension, and `LooksLikeFile` required one before it would spend a directory listing.
+The name-match had the same fault from the other end: it compared the shortcut's target (`…Film2Media.mkv`)
+against a title that stops at `…Film2Media`.
+
+Both fixed, and both are now tests: a release name is recognised by its shape (several dot-separated pieces)
+rather than by an extension it may not carry, and a candidate matches with or without the extension the title
+lacks — while a near miss (`…Film2Media.2.mkv`, `…720p…`, the same name with a `.txt` on it) still does not.
+Verified with the new `--probe-size`, which runs the lookup on a title with no player open at all:
+**2,351,393,277 bytes = 2.2 GB**.
+
+### Is it actually playing? Ask the bar
+A two-hour film advances the pill's background bar about a pixel a minute, so the bar could not answer the
+one question you glance at it for. Now the wavefront **breathes** while it is playing — the same idiom the
+agent pills already use for "a process is running" — and stands perfectly still when it is not, which is the
+other half of the question and needs no signal of its own.
+
+`--render-bar` is a filmstrip of one full breath plus a paused row, because a pulse cannot be judged from a
+single still: brightest at +860ms, gone by +2150ms, and the paused row is visibly flat beside them. The VLC
+widget gained an `Animating` of its own so its breath actually gets frames — nothing else about a playing VLC
+changes per frame.
+
 ### Seeking several times quickly: the player drops all but the first
 Reported: it works, but use it a few times in a row and it stops moving. Three measurements, each one
 killing the theory before it:

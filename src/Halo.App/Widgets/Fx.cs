@@ -123,7 +123,8 @@ internal static class Fx
     // download pill (bold) and the agent pills (a whisper behind the content) need exactly this, and the
     // last thing this codebase needs is a third copy of the same drawing.
     // `strength` scales the whole effect; the caller draws its icon AFTERWARDS so the fill passes behind it.
-    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength)
+    public static void PillBar(Graphics g, int w, int h, float fade, float frac, Color accent, float strength,
+                               bool alive = false)
     {
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
@@ -220,9 +221,34 @@ internal static class Fx
             g.Clip = old;
         }
 
+        // Is it actually running? A two-hour film moves this bar about a pixel a minute, so the bar on its
+        // own cannot answer that — and it is the thing you glance at the pill to find out. A slow breath
+        // riding the wavefront answers it, in the idiom the agent pills already use for "a process is
+        // running", and it stops dead the moment the thing pauses, which is the other half of the question.
+        if (alive && fill > 3f)
+        {
+            float breath = 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2600 / 2600f * MathF.Tau);
+            float band = Math.Min(18f, fill);
+            float x0 = fill - band;
+            var lit = Alpha(accent, fade * (0.10f + 0.26f * breath));
+            using var pulse = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, band + 1f, h),
+                Color.FromArgb(0, accent), lit, LinearGradientMode.Horizontal);
+            pulse.InterpolationColors = new ColorBlend(3)
+            {
+                Positions = new[] { 0f, 0.82f, 1f },
+                Colors = new[] { Color.FromArgb(0, accent), lit, Color.FromArgb(0, accent) },
+            };
+            var oldP = g.Clip;
+            g.SetClip(new RectangleF(x0, 0, band, h), CombineMode.Intersect);   // straight edges only
+            g.FillPath(pulse, pp);
+            g.Clip = oldP;
+        }
+
         // the second glow: tight and bright, sitting on the wavefront
         if (fill > 6f)
-            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f, (int)(26 * strength), accent);
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f,
+                 (int)(26 * strength * (alive ? 0.85f + 0.4f * (0.5f - 0.5f * MathF.Cos(
+                     Environment.TickCount64 % 2600 / 2600f * MathF.Tau)) : 1f)), accent);
     }
 
     // GDI+ centres the EM BOX, which reserves descender space, so a latin string with no descenders

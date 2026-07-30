@@ -138,6 +138,8 @@ internal sealed class VlcWidget : IWidget
     public int Version => VlcMonitor.Version + (VlcHttp.Online
         ? (int)(VlcHttp.Rate * 100) + (VlcHttp.Playing ? 1 : 0) + (VlcHttp.SubsOn ? 2 : 0) : 0);
     public Color? Ring => IsActive ? Orange : null;
+    // the wavefront breath needs frames of its own: nothing else about a playing VLC changes per frame
+    public bool Animating => IsActive && VlcHttp.Online && VlcHttp.Playing;
     // same as the media widget: the ring around the icon is how far through the file you are
     public float RingProgress => IsActive ? Progress() : -1f;
 
@@ -303,7 +305,8 @@ internal sealed class VlcWidget : IWidget
         if (name == null) return;
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float prog = Progress();
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.34f);
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.34f,
+            alive: VlcHttp.Online && VlcHttp.Playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 30, Orange);
         var icon = IconImage;
         if (icon != null)

@@ -62,9 +62,32 @@ internal static class MediaFileInfo
 
     internal static bool LooksLikeFile(string title)
     {
-        var t = title.ToLowerInvariant();
+        var t = title.Trim();
+        if (t.Length is < 6 or > 200 || t.IndexOfAny(new[] { '/', '\\' }) >= 0) return false;
+        if (HasVideoExt(t)) return true;
+        // Windows' Media Player hands the name over WITHOUT its extension - the shortcut on disk is
+        // "Spy.2015.1080p.BluRay.Farsi.Dubbed.Film2Media.mkv.lnk" and the title is the same thing minus the
+        // ".mkv", so requiring an extension meant the lookup never even started for the one player that
+        // prompted it. A release name is recognisable without one: several dot-separated pieces.
+        return t.Split('.', StringSplitOptions.RemoveEmptyEntries).Length >= 4;
+    }
+
+    private static bool HasVideoExt(string name)
+    {
+        var t = name.ToLowerInvariant();
         foreach (var e in VideoExt) if (t.EndsWith(e, StringComparison.Ordinal)) return true;
         return false;
+    }
+
+    // the candidate is the file we are asking about if the names match, with or without the extension the
+    // title may not have carried
+    internal static bool SameFile(string candidatePath, string title)
+    {
+        var name = Path.GetFileName(candidatePath);
+        if (string.Equals(name, title, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!HasVideoExt(name)) return false;
+        var stem = name.Substring(0, name.LastIndexOf('.'));
+        return string.Equals(stem, title, StringComparison.OrdinalIgnoreCase);
     }
 
     private static long? Lookup(string title)
@@ -78,10 +101,12 @@ internal static class MediaFileInfo
         var exact = Path.Combine(recent, title + ".lnk");
         if (File.Exists(exact) && Verify(exact, title) is { } hit) return hit;
 
+        // "Film2Media" is not an extension, so the prefix is the title itself when it carries no real one -
+        // GetFileNameWithoutExtension would have cut the last dotted piece off and matched too loosely
+        var prefix = HasVideoExt(title) ? title.Substring(0, title.LastIndexOf('.')) : title;
         foreach (var lnk in Directory.EnumerateFiles(recent, "*.lnk"))
         {
-            if (!Path.GetFileName(lnk).StartsWith(Path.GetFileNameWithoutExtension(title),
-                    StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Path.GetFileName(lnk).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (Verify(lnk, title) is { } size) return size;
         }
         return null;
@@ -99,7 +124,7 @@ internal static class MediaFileInfo
 
         foreach (var cand in Paths(bytes))
         {
-            if (!string.Equals(Path.GetFileName(cand), title, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!SameFile(cand, title)) continue;
             try
             {
                 var fi = new FileInfo(cand);
