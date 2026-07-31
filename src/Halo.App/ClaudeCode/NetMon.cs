@@ -25,7 +25,7 @@ internal static class NetMon
 
     // always-on health flags (slow background probe even while the pill is collapsed):
     // ApiDown = Anthropic unreachable, NetDown = the internet itself is unreachable,
-    // Slow = the internet is reachable but laggy/dropping (drives the "Bad internet :/" banner)
+    // Slow = the internet is reachable but laggy/dropping (drives the "Bad internet" banner)
     public static volatile bool ApiDown, NetDown, Slow;
     private const int SlowMs = 1500;   // round-trip beyond this (or a drop) = bad internet
     private static int _slowStreak;    // consecutive bad samples — debounce a single blip

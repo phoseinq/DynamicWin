@@ -661,7 +661,7 @@ internal sealed class NotchController
         _netBadShown = true;
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
-            App = "Network", Title = "Bad internet :/", Kind = "net", Duration = 6, Icon = NetBadge(),
+            App = "Network", Title = "Bad internet", Kind = "net", Duration = 6, Icon = NetBadge(),
         });
     }
 
@@ -1939,7 +1939,7 @@ internal sealed class NotchController
             Title = Halo.Notifications.NotifItem.ScreenshotTitle,
             Preview = shot, Icon = ShotBadge(),
         },
-        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet :/", Icon = NetBadge() },
+        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet", Icon = NetBadge() },
         new Halo.Notifications.NotifItem
         {
             App = "System", Title = "High CPU usage — 92%", Body = "chrome.exe is using the most.",
