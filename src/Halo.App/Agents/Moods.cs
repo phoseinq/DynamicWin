@@ -581,7 +581,12 @@ internal static class Moods
             {
                 // a held line whose room has since shrunk is re-rolled rather than drawn too small: the
                 // elapsed clock grows a digit and the gap it leaves the words gets narrower mid-hold
-                if (now - h.at < Hold && (ctx.MaxChars <= 0 || h.line.Length <= ctx.MaxChars))
+                // `now >= h.at` first: a stamp in the FUTURE must not read as fresh. The elapsed check is a
+                // subtraction, so a backwards clock step - an NTP correction, a DST fold, or a caller
+                // driving a fixed clock - makes it negative, which is comfortably "< Hold" and holds the
+                // line for as long as the clock stays behind. That is the same permanent freeze this whole
+                // mechanism was built to end, arriving through the other door.
+                if (now >= h.at && now - h.at < Hold && (ctx.MaxChars <= 0 || h.line.Length <= ctx.MaxChars))
                     return h.line;
                 stale = h.line;   // expired: reroll, but away from the line that was just up
             }
