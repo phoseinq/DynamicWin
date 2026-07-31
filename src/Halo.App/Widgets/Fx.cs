@@ -93,7 +93,13 @@ internal static class Fx
         if (accent == White || fade <= 0.01f) return;
         using var clip = PillClip(w, h);
         var old = g.Clip;
-        g.SetClip(clip);
+        // Intersect, NOT replace. SetClip(path) defaults to Replace, which threw away whatever clip the caller
+        // had set around the call - so PillBar's "keep the glows inside the filled part" did nothing, and the
+        // halo went on spilling past the wavefront. Drawn before the fill, that spill is a faint band lying
+        // UNDER the bar and reaching further right than it: the reported "two bars, a pale one ahead and a
+        // solid one behind". With no caller clip set, g.Clip is the whole surface and this is identical to
+        // what it did before.
+        g.SetClip(clip, CombineMode.Intersect);
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
         // Do NOT fold the alpha into the colour channels here. It looks like it should be needed, because
@@ -128,6 +134,15 @@ internal static class Fx
     {
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
+        // A dark cover art gives a dark accent, and every colour below is derived from it by taking value
+        // AWAY - the track sits at v*0.34. On a black-ish album that is black paint on black glass: the bar
+        // is drawn in full and simply cannot be seen. So the accent gets a floor before anything is derived
+        // from it, hue kept (a dark red cover still gives a red bar) and a little saturation put back so the
+        // lift doesn't just produce grey. Bright accents are already above the floor and pass through
+        // untouched, which is why the amber filmstrip looks the same as before.
+        RgbToHsv(accent, out float ah, out float asat, out float av);
+        if (av < 0.62f)
+            accent = HsvToRgb(ah, asat < 0.12f ? asat : Math.Max(asat, 0.42f), 0.62f);
         // Inset by a hair. Filling exactly the same path the shell uses for the window silhouette left a
         // saturated line of accent along the rounded bottom: two antialiased edges landing on the same
         // pixel row add up instead of blending, so the outermost row ended up at full colour. Half a pixel
@@ -150,15 +165,29 @@ internal static class Fx
         // antialiased; the horizontal cut is done by a gradient that goes opaque→transparent over ~1px, so
         // the wavefront stays crisp without a clip.
         float fill = w * frac;
-        var solid = Alpha(accent, fade * 0.52f * strength);
+        // One breath, applied to everything the bar is already made of. The first attempt added a separate
+        // bright band at the wavefront, and at this strength the fill sits around 18% alpha while that band
+        // peaked near 36% - a stripe twice as bright as the bar it rides on, which is why it read as a
+        // detached piece rather than as the bar being alive. Nothing is added now; the body, its halo, its
+        // lip and its wavefront all rise and fall together.
+        float breath = alive ? 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2400 / 2400f * MathF.Tau) : 0f;
+        // Range widened twice: at the start of a track the fill is a few pixels wide and a gentle wash
+        // over it is invisible, so the swing has to be big enough to read on a short bar too.
+        float lit = alive ? 0.78f + 0.42f * breath : 1f;
+        var solid = Alpha(accent, fade * 0.52f * strength * lit);
 
         // Two glows, not one. With a single glow at the wavefront everything behind it was one flat sheet
         // of colour — a printed block, not a lit surface. This wide, dim halo goes UNDER the fill, so the
         // colour varies across the filled body instead of sitting at one value; the tight one at the end
         // is the light riding the leading edge and is drawn last, on top.
         if (fill > 6f)
+        {
+            var oldG = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
             Glow(g, w, h, fade, fill * 0.45f, h * 0.44f, Math.Max(fill, h * 1.2f), h * 1.9f,
-                 (int)(16 * strength), accent);
+                 (int)(16 * strength * lit), accent);
+            g.Clip = oldG;
+        }
 
         if (frac >= 0.999f) { using (var fb = new SolidBrush(solid)) g.FillPath(fb, pp); }
         else
@@ -202,53 +231,36 @@ internal static class Fx
             g.Clip = oldC;
         }
 
-        // a brighter lip just behind the wavefront so the edge reads as light rather than a cut; only for
-        // bold uses — on a faint background bar it is noise
+        // A gentle lift toward the wavefront so the edge reads as light rather than a cut. It used to ramp up
+        // to 94% of its width and then fall back to nothing over the last 6% - about two and a half pixels of
+        // bright-then-dark right at the head, which is the "خط" that appeared between the head and the body.
+        // There is no drop-back now: the light rises into the head and simply stops where the fill stops,
+        // because the clip ends there. Dimmer, too - a head several times brighter than its own bar was the
+        // other half of why this read as a separate object being dragged along.
         if (fill > 8f && strength >= 0.5f)
         {
-            float lipW = 26f, x0 = Math.Max(0f, fill - lipW);
-            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, (fill - x0) + 1f, h),
-                Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), LinearGradientMode.Horizontal);
-            var lipBlend = new ColorBlend(3)
-            {
-                Positions = new[] { 0f, 0.94f, 1f },
-                Colors = new[] { Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), Color.FromArgb(0, accent) },
-            };
-            lip.InterpolationColors = lipBlend;
+            float lipW = Math.Min(38f, fill), x0 = fill - lipW;
+            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, lipW + 1f, h),
+                Color.FromArgb(0, accent), Alpha(accent, fade * 0.3f * strength * lit),
+                LinearGradientMode.Horizontal);
             var old = g.Clip;
-            g.SetClip(new RectangleF(x0, 0, fill - x0, h), CombineMode.Intersect); // straight edges only → no jaggies
+            g.SetClip(new RectangleF(x0, 0, lipW, h), CombineMode.Intersect); // straight edges only → no jaggies
             g.FillPath(lip, pp);
             g.Clip = old;
         }
 
-        // Is it actually running? A two-hour film moves this bar about a pixel a minute, so the bar on its
-        // own cannot answer that — and it is the thing you glance at the pill to find out. A slow breath
-        // riding the wavefront answers it, in the idiom the agent pills already use for "a process is
-        // running", and it stops dead the moment the thing pauses, which is the other half of the question.
-        if (alive && fill > 3f)
-        {
-            float breath = 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2600 / 2600f * MathF.Tau);
-            float band = Math.Min(18f, fill);
-            float x0 = fill - band;
-            var lit = Alpha(accent, fade * (0.10f + 0.26f * breath));
-            using var pulse = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, band + 1f, h),
-                Color.FromArgb(0, accent), lit, LinearGradientMode.Horizontal);
-            pulse.InterpolationColors = new ColorBlend(3)
-            {
-                Positions = new[] { 0f, 0.82f, 1f },
-                Colors = new[] { Color.FromArgb(0, accent), lit, Color.FromArgb(0, accent) },
-            };
-            var oldP = g.Clip;
-            g.SetClip(new RectangleF(x0, 0, band, h), CombineMode.Intersect);   // straight edges only
-            g.FillPath(pulse, pp);
-            g.Clip = oldP;
-        }
-
         // the second glow: tight and bright, sitting on the wavefront
+        // Clipped to the filled part like everything else. A glow centred ON the wavefront puts half of itself
+        // PAST it, so after the fill's own crisp edge there was a soft detached blob lying on the empty track -
+        // the head reading as two pieces. Nothing exists to the right of the wavefront now except the track.
         if (fill > 6f)
-            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f,
-                 (int)(26 * strength * (alive ? 0.85f + 0.4f * (0.5f - 0.5f * MathF.Cos(
-                     Environment.TickCount64 % 2600 / 2600f * MathF.Tau)) : 1f)), accent);
+        {
+            var oldG = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.1f, h * 1.45f,
+                 (int)(13 * strength * lit), accent);
+            g.Clip = oldG;
+        }
     }
 
     // GDI+ centres the EM BOX, which reserves descender space, so a latin string with no descenders
