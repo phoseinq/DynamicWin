@@ -4,6 +4,22 @@
 
 Six complaints in one session, all about the pill's own background bar. Five were separate root causes.
 
+**Shipped as v3.1.4.** Release build 0/0, **427 tests** green locally (424 on the mirror - three compile only
+behind `HALO_PRIVATE_ASSETS`). Local `master` carries eight commits (the mirror was cut at the seventh,
+`7c22591`; `PROGRESS.md` is not part of the public tree); the stripped mirror is
+`origin/V3` @ `d3c0491`, tagged **v3.1.4**. `installer/build.ps1` produced a signed
+`DynamicWinSetup.exe` (30.0 MB, Authenticode Valid) and `DynamicWinPortable.zip` (41.6 MB), both stamped
+`3.1.4+7c22591`. **Deployed** to `%LOCALAPPDATA%\Programs\Halo` by DLL hot-swap during the session, not yet
+by installer. The GitHub Release itself is **not created**: the `gh` keyring token is invalid
+(`gh auth refresh -h github.com`), and the tag is pushed ahead of it.
+
+Two shell notes worth keeping. `pwsh` launched *from the Bash tool* mangles the «دسکتاپ» path segment on its
+way to a child `git` (`git -C` fails with "No such file or directory" on a mojibaked path); launched natively
+it is fine, so mirror/installer scripts run from PowerShell, not Bash. And `NotifBanner.cs` holds a raw NUL
+byte in `_fitBody = "\0"` - written as the character, not the escape - which makes git treat the file as
+**binary**: line endings are not normalised for it, so an editor that rewrites it as LF commits a 349-line
+change disguised as three bytes. Worth converting to the escape some day.
+
 ### The start of a track repainted the pill in one frame
 The bar's colour is the album art's, so a track change swapped the whole background between two frames -
 "یهو رنگ میخوره". Two eases fix it, both in `DrawCollapsed` off its own frame clock: the drawn accent lerps
