@@ -1,5 +1,50 @@
 # Halo — progress
 
+## 2026-08-01: the calendar the banner speaks, and the blog's download box
+
+### The hourly banner now picks its calendar from where the machine is
+Asked on what basis the banner was writing a Jalali date. It was never hard-coded: `Almanac.CalendarFor`
+already took the country the weather geocoder resolved and fell back to the Windows region. But the only
+branch was "IR or Gregorian", which got two places wrong.
+
+- **Afghanistan** runs the same Solar Hijri calendar with different month names, and had been deliberately
+  left on Gregorian for that reason - a test carried the note *"also solar, but with different month names
+  - not worth being wrong about"*. Overriding that note was the wrong move; the answer is the second table.
+  Kabul reads **8 Asad** where Tehran reads **8 Mordad**.
+- **Saudi Arabia** gets the lunar date via `UmAlQuraCalendar`, not `HijriCalendar`: the plain one is
+  tabular arithmetic and drifts a day or two from the dates actually published there, which is the entire
+  point of showing it. Outside its supported range it throws and falls back to Gregorian.
+- The country list stays short on purpose - *which calendar is civil here*, not *which countries are
+  Muslim-majority*. Egypt, Turkey and Indonesia are asserted as Gregorian so a later good intention cannot
+  quietly widen it.
+
+`bool jalali` became `CalendarKind {Gregorian, SolarHijri, SolarHijriAfghan, LunarHijri}`. One snag worth
+recording: the parameterised test could not stay a `[Theory]`, because an `internal` enum cannot ride a
+`public` xunit signature (CS0051) - it is a `[Fact]` walking a case table instead.
+
+Build **0/0**, **428 tests** green. Verified live with `--probe-almanac` on this machine: `country IR
+metric True calendar SolarHijri`, body `Friday, 9 Mordad`. **Released and deployed.**
+
+### 3.1.6 shipped
+Tag `v3.1.6`, signed installer + portable zip on **both** repos (`phoseinq/DynamicWin`, where AutoUpdate
+still looks, and `phoseinq/Halo`). Installed here from the signed setup and relaunched - `3.1.6.0` running.
+
+### The blog's download box, both languages
+`pvboy.dev` + `boystore.org`, post 14 `halo-glass-notch`. The box still called the product **DynamicWin**
+while the whole post calls it Halo and the link already pointed at `phoseinq/Halo`. Renamed in `content`
+and `content_fa`. A portable-download link was added alongside the installer and then **removed at the
+user's request** - the box is one button again.
+
+- **The two vhosts share one database** (`codeboy_blog`), so a single `UPDATE` covered both sites; the
+  copy-to-both-and-checksum dance that this file records for assets does not apply to post text. Confirmed
+  by reading `MD5(content)` through each vhost's own config.
+- Traps that cost time: the CLI `php` has no mysqli (use `/usr/local/lsws/lsphp83/bin/php`), the read-back
+  endpoint is `?action=posts&slug=…` (plural), and the rendered page is built client-side so grepping its
+  HTML finds nothing. All four string edits were required to match **exactly once** or the script aborted;
+  both columns were backed up to `/root/halo-post14-*.{en,fa}.bak` first.
+- Verified from outside on both domains: box says Halo, one `DynamicWinSetup.exe` link, zero portable
+  links, zero remaining "DynamicWin" as a product name. Setup and asset URLs both 200.
+
 ## 2026-07-31 (latest+11): the calendar, the stamp that never advanced, and the blog's download box
 
 Build 0/0, **428 tests**. Deployed here (3.1.6.0 installed from the signed setup and relaunched),
