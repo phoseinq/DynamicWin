@@ -4,17 +4,17 @@
 
 <br />
 
-[![Release](https://img.shields.io/github/v/release/phoseinq/DynamicWin?label=release&color=c49b04&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
-[![Platform](https://img.shields.io/badge/Windows-11-0078D6?logo=windows11&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
+[![Release](https://img.shields.io/github/v/release/phoseinq/Halo?label=release&color=c49b04&logo=github&logoColor=white)](https://github.com/phoseinq/Halo/releases/latest)
+[![Platform](https://img.shields.io/badge/Windows-11-0078D6?logo=windows11&logoColor=white)](https://github.com/phoseinq/Halo/releases/latest)
 [![Built with](https://img.shields.io/badge/C%23-.NET%209-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
-[![Downloads](https://img.shields.io/github/downloads/phoseinq/DynamicWin/total?label=downloads&color=2CA5E0&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases)
+[![Downloads](https://img.shields.io/github/downloads/phoseinq/Halo/total?label=downloads&color=2CA5E0&logo=github&logoColor=white)](https://github.com/phoseinq/Halo/releases)
 [![License](https://img.shields.io/badge/License-MIT-c49b04.svg)](LICENSE)
 
 <br />
 
 **English** · [فارسی](README.fa.md)
 
-[⬇️ Download](https://github.com/phoseinq/DynamicWin/releases/latest) · [Report a bug](https://github.com/phoseinq/DynamicWin/issues) · [Request a feature](https://github.com/phoseinq/DynamicWin/issues)
+[⬇️ Download](https://github.com/phoseinq/Halo/releases/latest) · [Report a bug](https://github.com/phoseinq/Halo/issues) · [Request a feature](https://github.com/phoseinq/Halo/issues)
 
 </div>
 
@@ -43,9 +43,9 @@ folds away when there is not. No app to open, nothing covering your work.
 
 <div align="center">
 
-### [⬇️ Download for Windows](https://github.com/phoseinq/DynamicWin/releases/latest)
+### [⬇️ Download for Windows](https://github.com/phoseinq/Halo/releases/latest)
 
-<sub>Windows 11 · x64 · per-user, no admin prompt · updates itself quietly</sub>
+<sub>Windows 11 · x64 · per-user, no admin prompt</sub>
 
 <sub>Take `DynamicWinSetup.exe` to install it, or `DynamicWinPortable.zip` to just run it.</sub>
 
@@ -108,7 +108,6 @@ by writing a small JSON file.
 - 🔋 **Bluetooth battery** — connect headphones, a controller or your phone and the pill shows the level.
 - ⚠️ **Alerts** — battery, CPU, RAM and internet, each fired once when it happens rather than nagged.
 - 📌 **Pin** — keep it above fullscreen apps. Hold the pushpin to make it visible in screen recordings too.
-- 🔄 **Silent updates** — no prompt, no window.
 
 <br />
 

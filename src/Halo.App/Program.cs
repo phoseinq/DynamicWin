@@ -187,7 +187,6 @@ internal static class Program
             Halo.ClaudeCode.Limits.Poke();
             Halo.ClaudeCode.NetMon.Poke();
             Halo.Codex.CodexNetMon.Poke();
-            Halo.Update.AutoUpdate.Start();
             _ = new NotchController(notch);
             Win32.RunMessageLoop();
         }
