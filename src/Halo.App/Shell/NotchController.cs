@@ -548,6 +548,7 @@ internal sealed class NotchController
     private int _chimedHour = DateTime.Now.Hour;
     private void CheckHourly()
     {
+        Almanac.SyncZone();   // throttled to once a minute; DateTime.Now below is wrong without it
         var t = DateTime.Now;
         if (t.Minute != 0 || t.Hour == _chimedHour) return;
         _chimedHour = t.Hour;

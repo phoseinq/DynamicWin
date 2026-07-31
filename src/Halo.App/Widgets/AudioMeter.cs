@@ -10,11 +10,14 @@ internal sealed class AudioMeter
     private IAudioMeterInformation? _meterI;
     private IAudioEndpointVolume? _vol;
     private static Guid _ctx = Guid.Empty;
+    private string? _boundId;       // the endpoint _meterI/_vol came from
+    private long _nextDeviceCheck;
 
     public AudioMeter() => TryAcquire();
 
     public float Peak()
     {
+        DropIfDeviceChanged();
         if (_meterI == null) { TryAcquire(); if (_meterI == null) return 0f; }
         try { _meterI!.GetPeakValue(out float p); return p; }
         catch { _meterI = null; return 0f; }
@@ -22,6 +25,7 @@ internal sealed class AudioMeter
 
     public float Volume()
     {
+        DropIfDeviceChanged();
         if (_vol == null) { TryAcquire(); if (_vol == null) return 0f; }
         try { _vol!.GetMasterVolumeLevelScalar(out float v); return v; }
         catch { _vol = null; return 0f; }
@@ -29,6 +33,7 @@ internal sealed class AudioMeter
 
     public bool Muted()
     {
+        DropIfDeviceChanged();
         if (_vol == null) return false;
         try { _vol!.GetMute(out bool m); return m; }
         catch { _vol = null; return false; }
@@ -36,6 +41,7 @@ internal sealed class AudioMeter
 
     public void SetVolume(float v)
     {
+        DropIfDeviceChanged();
         if (_vol == null) { TryAcquire(); if (_vol == null) return; }
         try { _vol!.SetMasterVolumeLevelScalar(Math.Clamp(v, 0f, 1f), ref _ctx); }
         catch { _vol = null; }
@@ -43,9 +49,33 @@ internal sealed class AudioMeter
 
     public void ToggleMute()
     {
+        DropIfDeviceChanged();
         if (_vol == null) { TryAcquire(); if (_vol == null) return; }
         try { _vol!.GetMute(out bool m); _vol.SetMute(!m, ref _ctx); }
         catch { _vol = null; }
+    }
+
+    /// <summary>
+    /// Let go of the cached interfaces when the default endpoint has changed under us. Switching the
+    /// speaker throws nothing: the old device's meter keeps answering 0 forever and - worse - the old
+    /// device's volume keeps *accepting* writes, so the slider silently drives a speaker nobody is
+    /// listening to. Checked at most once a second, since every read goes through here.
+    /// </summary>
+    private void DropIfDeviceChanged()
+    {
+        try
+        {
+            if (Environment.TickCount64 < _nextDeviceCheck) return;
+            _nextDeviceCheck = Environment.TickCount64 + 1000;
+            if (_boundId is null) return;
+            var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            if (en.GetDefaultAudioEndpoint(0, 1, out var dev) != 0 || dev == null) return;
+            if (dev.GetId(out var id) != 0 || id == _boundId) return;
+            _meterI = null;
+            _vol = null;
+            _boundId = null;
+        }
+        catch { }
     }
 
     private void TryAcquire()
@@ -54,6 +84,7 @@ internal sealed class AudioMeter
         {
             var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
             if (en.GetDefaultAudioEndpoint(0, 1, out var dev) != 0 || dev == null) return; // eRender, eMultimedia
+            if (dev.GetId(out var id) == 0) _boundId = id;
             var mid = typeof(IAudioMeterInformation).GUID;
             if (dev.Activate(ref mid, 23, IntPtr.Zero, out var mo) == 0) _meterI = mo as IAudioMeterInformation;
             var vid = typeof(IAudioEndpointVolume).GUID;
@@ -77,6 +108,9 @@ internal sealed class AudioMeter
     {
         [PreserveSig] int Activate(ref Guid iid, uint clsCtx, IntPtr activationParams,
             [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+        // declared only to keep the vtable order right for GetId below - never called
+        [PreserveSig] int OpenPropertyStore(uint access, out IntPtr store);
+        [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
     }
 
     [ComImport, Guid("C02216F6-8C67-4B5B-9D00-D008E73E0064"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

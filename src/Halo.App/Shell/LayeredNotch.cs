@@ -1183,6 +1183,13 @@ internal sealed class LayeredNotch
             }
             catch { }
         }
+        // Windows broadcasts this to top-level windows when the clock or the timezone moves. Without it
+        // nothing in the process ever learns: .NET's cached local zone outlives the change.
+        if (msg == Win32.WM_TIMECHANGE)
+        {
+            try { Almanac.TimeZoneChanged(); } catch { }
+            return IntPtr.Zero;
+        }
         if (msg == Win32.WM_DESTROY)
         {
             Win32.PostQuitMessage(0);

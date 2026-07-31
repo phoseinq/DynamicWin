@@ -32,9 +32,62 @@ internal static class Almanac
     // reference type so the field itself can be volatile: written on a timer thread, read on the UI one
     internal static volatile Weather? Latest;
 
-    // one probe at type-init. A timezone change mid-process is a reboot-shaped event on Windows, and
-    // being one city stale until then costs nothing.
-    internal static string? Place { get; } = CityFromTimeZone();
+    // Probed at type-init and again on WM_TIMECHANGE. It was write-once on the theory that a timezone
+    // change is a reboot-shaped event - it is not, and the cost was not "one city stale" but a clock that
+    // stayed on the old offset until the process died. See TimeZoneChanged.
+    internal static string? Place { get; private set; } = CityFromTimeZone();
+
+    /// <summary>
+    /// Re-read everything the timezone decides. .NET caches TimeZoneInfo.Local and a timezone change does
+    /// NOT invalidate it, so DateTime.Now keeps answering in the old offset for the life of the process -
+    /// which is why the clock only ever came right after a reboot. ClearCachedData is the documented way
+    /// to force the re-read, and everything derived from the old zone (city, its coordinates, its country,
+    /// its weather) has to go with it or the banner shows one city's name over another city's numbers.
+    /// </summary>
+    internal static void TimeZoneChanged()
+    {
+        try
+        {
+            TimeZoneInfo.ClearCachedData();
+            _zoneId = SafeZoneId();   // so the once-a-minute sweep does not redo this
+            Place = CityFromTimeZone();
+            _coords = null;
+            PlaceCountry = null;
+            FromDevice = false;
+            Latest = null;
+            // never on the caller's thread: this arrives on the message loop and Refresh does http
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => Refresh());
+        }
+        catch { }
+    }
+
+    private static long _nextZoneCheck;
+    private static string? _zoneId = SafeZoneId();
+
+    private static string? SafeZoneId()
+    {
+        try { return TimeZoneInfo.Local.Id; } catch { return null; }
+    }
+
+    /// <summary>
+    /// Notice a timezone change even when WM_TIMECHANGE never arrived. Correctness must not rest on a
+    /// broadcast being delivered, so the zone is re-read once a minute and the message handler only makes
+    /// it instant. The ClearCachedData call is not optional here either: without it TimeZoneInfo.Local
+    /// hands back the cached zone and this check could never fire at all.
+    /// </summary>
+    internal static void SyncZone()
+    {
+        try
+        {
+            if (Environment.TickCount64 < _nextZoneCheck) return;
+            _nextZoneCheck = Environment.TickCount64 + 60_000;
+            TimeZoneInfo.ClearCachedData();
+            var id = SafeZoneId();
+            if (id == _zoneId) return;
+            TimeZoneChanged();
+        }
+        catch { }
+    }
 
     internal static string? CityFromTimeZone()
     {

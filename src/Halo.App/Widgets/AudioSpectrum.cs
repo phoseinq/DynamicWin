@@ -49,10 +49,29 @@ internal static class AudioSpectrum
         }
     }
 
+    /// <summary>
+    /// The id of the current default render endpoint, or null. Switching the speaker is not an error on
+    /// the device we are bound to: a loopback client on a device that is no longer default keeps handing
+    /// back valid, permanently silent packets, so nothing throws, the "device dies -> re-acquire" path
+    /// never runs, and the bars sit at zero until the app restarts. Comparing the id is the only way to
+    /// notice it happened.
+    /// </summary>
+    private static string? DefaultRenderId()
+    {
+        try
+        {
+            var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            if (en.GetDefaultAudioEndpoint(0, 1, out var dev) != 0 || dev == null) return null;
+            return dev.GetId(out var id) == 0 ? id : null;
+        }
+        catch { return null; }
+    }
+
     private static void Capture()
     {
         var en = (IMMDeviceEnumerator)new MMDeviceEnumerator();
         if (en.GetDefaultAudioEndpoint(0, 1, out var dev) != 0 || dev == null) return;
+        if (dev.GetId(out var boundId) != 0) boundId = null;
         var acid = typeof(IAudioClient).GUID;
         if (dev.Activate(ref acid, 23, IntPtr.Zero, out var aco) != 0 || aco is not IAudioClient ac) return;
         if (ac.GetMixFormat(out IntPtr fmtPtr) != 0) return;
@@ -72,8 +91,16 @@ internal static class AudioSpectrum
 
             var win = Hann();
             long nextFft = 0;
+            long nextDeviceCheck = Environment.TickCount64 + 1000;
             while (Environment.TickCount64 <= _until)
             {
+                // once a second is often enough to catch a speaker switch and cheap enough not to matter
+                if (Environment.TickCount64 >= nextDeviceCheck)
+                {
+                    nextDeviceCheck = Environment.TickCount64 + 1000;
+                    if (boundId is { } b && DefaultRenderId() is { } cur && cur != b) break; // Loop() re-acquires
+                }
+
                 while (cc.GetNextPacketSize(out uint pkt) == 0 && pkt > 0)
                 {
                     if (cc.GetBuffer(out IntPtr data, out uint frames, out uint flags, out _, out _) != 0) break;
@@ -242,6 +269,9 @@ internal static class AudioSpectrum
     {
         [PreserveSig] int Activate(ref Guid iid, uint clsCtx, IntPtr activationParams,
             [MarshalAs(UnmanagedType.IUnknown)] out object iface);
+        // declared only to keep the vtable order right for GetId below - never called
+        [PreserveSig] int OpenPropertyStore(uint access, out IntPtr store);
+        [PreserveSig] int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
     }
 
     [ComImport, Guid("1CB9AD4C-DBFA-4C32-B178-C2F568A703B2"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

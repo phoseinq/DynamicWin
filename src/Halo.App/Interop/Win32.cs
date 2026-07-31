@@ -16,6 +16,7 @@ internal static class Win32
     public const uint WM_DESTROY = 0x0002;
     public const uint WM_DISPLAYCHANGE = 0x007E;
     public const uint WM_SETTINGCHANGE = 0x001A;
+    public const uint WM_TIMECHANGE = 0x001E;
     public const uint WM_MOUSEMOVE = 0x0200;
     public const uint WM_MOUSELEAVE = 0x02A3;
     public const uint WM_NCHITTEST = 0x0084;
