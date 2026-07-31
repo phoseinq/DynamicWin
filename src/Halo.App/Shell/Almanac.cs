@@ -18,6 +18,11 @@ namespace Halo.Shell;
 // runs on a timer and never on the chime's own path - a banner that waited on the network would arrive
 // late or not at all - so the chime shows whatever the last refresh left behind and simply says nothing
 // about weather when that is nothing. Every figure here is measured or converted; none is invented.
+
+// Which calendar the date on the hourly banner is spoken in. Not a display preference: in Tehran the
+// Gregorian date is a foreign fact, and in Berlin a Hijri one is.
+internal enum CalendarKind { Gregorian, SolarHijri, SolarHijriAfghan, LunarHijri }
+
 internal static class Almanac
 {
     // Day is not a guess from the hour: Open-Meteo answers is_day for the point it just described, so the
@@ -181,23 +186,44 @@ internal static class Almanac
     internal static bool MetricFor(string? cc, bool fallback)
         => cc is { Length: 2 } c ? c is not ("US" or "LR" or "MM") : fallback;
 
-    // Iran runs on the Solar Hijri calendar, so there the Gregorian date is not the date anyone says out
-    // loud. Only for a machine that is actually there - it would be noise anywhere else.
-    internal static bool SolarHijriFor(string? cc, bool fallback)
-        => cc is { Length: 2 } c ? c == "IR" : fallback;
+    // Where the Gregorian date is not the date anyone says out loud. Iran and Afghanistan run their civil
+    // life on the Solar Hijri calendar, Saudi Arabia on the lunar one (Umm al-Qura). Anywhere else this is
+    // noise, so the default is Gregorian and the list stays short: it is "which calendar is CIVIL here",
+    // not "which countries are Muslim-majority" - Egypt, Turkey and Indonesia all run their diaries on
+    // Gregorian and would be misinformed by a Hijri date, which is why guessing from language or from a
+    // Muslim-majority list was rejected.
+    internal static CalendarKind CalendarFor(string? cc, CalendarKind fallback)
+        => cc is { Length: 2 } c
+            ? c switch
+            {
+                "IR" => CalendarKind.SolarHijri,
+                // same calendar as Iran's, different month names - Kabul says Hamal where Tehran says
+                // Farvardin. This used to be left on Gregorian precisely because showing Iranian names to
+                // an Afghan user is worse than showing none; the answer is the other table, not the omission.
+                "AF" => CalendarKind.SolarHijriAfghan,
+                "SA" => CalendarKind.LunarHijri,
+                _ => CalendarKind.Gregorian,
+            }
+            : fallback;
 
     internal static bool Metric => MetricFor(PlaceCountry, RegionMetric);
 
-    internal static bool SolarHijri => SolarHijriFor(PlaceCountry, RegionIsIran);
+    // the located country first, the machine's own region only as the fallback - a laptop carried abroad
+    // keeps its Windows region long after it has stopped being where it is
+    internal static CalendarKind Calendar => CalendarFor(PlaceCountry, RegionCalendar);
 
     private static bool RegionMetric
     {
         get { try { return RegionInfo.CurrentRegion.IsMetric; } catch { return true; } }
     }
 
-    private static bool RegionIsIran
+    private static CalendarKind RegionCalendar
     {
-        get { try { return RegionInfo.CurrentRegion.TwoLetterISORegionName == "IR"; } catch { return false; } }
+        get
+        {
+            try { return CalendarFor(RegionInfo.CurrentRegion.TwoLetterISORegionName, CalendarKind.Gregorian); }
+            catch { return CalendarKind.Gregorian; }
+        }
     }
 
     private static readonly string[] JalaliMonths =
@@ -206,18 +232,56 @@ internal static class Almanac
         "Mehr", "Aban", "Azar", "Dey", "Bahman", "Esfand",
     };
 
+    private static readonly string[] AfghanMonths =
+    {
+        "Hamal", "Sawr", "Jawza", "Saratan", "Asad", "Sunbula",
+        "Mizan", "Aqrab", "Qaws", "Jadi", "Dalw", "Hut",
+    };
+
+    private static readonly string[] HijriMonths =
+    {
+        "Muharram", "Safar", "Rabi I", "Rabi II", "Jumada I", "Jumada II",
+        "Rajab", "Sha'ban", "Ramadan", "Shawwal", "Dhu al-Qi'dah", "Dhu al-Hijjah",
+    };
+
     // PersianCalendar is in-box, so this is a conversion, not an approximation. Month names are
     // transliterated because the banner is English (docs/decisions.md) and the pill's font has no
     // reliable fallback for a mixed line here.
-    internal static string? JalaliDate(DateTime now)
+    internal static string? JalaliDate(DateTime now) => SolarDate(now, JalaliMonths);
+
+    internal static string? AfghanDate(DateTime now) => SolarDate(now, AfghanMonths);
+
+    private static string? SolarDate(DateTime now, string[] months)
     {
         try
         {
             var cal = new PersianCalendar();
-            return cal.GetDayOfMonth(now) + " " + JalaliMonths[cal.GetMonth(now) - 1];
+            return cal.GetDayOfMonth(now) + " " + months[cal.GetMonth(now) - 1];
         }
         catch { return null; }
     }
+
+    // UmAlQuraCalendar, not HijriCalendar: the plain one is a tabular arithmetic calendar and drifts a day
+    // or two from the dates Saudi Arabia actually publishes, which is the whole point of showing it. It
+    // also has a supported range (roughly 1900-2077), so a date outside it throws and we fall back to
+    // Gregorian rather than showing a wrong one.
+    internal static string? HijriDate(DateTime now)
+    {
+        try
+        {
+            var cal = new UmAlQuraCalendar();
+            return cal.GetDayOfMonth(now) + " " + HijriMonths[cal.GetMonth(now) - 1];
+        }
+        catch { return null; }
+    }
+
+    internal static string? DateIn(CalendarKind kind, DateTime now) => kind switch
+    {
+        CalendarKind.SolarHijri => JalaliDate(now),
+        CalendarKind.SolarHijriAfghan => AfghanDate(now),
+        CalendarKind.LunarHijri => HijriDate(now),
+        _ => null,
+    };
 
     /// <summary>
     /// The sky as a badge instead of as words: which Fluent glyph, and what hue the tile behind it takes.
@@ -292,13 +356,13 @@ internal static class Almanac
     /// The date. Pure, and InvariantCulture is not a detail: this machine is fa-IR, and the local culture
     /// would render the weekday in Persian inside a banner the rest of which is English.
     /// </summary>
-    internal static string Detail(DateTime now, bool jalali)
+    internal static string Detail(DateTime now, CalendarKind kind)
         => now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
-            + (jalali && JalaliDate(now) is { Length: > 0 } j
-                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
+            + (DateIn(kind, now) is { Length: > 0 } d
+                ? d : now.ToString("d MMM", CultureInfo.InvariantCulture));
 
     /// <summary>The same two lines, from the live snapshot.</summary>
     internal static string Headline(DateTime now) => Headline(now, Latest, Metric);
 
-    internal static string Detail(DateTime now) => Detail(now, SolarHijri);
+    internal static string Detail(DateTime now) => Detail(now, Calendar);
 }

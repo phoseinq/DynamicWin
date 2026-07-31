@@ -1956,7 +1956,7 @@ internal sealed class NotchController
         {
             App = "Tehran",
             Title = Almanac.Headline(DateTime.Today.AddHours(1), new Almanac.Weather(27, 0, Day: false), metric: true),
-            Body = Almanac.Detail(DateTime.Today.AddHours(1), jalali: true),
+            Body = Almanac.Detail(DateTime.Today.AddHours(1), CalendarKind.SolarHijri),
             Icon = LocalBadge(0xE708, 232, 32f),
         },
     };

@@ -38,7 +38,7 @@ internal static class Program
             Almanac.Poke();
             for (int i = 0; i < 60 && Almanac.Latest is null; i++) System.Threading.Thread.Sleep(500);
             Console.WriteLine($"weather  {(Almanac.Latest is { } wx ? $"{wx.TempC}C code {wx.Code} = {Almanac.Sky(wx.Code)}" : "(no reading)")}");
-            Console.WriteLine($"country  {Almanac.PlaceCountry ?? "(not geocoded)"}   metric {Almanac.Metric}   solar hijri {Almanac.SolarHijri}");
+            Console.WriteLine($"country  {Almanac.PlaceCountry ?? "(not geocoded)"}   metric {Almanac.Metric}   calendar {Almanac.Calendar}");
             Console.WriteLine($"source   {(Almanac.FromDevice ? "windows location" : "time zone")}");
             Console.WriteLine($"label    {Almanac.Label}");
             Console.WriteLine($"title    {Almanac.Headline(DateTime.Now)}");
