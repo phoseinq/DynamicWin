@@ -25,6 +25,7 @@ All of it stays on your machine.
 | Coding-session state | the Claude Code / Codex panels | JSON files those tools' own hooks write under `~/.claude/notch`, `~/.codex/notch` and `~/.halo/agents` |
 | Paths of files you drag onto the pill | the file tray | you dragged them there. Only the paths are kept, never the contents |
 | Which window is in front | so the pill can follow the app you're using | Windows' foreground-window API. Only the process id is used |
+| Your device's location | the weather on the hourly banner | Windows' own location service — **only if location is switched on and Halo is allowed to use it**. If it is off, or Halo is denied, Halo never asks again and falls back to your timezone's city |
 
 ---
 
@@ -37,7 +38,7 @@ Everything lives in `%LOCALAPPDATA%\Halo\`. Deleting that folder resets Halo com
 - `notif-seen.txt` — the id of the last notification shown, so restarts don't replay your Action Center
 - `banner-orig.tsv` — **each app's original Windows banner setting before Halo changed it** (see below)
 - `limit-fired.txt`, `usage-cache.json`, `codex-limits-cache.json` — which alerts have fired, and the last usage numbers
-- `downloaders.tsv`, `update-check`, `update-log.txt` — download bookkeeping and the last update check
+- `downloaders.tsv` — download bookkeeping
 - `*-debug.txt` — local diagnostics
 
 The diagnostics are worth being specific about, because they concern your notifications:
@@ -75,7 +76,6 @@ Halo makes no request that is not on this list.
 
 | Endpoint | When | What it discloses |
 | :-- | :-- | :-- |
-| `api.github.com` (this repo's latest release) and the release asset | update check, and the download when there is one | nothing beyond the request itself |
 | `www.google.com/generate_204` | connectivity check, while a coding-session panel is live | nothing. This is the standard connectivity-check endpoint, chosen because it returns an empty response |
 | `api.anthropic.com` — `/api/oauth/usage` and `/v1/messages` | your Claude Code usage limits and whether the API is reachable | **your own** Claude credentials, read from `~/.claude/.credentials.json` — the same token Claude Code itself uses, sent only to Anthropic |
 | `chatgpt.com/backend-api/codex/responses` | whether Codex is reachable | a reachability probe |
@@ -83,7 +83,7 @@ Halo makes no request that is not on this list.
 | `api.ipapi.is` | only while you hover the exit block, to say whether that address looks like a datacenter, a known vpn, or a flagged one | **your public IP address**. This is a third party. Sent once per address and then cached, so hovering repeatedly costs no further requests |
 | `bash.ws` — `/id`, six lookups of `<n>.<id>.bash.ws`, and `/dnsleak/test/<id>` | only while you hover the exit block, to test whether your DNS lookups leave by the same exit as your traffic | **which resolvers answer for you**, and your public IP. This is a third party, and it is a wider disclosure than the two above: the whole mechanism is that their nameserver watches which resolver comes asking. Once per address, then cached |
 | `flagcdn.com` | the flag image for that country | the two-letter country code |
-| `geocoding-api.open-meteo.com` and `api.open-meteo.com` | the weather on the hourly banner, refreshed every half hour | **the city from your machine's own timezone** — "Asia/Tehran" becomes "Tehran" — and then that city's coordinates. Your IP address goes along with any request, as ever; your actual location does not, because Halo never asks for it |
+| `geocoding-api.open-meteo.com` and `api.open-meteo.com` | the weather on the hourly banner, refreshed every half hour | **coordinates.** If Windows location is on and Halo is allowed, those are **your device's own coordinates**, to about 11 m. Otherwise they are the coordinates of the city from your timezone — "Asia/Tehran" becomes "Tehran" — which is a whole city wide. The city name is also sent once, to look it up |
 | `displaycatalog.mp.microsoft.com` | the name and art of a Microsoft Store install in progress | the Store product id |
 | `127.0.0.1` | VLC playback controls | nothing — it never leaves your machine |
 
@@ -103,10 +103,18 @@ names under a domain whose nameserver is watching, and read back which resolvers
 necessarily tells `bash.ws` who resolves your names. That is the entire point of it, and it is why it
 never runs on its own: no hover, no test.
 
-**Open-Meteo** needs no key and is asked for a *city*, never for you. The city comes from the timezone
-Windows is already set to, which is the coarsest location fact on the machine — a whole country wide, and
-one you chose yourself. Halo does not use the Windows location API, and does not use the exit-IP lookup
-above for this either.
+**Open-Meteo** needs no key and is sent nothing that identifies you — no name, no id, no account. What
+it is sent is a point to fetch the weather for, and that point is as precise as you have allowed:
+
+- **Location switched on and Halo allowed** — your device's own coordinates, at roughly 11 m. Halo asks
+  Windows for a fix at most every ten minutes, and only on the half-hourly weather refresh.
+- **Location off, or Halo denied** — the city from the timezone Windows is already set to, which is the
+  coarsest location fact on the machine and one you chose yourself. Halo reads the system switch before
+  asking, so a denied app never triggers a prompt and never asks again in that session.
+
+**You control this in Windows, not in Halo**: Settings → Privacy & security → Location. Turn it off and
+the banner keeps working, one city wide instead of one street. Halo never uses the exit-IP lookup above
+for the weather.
 
 If any of these trades isn't worth it to you, say so in an issue — all of them are good candidates for a
 switch.
@@ -119,8 +127,9 @@ switch.
 - No analytics, telemetry, usage statistics or crash reporting, in any build.
 - Notification text, media titles, file names, download names and clipboard contents **never leave
   your machine**.
-- Nothing is sent to the author or to `pvboy.dev`. Updates come from GitHub; there is no server
-  behind Halo at all.
+- **No update checks and no background downloads.** Halo does not phone home for new versions; it has
+  no updater at all. You update it the way you installed it.
+- Nothing is sent to the author or to `pvboy.dev`. There is no server behind Halo at all.
 
 ---
 
@@ -132,4 +141,4 @@ The source is here and builds from it. Every outbound request in the table above
 grep -rn "https\?://" --include="*.cs" src/
 ```
 
-Something missing or wrong? [Open an issue](https://github.com/phoseinq/DynamicWin/issues).
+Something missing or wrong? [Open an issue](https://github.com/phoseinq/Halo/issues).

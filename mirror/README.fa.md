@@ -4,17 +4,17 @@
 
 <br />
 
-[![Release](https://img.shields.io/github/v/release/phoseinq/DynamicWin?label=release&color=c49b04&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
-[![Platform](https://img.shields.io/badge/Windows-11-0078D6?logo=windows11&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases/latest)
+[![Release](https://img.shields.io/github/v/release/phoseinq/Halo?label=release&color=c49b04&logo=github&logoColor=white)](https://github.com/phoseinq/Halo/releases/latest)
+[![Platform](https://img.shields.io/badge/Windows-11-0078D6?logo=windows11&logoColor=white)](https://github.com/phoseinq/Halo/releases/latest)
 [![Built with](https://img.shields.io/badge/C%23-.NET%209-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
-[![Downloads](https://img.shields.io/github/downloads/phoseinq/DynamicWin/total?label=downloads&color=2CA5E0&logo=github&logoColor=white)](https://github.com/phoseinq/DynamicWin/releases)
+[![Downloads](https://img.shields.io/github/downloads/phoseinq/Halo/total?label=downloads&color=2CA5E0&logo=github&logoColor=white)](https://github.com/phoseinq/Halo/releases)
 [![License](https://img.shields.io/badge/License-MIT-c49b04.svg)](LICENSE)
 
 <br />
 
 [English](README.md) · **فارسی**
 
-[⬇️ دانلود](https://github.com/phoseinq/DynamicWin/releases/latest) · [گزارش باگ](https://github.com/phoseinq/DynamicWin/issues) · [پیشنهاد قابلیت](https://github.com/phoseinq/DynamicWin/issues)
+[⬇️ دانلود](https://github.com/phoseinq/Halo/releases/latest) · [گزارش باگ](https://github.com/phoseinq/Halo/issues) · [پیشنهاد قابلیت](https://github.com/phoseinq/Halo/issues)
 
 </div>
 
@@ -43,9 +43,9 @@
 
 <div align="center">
 
-### [⬇️ دانلود برای Windows 11](https://github.com/phoseinq/DynamicWin/releases/latest)
+### [⬇️ دانلود برای Windows 11](https://github.com/phoseinq/Halo/releases/latest)
 
-<sub>Windows 11 · x64 · نصب فقط برای همین کاربر · بدون درخواست دسترسی Administrator · آپدیت خودکار در پس‌زمینه</sub>
+<sub>Windows 11 · x64 · نصب فقط برای همین کاربر · بدون درخواست دسترسی Administrator</sub>
 
 <sub>اگر نصب معمولی می‌خوای، `DynamicWinSetup.exe` رو دانلود کن. اگر هم نسخه قابل‌حمل ترجیح میدی، `DynamicWinPortable.zip` آماده است.</sub>
 
@@ -125,7 +125,6 @@
 - 🔋 **باتری دستگاه‌های بلوتوث** — درصد باتری هدفون، دسته بازی یا گوشی متصل رو مستقیم داخل Halo ببین.
 - ⚠️ **هشدارهای هوشمند** — باتری، CPU، رم یا اینترنت فقط وقتی لازم باشه بهت اطلاع داده میشه؛ نه اینکه مدام مزاحمت بشه.
 - 📌 **Pin Mode** — Halo حتی روی برنامه‌های Fullscreen هم می‌مونه و اگر بخوای داخل Screen Recording هم نمایش داده میشه.
-- 🔄 **آپدیت خودکار** — نسخه‌های جدید بی‌صدا دانلود و نصب میشن؛ بدون پنجره اضافی.
 
 <br />
 

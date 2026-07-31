@@ -228,7 +228,6 @@ internal static class Program
             Halo.ClaudeCode.Limits.Poke();  // prefetch usage so the panel opens with data ready
             Halo.ClaudeCode.NetMon.Poke();  // start the connectivity heartbeat (ring goes red on outage)
             Halo.Codex.CodexNetMon.Poke();  // prefetch the independent OpenAI connectivity heartbeat
-            Halo.Update.AutoUpdate.Start(); // daily silent update check; schedule lives on disk, not here
             _ = new NotchController(notch);
             Win32.RunMessageLoop();
         }
