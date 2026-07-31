@@ -1,5 +1,55 @@
 # Halo — progress
 
+## 2026-08-01 (later): 3.1.7 - the updater removed, and a privacy policy that had gone false
+
+Prompted by preparing for a Microsoft Store submission ("so Microsoft does not object").
+
+### The updater is gone
+`src/Halo.App/Update/AutoUpdate.cs` (220 lines), `tests/Halo.Tests/AutoUpdateTests.cs` and the single
+`AutoUpdate.Start()` call in `Program.cs`. The Store does updates itself, and an app that quietly
+downloads and runs its own installer behind it is a submission-bouncer. **Consequence stated plainly:
+people who installed from the GitHub setup no longer update silently** - that is now a manual download.
+
+Verified, not assumed: 3.1.7 launched at 01:35:09 while `%LOCALAPPDATA%\Halo\update-check` and
+`update-log.txt` still carried their 23:17:47 stamps from the 3.1.6 run, so nothing rewrites them; and
+`repos/phoseinq/*/releases/latest` no longer appears anywhere in the shipped `Halo.App.dll`.
+
+**Detour worth recording so it is not re-litigated a third time.** After the removal the ask came back -
+the nightly check had been the author's own feature request. It was restored with a `Packaged` guard
+(`Windows.ApplicationModel.Package.Current` throws in an unpackaged process, so the throw is the answer)
+so the setup/portable builds would keep updating while a Store copy stood down. That was then rejected:
+**no updater in the code at all.** The tree is back to the state 3.1.7 actually shipped in, and this is
+the settled answer - if it comes up again, the decision is "none", not "conditional".
+
+### PRIVACY.md had become untrue, which is worse than incomplete
+It stated in two places that Halo *"does not use the Windows location API"* and that "your actual
+location does not [leave], because Halo never asks for it". `Almanac.DeviceLocation()` has used
+`Windows.Devices.Geolocation` since the location work, and `Refresh()` sends the fix to Open-Meteo
+formatted `0.####` - about 11 m. Both language versions now carry:
+
+- the reads-table row for device location that never existed, gated on "only if location is on **and**
+  Halo is allowed";
+- an Open-Meteo network row that says **coordinates**, at what precision, and what the fallback is;
+- the consent mechanism (`ConsentStore\location`, `Value == "Allow"`, read *before* asking so a denied
+  app never triggers a prompt) and where the user switches it off in Windows;
+- the `api.github.com` row and the `update-check` / `update-log.txt` files deleted along with the
+  updater, plus an explicit "no update checks and no background downloads".
+
+### The rest of the sweep
+- **18 `phoseinq/DynamicWin` links** across both READMEs and both privacy policies now point at
+  `phoseinq/Halo`; the READMEs' "silent updates" bullet and subtitle claim went with the feature.
+- **CI had never once run on the new repo.** `ci.yml` and `codeql.yml` triggered on `branches: [V3]`
+  only, and the new repo's default branch is `main` - Actions were enabled the whole time, nothing was
+  broken, nothing matched. Both now trigger on `[main, V3]`, and CI is **green on `main`**.
+- **LICENSE needed nothing**: already MIT / 2026 / phoseinq, and GitHub reports `spdx_id: MIT`. Only a
+  missing trailing newline was added.
+
+`scripts/publish-mirror.ps1` refused the push until `-AllowDeletions` was passed - its guard against a
+stripped push erasing an outside contribution. Here the two deletions were the intended ones.
+
+Build **0/0**, **408 tests** (the AutoUpdate tests went with the feature). Tag `v3.1.7`, signed setup +
+portable zip released on **both** repos, installed here and running `3.1.7.0`. **Pushed and deployed.**
+
 ## 2026-08-01: the calendar the banner speaks, and the blog's download box
 
 ### The hourly banner now picks its calendar from where the machine is
