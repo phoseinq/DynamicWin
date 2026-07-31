@@ -1,5 +1,59 @@
 # Halo — progress
 
+## 2026-07-31 (latest+11): the calendar, the stamp that never advanced, and the blog's download box
+
+Build 0/0, **428 tests**. Deployed here (3.1.6.0 installed from the signed setup and relaunched),
+pushed to `master`, mirrored to both remotes, released on both repos, blog updated live.
+
+### The hourly banner now speaks the calendar of the place it is in
+Not the hard-coding it looked like: `Almanac.CalendarFor` already took the country the weather geocoder
+resolved and fell back to the Windows region. The bug was that the only branch was "Iran or Gregorian".
+- **Afghanistan** runs the same Solar Hijri calendar with different month names, and was deliberately
+  left on Gregorian for that reason - a test carried the note *"also solar, but with different month
+  names - not worth being wrong about"*. The answer was the second table, not the omission: Kabul reads
+  `8 Asad` where Tehran reads `8 Mordad`.
+- **Saudi Arabia** gets the lunar date via `UmAlQuraCalendar`, not `HijriCalendar` - the latter is
+  tabular arithmetic and drifts a day or two from the dates actually published there. Outside its
+  supported range it throws and falls back to Gregorian rather than print a wrong date.
+- The list stays short on purpose - *which calendar is civil here*, not *which countries are
+  Muslim-majority*. EG, TR and ID are asserted Gregorian so a later good intention cannot widen it.
+- `[Theory]` could not carry the internal `CalendarKind` on a public test signature (CS0051); the cases
+  live in a `[Fact]` instead. Verified with `--probe-almanac`: `country IR calendar SolarHijri`,
+  body `Friday, 9 Mordad`.
+
+### Every build since 3.1.3 shipped stamped 3.1.3.0 - clients were reinstalling daily, forever
+`AssemblyVersion`/`FileVersion` were pinned by hand in the csproj and were never part of a version bump,
+so 3.1.4, 3.1.5 and 3.1.6 all went out with `3.1.3.0` inside the exe. `AutoUpdate` compares the release
+tag against `Assembly.GetName().Version`, so a client on 3.1.6 read itself as 3.1.3.0, found v3.1.6
+newer, installed it, and came back up still reading 3.1.3.0 - **it never converged**. Both properties are
+now absent so the SDK derives them from `<Version>`; setting them to 3.1.6.0 would only have re-armed the
+trap for the next release. The v3.1.6 assets on both repos were re-uploaded with the fixed build, since
+the first upload still carried the looping stamp. Verified: exe stamps 3.1.6.0, and
+`IsNewer("v3.1.6", 3.1.6.0)` is false.
+
+### The blog's download box now points at the new repo, in both languages
+Post 14 `halo-glass-notch` had four GitHub links - the `Halo` name link and the download button, in
+`content` and `content_fa`. All four now read `phoseinq/Halo`; zero occurrences of the old path remain.
+- **The two vhosts share one database** (`codeboy_blog` on localhost) - the relink script dedupes by
+  (host, db) rather than running twice. Columns backed up to `/root/halo-blog-backup-*.json` first.
+- Only the `owner/repo` segment was rewritten, never the asset filename: the installer is still built as
+  `DynamicWinSetup.exe`, and replacing the bare word `DynamicWin` would have broken the URL.
+- **v3.1.6 was published on `phoseinq/Halo` before the blog was touched** - repointing first would have
+  left a live 404 on the download button. Verified end to end: the button URL returns 200 / 31,404,872
+  bytes, and both hosts serve identical JSON.
+- Server traps, now in memory as well: reach it as `root@128.140.73.105` with `~/.ssh/boy_key` - the
+  **hostnames do not route from here**, only the IP. `scp` and even plain ssh drop with `Connection reset
+  by peer` often enough that the working pattern is `ssh "cat > file" < local` to upload, and `nohup ...
+  > log` plus a second connection to read the log, so a dropped pipe cannot kill a half-finished UPDATE.
+  The CLI `php` has no mysqli; use `/usr/local/lsws/lsphp82/bin/php`. The API route is
+  `?action=posts&slug=...`, and its JSON escapes every slash, so grepping for `phoseinq/Halo` finds
+  nothing - match `phoseinq\/Halo` or parse the JSON.
+
+### Still open
+- **Releases now have to go to both repos.** `AutoUpdate` still points at `phoseinq/DynamicWin`, while
+  the blog now sends new users to `phoseinq/Halo`. Until that one-liner is switched, every release must
+  be published to both or one of the two audiences is stranded.
+
 ## 2026-07-31 - the pulse stops stepping, downloads breathe - **3.1.5 RELEASED**
 
 **Shipped.** `origin/V3` @ `62b27cc`, tag **v3.1.5**, release page with both signed artifacts. Build 0/0,
