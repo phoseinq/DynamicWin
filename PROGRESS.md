@@ -1,5 +1,121 @@
 # Halo — progress
 
+## 2026-07-31 (early hours) - the collapsed bar: made visible, made continuous, made to move
+
+Six complaints in one session, all about the pill's own background bar. Five were separate root causes.
+
+### The start of a track repainted the pill in one frame
+The bar's colour is the album art's, so a track change swapped the whole background between two frames -
+"یهو رنگ میخوره". Two eases fix it, both in `DrawCollapsed` off its own frame clock: the drawn accent lerps
+toward the art's (tau 0.30s, first cover snaps - washing in from the White sentinel would be a flash of grey),
+and the bar's alpha fades in and out (tau 0.20s) with the outgoing fraction held in `_lastProg` so a track
+change cross-fades instead of blinking off and on. The *fill* still snaps on a track change, deliberately: a
+new song's bar belongs at the new song's position, not gliding back from where the last one ended.
+
+### It was missing entirely on greyscale covers — the one that kept coming back
+The complaint that survived three deploys. `AccentOf` answers `Fx.White` when a cover has no colour worth
+extracting, and `PillBar` draws **nothing** for White — its other callers use that sentinel to mean "no colour
+worth painting with". `--probe-timeline` settled it in one line: a playing track, real art, `end=0:02:52`,
+`pos=0:00:37`, `ring=0.219`, `accent=WHITE (no bar!)`. Everything the bar is made of was correct and the bar was
+never drawn. For this widget the bar *is* the content, so White now falls back to a neutral light grey at the
+call site — deliberately not `Fx.White` itself, which is the sentinel. Rendered with `--render-bar <png> dee2e8`.
+
+### It was invisible on dark album art
+`PillBar` derives every colour from the accent by taking value *away* — the track sits at `v*0.34`. A black-ish
+cover gives a black-ish accent, so the bar was drawn in full and simply could not be seen ("اونایی که تیرن
+نمیاد"). The accent now gets a floor (v ≥ 0.62, hue kept, a little saturation put back so the lift isn't just
+grey) before anything is derived from it. Bright accents are already above the floor and pass through
+untouched. `--render-bar <png> [rrggbb]` takes an accent now: `1a1512` used to render a black bar on black
+glass, and renders a legible warm brown one.
+
+### The "alive" pulse read as a separate piece, then as nothing at all
+First attempt was a bright band pinned at the wavefront. At this strength the fill sits near 18% alpha and that
+band peaked near 36% — a stripe twice as bright as the bar it rode on, which is exactly why it looked detached
+("تیکه تیکه"). Replacing it with a body-wide breath fixed the seam and went too far the other way: you could no
+longer tell it was moving. What ships is a wide, soft shimmer that **travels** the filled length, clipped to the
+fill so it never paints on the track, peaking below the body's own alpha. Strength also went 0.34 → 0.5, which
+brings in the sheen and lip and makes it read as one lit body. Verified on the `--render-bar` filmstrip: the
+highlight sits at a different place in each frame, and `paused` is flat.
+
+### ...and then the animation itself was the problem, so it was taken back out
+Three effects had piled up at the wavefront and were competing: a lip, a tight glow on top of it, and the
+travelling shimmer. Reported as "سرش روشن تره، بعد یه خط ایجاد شده بینشون، بعد از پشت موج میاد". The **line**
+was real and specific: the lip's gradient ramped up to 94% of its width and then fell back to nothing over the
+last 6% - about two and a half pixels of bright-then-dark right at the head. Final state is much plainer: the
+shimmer is gone, the lip rises into the head with **no** drop-back (it just stops where the clip stops) at 0.3
+alpha instead of 0.5, and the wavefront glow drops 26 → 13. The slow whole-body breath is the only "alive" cue
+left. Four shapes were tried before this one; the filmstrip shows an even fill with a soft head and nothing
+sliding along it.
+
+### Two bars, a pale one ahead of a solid one — `Fx.Glow` was throwing the caller's clip away
+`Fx.Glow` opens with `g.SetClip(pillPath)`, and `SetClip(GraphicsPath)` defaults to **Replace**. So the clip
+`PillBar` set around each glow call - "stay inside the filled part" - was discarded the moment Glow ran, and the
+halo went on spilling past the wavefront exactly as before. Because the wide halo is drawn *before* the fill,
+that spill is a faint band lying **under** the bar and reaching further right than it: reported as "دوتا نوار
+شده، یکی کم رنگ زیرش جلوتر، یکی پر رنگ عقب تر". `SetClip(clip, CombineMode.Intersect)` fixes it, and is
+identical to the old behaviour for every caller that has no clip of its own.
+
+Worth recording how it was found, because two rounds were wasted first: the filmstrip and even a pixel dump of
+the live pill (captured with `HALO_CAPTURABLE=1`, which is the way to actually SEE the running window) both
+looked clean, because on a near-neutral accent the tail is only a few levels above the track. Sampling the same
+row on both builds is what showed it - past the edge, `32 33 33 32 32 31 30 29 29 29` decaying over ~60px
+versus a flat `28 28 28 28 28 28 28`. **The lesson: a clip set around a Fx.* call is not necessarily in force
+inside it.**
+
+### The head was two pieces, and the filmstrip had been lying about the strength
+Both glows are centred **on** the wavefront, which puts half of each one past it: after the fill's own crisp
+edge there was a soft detached blob lying on the empty track, so the head read as two pieces. Both are now
+clipped to the filled part - nothing exists to the right of the wavefront except the track. The position
+correction was also being snapped whenever it exceeded 0.02 of the duration, which on a three-minute song is
+under four seconds and therefore fired on ordinary reports; a snap is exactly what "not smooth" looks like, so
+only a track change or a real seek jumps now (0.08) and the ease is tighter (tau 0.14).
+
+Separately: `--render-bar` had been drawing at `strength 0.34` while `MediaWidget` passes **0.5**, so every
+filmstrip eyeballed here was a weaker bar than the one that ships. The hook renders the real number now, and
+takes an optional fraction (`--render-bar out.png dee2e8 0.07`) because the breath's visibility at the *start*
+of a track - a few pixels of fill - is its own question, and was the reason the swing was widened again.
+
+### The fill stepped instead of gliding
+Players report position in lumps; Spotify repeats the *same* position for seconds. `RefreshTimeline` re-stamped
+`_posAt` against that unchanged `_pos` every 200ms poll, restarting the extrapolation each time, so the fill
+could never grow past one poll's worth. An identical reading is the player repeating itself, not time standing
+still — the clock is now left alone on a repeat. `--probe-timeline` shows `rep`/`pos` frozen at `0:00:02` while
+`ring` climbs 0.011 → 0.026: the extrapolation is carrying it.
+
+### A seek took 4-5s to reach the picture
+Two causes. Every request waited 320ms for a burst that, for one drag-and-release, was never happening; and
+then it re-sent with a widening gap up to ~5s, each retry seeking the video *again* — a player that has stopped
+reporting never agrees however often it is asked. Now: an isolated ask goes out immediately, only one landing on
+the heels of a send waits for the tapping to stop, and there is exactly one retry before it stops asking.
+
+### The bar leapt forward and back at the start of a track
+A track change and its timeline don't land together — for up to a second the player still serves the outgoing
+track's span and position. That leftover is now recognised by its duration and waited out (time-boxed, so a
+playlist of equal-length tracks can't stall the bar). **This one shipped broken first:** attaching to a session
+also lands in the track-change path, with the title arriving *after* `Hook()` has already read a good timeline,
+so the guard armed against the correct current track. `--probe-timeline` caught it as a solid 2s of `end=0` /
+`ring=-1` at startup — on screen, a pill with no bar (a *second*, separate cause of the same symptom). There is no predecessor to protect against on the first
+track, so nothing is discarded there.
+
+Also: a zeroed span (what a backgrounded browser tab answers with) no longer erases a duration already known,
+and ring colours now ease toward their target instead of flipping between frames — done centrally in
+`NotchController.EaseRings` so Claude, Codex and the rest get it from one place.
+
+### Tooling
+`--probe-timeline` prints, twice a second for 15s, what the media widget actually believes (`end`, `pos`,
+`rep`, `prevEnd`, pending seek, `ring`, accent). It has to run on an **MTA thread**: the widget fills itself in
+from `async void` handlers, and a WinRT completion arriving in an STA is a COM callback that only lands when
+the apartment pumps messages, which a probe sitting in `Thread.Sleep` never does — the first three runs printed
+"session hooked, no title yet" forever. `--probe-media` next door gets away with it because a blocking
+`GetResult()` on an STA pumps while it waits.
+
+The four timing rules are extracted into `MediaTiming` (same file, the `NotchVisibility` pattern) and tested —
+they all fail as *rendering* bugs from the outside, and one of them looked obviously right and was measured
+wrong.
+
+Release 0 warnings / 0 errors, **427 tests** (up from 409; `MediaTimingTests`). Deployed by `Halo.App.dll`
+hot-swap. **Not pushed.**
+
 ## 2026-07-30 (evening) - the media panel: a speed menu, a second line, a seek bar that works, and VLC
 
 ### The size never showed, because the title has no extension
