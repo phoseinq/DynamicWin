@@ -675,6 +675,7 @@ internal sealed class NotchController
         _dt = _lastFrameAt == 0 ? 0.008f : Math.Clamp((frameNow - _lastFrameAt) / 1000f, 0.001f, 0.05f);
         _lastFrameAt = frameNow;
         AdaptFrameRate();
+        EaseRings();
         CheckAlerts();
         var notifStart = _notif; // an in-place banner swap (rapid language flip) must force a redraw
         var fg = Win32.GetForegroundWindow();
@@ -1030,13 +1031,37 @@ internal sealed class NotchController
         return false;
     }
 
+    // A ring's colour is a state - idle white, working green, out of juice red - and a state flip repainted
+    // the circle between two frames, which reads as a glitch rather than as the thing changing. The target
+    // still comes from the widget; only the pixels lag, converging on a time constant so it is the same speed
+    // at 30fps and at 120. Done here rather than in the widgets because every widget that has a ring wants it,
+    // and ClaudeCode/Codex are mirror twins where one edit always has to be made twice.
+    private readonly Dictionary<int, Color> _ringShown = new();
+    private void EaseRings()
+    {
+        for (int i = 0; i < _widgets.Length; i++)
+        {
+            if (_widgets[i].Ring is not { } target) { _ringShown.Remove(i); continue; }
+            if (!_ringShown.TryGetValue(i, out var shown)) { _ringShown[i] = target; continue; }
+            float k = 1f - MathF.Exp(-_dt / 0.22f);
+            _ringShown[i] = Color.FromArgb(
+                (int)MathF.Round(shown.A + (target.A - shown.A) * k),
+                (int)MathF.Round(shown.R + (target.R - shown.R) * k),
+                (int)MathF.Round(shown.G + (target.G - shown.G) * k),
+                (int)MathF.Round(shown.B + (target.B - shown.B) * k));
+        }
+    }
+    // the eased colour if one is on file, else whatever the widget says right now
+    private Color? RingOf(int i)
+        => _widgets[i].Ring is { } target ? (_ringShown.TryGetValue(i, out var c) ? c : target) : null;
+
     // the group circle wears the "most alive" member's ring (a working green beats an idle white)
     private Color? GroupRing(int[] gr)
     {
         Color? first = null;
         foreach (var i in gr)
         {
-            if (_widgets[i].Ring is not { } rc) continue;
+            if (RingOf(i) is not { } rc) continue;
             first ??= rc;
             if (rc.R != rc.G || rc.G != rc.B) return rc; // first non-grey = an actual state colour
         }
@@ -1366,7 +1391,7 @@ internal sealed class NotchController
             RowProgress = groups.ConvertAll(gr => _widgets[gr[0]].RingProgress).ToArray(),
             // duplicates: same state = same hue, but each next session's ring is deeper/darker
             SessRings = groups.ConvertAll(gr => gr.Length >= 2
-                ? gr.Select((i, j) => (Color?)(_widgets[i].Ring is { } rc ? Fx.Shade(rc, j) : null)).ToArray()
+                ? gr.Select((i, j) => (Color?)(RingOf(i) is { } rc ? Fx.Shade(rc, j) : null)).ToArray()
                 : Array.Empty<Color?>()).ToArray(),
             Open = EaseOutBack(Math.Clamp(_menu, 0f, 1f)),
             OpenRow = _row,
