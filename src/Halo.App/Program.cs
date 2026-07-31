@@ -52,6 +52,10 @@ internal static class Program
         if (args.Length >= 2 && args[0] == "--render-notif") { RenderNotif(args[1]); return; }
         // dev hook: `Halo.App --render-badges <out.png>` — the generated notif badges, to catch tofu glyphs
         if (args.Length >= 2 && args[0] == "--render-badges") { RenderBadges(args[1]); return; }
+        // dev hook: `Halo.App --render-ask <out.png>` — the answerable banner in both forms, with one chip
+        // hovered. The pill cannot be screenshotted, and a surface whose entire job is to be clicked has to
+        // be looked at before it can be believed.
+        if (args.Length >= 2 && args[0] == "--render-ask") { RenderAsk(args[1]); return; }
         // dev hook: `Halo.App --render-local <out.png>` — the banners Halo raises ITSELF, stacked. Every
         // other hook renders a mirrored toast, which always has a body; the body-less ones are our own.
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
@@ -480,6 +484,44 @@ internal static class Program
 
     // dev-only: the notification banner, drawn through the REAL shape path (LayeredNotch.DrawShape) on a
     // colourful backdrop, so any edge fringe and the Persian/English text rendering are visible.
+    private static void RenderAsk(string outPath)
+    {
+        var expires = DateTimeOffset.UtcNow.AddSeconds(20);
+        var question = new Halo.ClaudeCode.PendingAsk(
+            "n1", 100, "sess", "AskUserQuestion", null, "Fix the cadence first, or the icon?",
+            [new Halo.ClaudeCode.AskOption("Cadence", "the CPU one"),
+             new Halo.ClaudeCode.AskOption("Icon", "the visible one"),
+             new Halo.ClaudeCode.AskOption("Measure more first", "no code yet")], expires);
+        // a long target on purpose: the command is the thing you are actually deciding about, and it is
+        // the first thing that will be too long for the pill
+        var permission = new Halo.ClaudeCode.PendingAsk(
+            "n2", 100, "sess", "Bash", "git push --force-with-lease origin master", null,
+            [new Halo.ClaudeCode.AskOption("allow", "run it"),
+             new Halo.ClaudeCode.AskOption("deny", "skip it")], expires);
+
+        int W = Halo.Widgets.AskBanner.W, pad = 24;
+        using var probe = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
+        int h1 = Halo.Widgets.AskBanner.Height(probe, question, W);
+        int h2 = Halo.Widgets.AskBanner.Height(probe, permission, W);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, h1 + h2 + pad * 3);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, W + pad * 2, h1 + h2 + pad * 3),
+                System.Drawing.Color.FromArgb(70, 150, 210), System.Drawing.Color.FromArgb(210, 110, 70), 35f))
+                g.FillRectangle(lg, 0, 0, W + pad * 2, h1 + h2 + pad * 3);
+
+            g.TranslateTransform(pad, pad);
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, h1, 26, 245, glass: false);
+            Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1);   // second chip hovered
+
+            g.TranslateTransform(0, h1 + pad);
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, h2, 26, 245, glass: false);
+            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
     private static void RenderNotif(string outPath)
     {
         // TWO banners: a body longer than the summary can hold, and a short one. The grabber bar belongs to

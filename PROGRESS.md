@@ -26,6 +26,29 @@ and all three rendezvous files were swept.
 **Not deployed** — the installed hooks are still the previous build; this needs
 `dotnet publish -r win-x64 --self-contained` before it does anything in a real session.
 
+### Pill half, part 1: store, queue, banner, render hook
+
+**Release 0/0, 488 tests pass (was 479).** `AskStore` reads `ask-*.json`, acks, and writes the answer a
+click produces; `AskQueue` beside it is the pure part — FIFO, one banner at a time, and an expired head
+steps aside rather than holding the banner hostage (9 tests). It acks **every** ask on sight rather than
+only the visible one: the hook gives up 300ms after an unacked ask, so acking only the head would send a
+queued second question back to the terminal before its turn came.
+
+It rides `StatusStore`'s existing watcher and 1s poll through a new `AfterLoad` callback rather than
+starting a timer — deliberate, because a once-a-second frame tick would routinely miss that 300ms ack
+window. The callback sits outside `Load`'s try, so a bad status file cannot stop a pending question from
+being seen.
+
+`AskBanner` draws it, with layout (`Chips`) split from painting so the hit-test and the drawing cannot
+disagree — a chip you can see but not click is the worst available bug in a surface whose only job is to
+be clicked. Colour carries the answer: green allow, red deny, amber for a question's options.
+
+Verified with a new `--render-ask` hook showing both forms, one chip hovered.
+
+**Still to do:** wiring into `NotchController` — raising the banner morph when `AskStore.Pending` is
+non-null and routing chip clicks to `AskStore.Answer`. Until that lands the feature does nothing in a
+real session.
+
 ## 2026-08-01: pill text clipping, Codex limit naming, banner bidi (worktree `.worktrees/claude-master`)
 
 Done in an isolated worktree on `master`, because a Codex agent works the primary checkout and its

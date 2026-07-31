@@ -244,7 +244,14 @@ internal sealed class StatusStore
         catch
         {
         }
+        // The ask rendezvous rides this store's watcher and 1s poll instead of starting its own: the two
+        // watch the same directory, and the hook only waits 300ms for an ack, which a once-a-second frame
+        // tick would routinely miss. Outside the try above on purpose — a bad status file must not stop a
+        // pending question from being seen.
+        try { AfterLoad?.Invoke(); } catch { }
     }
+
+    internal Action? AfterLoad;
 
     // live files, deduped by agent pid (a session migrating from legacy status.json to
     // status-{pid}.json briefly exists as both — keep the freshest)
