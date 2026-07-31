@@ -77,6 +77,20 @@ public class MoodsTests
         Assert.NotEqual(first, Moods.Line("running", new MoodContext(), t0.AddSeconds(61)));
     }
 
+    // This is what made the test above fail on CI and pass here: the hold is shared static state, other
+    // tests in this class stamp the same slot with the REAL clock, and xunit does not promise an order
+    // within a class - so the fixed t0 above could land in the past of a stamp already on file. A negative
+    // elapsed is "< Hold", so the line was held rather than rerolled, forever. Same shape as an NTP step.
+    [Fact]
+    public void AStampFromTheFutureIsNotTreatedAsFresh()
+    {
+        var t0 = new DateTime(2026, 7, 30, 12, 0, 0, DateTimeKind.Utc);
+        var future = Moods.Line("fetching", new MoodContext(), t0.AddHours(6));
+        var now = Moods.Line("fetching", new MoodContext(), t0);
+        Assert.NotEqual(future, now);                                  // rerolled, not held
+        Assert.Equal(now, Moods.Line("fetching", new MoodContext(), t0.AddSeconds(30)));  // and re-anchored
+    }
+
     // …and the reroll has to actually land somewhere else. With a two-line set, picking at random means a
     // coin flip every minute on whether anything appears to have happened.
     [Fact]

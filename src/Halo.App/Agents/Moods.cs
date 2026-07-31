@@ -472,7 +472,7 @@ internal static class Moods
             if (Held.TryGetValue(key, out var h))
             {
 
-                if (now - h.at < Hold && (ctx.MaxChars <= 0 || h.line.Length <= ctx.MaxChars))
+                if (now >= h.at && now - h.at < Hold && (ctx.MaxChars <= 0 || h.line.Length <= ctx.MaxChars))
                     return h.line;
                 stale = h.line;
             }
