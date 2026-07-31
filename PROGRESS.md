@@ -1,5 +1,49 @@
 # Halo — progress
 
+## 2026-07-31 - the pulse stops stepping, downloads breathe - **3.1.5 RELEASED**
+
+**Shipped.** `origin/V3` @ `62b27cc`, tag **v3.1.5**, release page with both signed artifacts. Build 0/0,
+**427 tests** local / 424 on the mirror. Installed locally from the built installer, running
+`3.1.5+d68ebfa`. (v3.1.4 went out an hour earlier from `d3c0491`; everything below is what came after it.)
+
+### Four brightnesses instead of a swell
+Reported as "نبض پله‌ای است، تعداد رنگ‌هایی که روشن/خاموش می‌شود را زیاد کن". `Fx.Glow` declared
+`int alpha`, but that value only ever reaches GDI+ through `Matrix33`, which is float end to end - the
+integer was pure loss, and it landed exactly where it hurt. `PillBar`'s two breathing glows were computed
+as `(int)(16 * strength * lit)` and `(int)(13 * strength * lit)`: across a whole breath that is **four**
+distinct values and **three**. Widening the type is the entire fix; all seventeen callers pass int
+literals and are unaffected.
+
+Verified by measurement, not by eye - the previous rounds proved eyeballing a filmstrip does not catch
+this. A throwaway xunit probe rendered `PillBar` 160 times at ~15ms and counted distinct pixel values:
+the wide glow's argument went 4 levels → continuous, and a pixel mid-fill now takes **24-26** distinct
+values per breath. What remains is the 8-bit alpha of the fill, which is GDI+'s floor. Note the sampling
+trap that wasted a step: the `--render-bar` filmstrip's rows are 430ms apart, so it *cannot* show banding
+that lives between 16ms frames - the rows differed either way.
+
+### Downloads got the same breath
+`DownloadWidget` already knew `paused`; it now passes `alive: !paused`. A download at 40% and one stalled
+at 40% are the same still picture.
+
+### The README gif is the current pill
+`ReadmeFiles/media.gif` re-recorded: 900x225 like the old one, 9.5s, 414 KB (was 834). The old one
+predated the background bar, the pulse and the eased accent. Recipe, since it took three takes:
+`HALO_CAPTURABLE=1`, ffmpeg `ddagrab:draw_mouse=0:framerate=60`, `crop=1225:306:667:0` on a 2560x1600
+panel (the pill is DPI-scaled 1.25x, so the expanded panel is 700x275 physical and this crop is the old
+gif's framing), then `fps=20,scale=900:225:lanczos` with `palettegen=stats_mode=diff` +
+`paletteuse=dither=bayer:bayer_scale=4` - a plain gif encode would put the banding straight back via the
+256-colour palette. Two traps: **the agent circle beside the pill is our own session**, rewritten by the
+hooks on every tool call, so deleting `~/.claude/notch/*.json` only works if the whole take runs inside
+ONE tool call; and **ddagrab only emits frames when the desktop changes**, so a 9.5s take produced 521
+frames, not 570 - sampling frame 545 for a contact sheet yields a black tile and looks like a broken
+recording.
+
+### SSH to GitHub died mid-release
+`Connection closed by 198.18.0.68 port 22` - that range is a VPN/proxy's, and only port 22 was affected;
+HTTPS was fine throughout. Fix that keeps working: `gh auth setup-git` for credentials, a second remote
+`origin-https`, and `publish-mirror.ps1 -Remote origin-https`. The script already takes `-Remote`, so
+nothing had to be edited.
+
 ## 2026-07-31 (early hours) - the collapsed bar: made visible, made continuous, made to move
 
 Six complaints in one session, all about the pill's own background bar. Five were separate root causes.
