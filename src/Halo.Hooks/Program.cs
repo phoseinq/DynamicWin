@@ -181,6 +181,14 @@ internal static class Program
 
             status["updatedAt"] = DateTimeOffset.UtcNow.ToString("o");
             Save(status, path);
+
+            // After the save, deliberately: the pill has to have this tool call on screen before the hook
+            // parks itself for up to 20 seconds waiting for someone to click a chip. Claude only, because
+            // Codex has no equivalent decision channel — that is a stated non-goal, not an omission.
+            if (cmd == "tool" && !codex)
+                AskFlow.Run(ClaudeDir, input, Field("session_id"), Field("cwd"),
+                    status["pid"] is JsonValue pv && pv.TryGetValue<int>(out var askPid) ? askPid : 0);
+
             return 0;
         }
         catch

@@ -1,5 +1,31 @@
 # Halo — progress
 
+## 2026-08-01: answerable banner — hook half (design in `docs/superpowers/specs/2026-08-01-answerable-banner-design.md`)
+
+The half that lives in `Halo.Hooks` is done and verified end to end. **Release 0/0, 479 tests pass
+(was 433).** The pill half — `AskStore`, the banner chips, `--render-ask` — is not started.
+
+`AskGate` answers "would this call have prompted?", which PreToolUse cannot ask Claude because Claude
+decides it *after* hooks run. It reads `permissions.allow` itself (`AskSettings`, cached by mtime, since
+this process spawns once per tool call) and stays silent on anything already covered — otherwise the
+feature would raise a banner for the `git status` on the allowlist and make the user answer *more* than
+before. `AskUserQuestion` with exactly one question is always askable; 2-4 questions are not intercepted
+at all. Every unreadable input answers no.
+
+`AskFlow` writes `ask-<nonce>.json`, waits 300ms for an ack (absent = Halo is not running, get out of
+the way), then 20s for an answer, and prints a decision **only** when an answer came back. It runs after
+the status save on purpose: the pill needs the tool call on screen before the hook parks itself.
+
+Verified live, not just by unit test: a payload for `Bash` returned silently in 75ms because this
+machine's settings carry a bare `Bash` allow rule — the gate working, and worth recording because it
+also made a first end-to-end attempt look like a failure. An `AskUserQuestion` payload raised the ask,
+an ack plus answer produced exactly
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Hold"}}`,
+and all three rendezvous files were swept.
+
+**Not deployed** — the installed hooks are still the previous build; this needs
+`dotnet publish -r win-x64 --self-contained` before it does anything in a real session.
+
 ## 2026-08-01: pill text clipping, Codex limit naming, banner bidi (worktree `.worktrees/claude-master`)
 
 Done in an isolated worktree on `master`, because a Codex agent works the primary checkout and its
