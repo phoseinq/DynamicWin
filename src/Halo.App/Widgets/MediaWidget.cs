@@ -40,6 +40,8 @@ internal sealed class MediaWidget : IWidget
     private TimeSpan? _seekPending;                // where we have asked to be, until the player confirms it
     private DateTimeOffset _seekSentAt, _seekAskedAt;
     private TimeSpan _reported;                    // the last position the PLAYER actually claimed
+    private TimeSpan _prevEnd;                     // outgoing track's duration, to spot its leftover timeline
+    private long _trackAt;                         // when the track changed, so that wait can't last forever
     private int _seekTries;
     private bool _seekBusy;                        // one outstanding request at a time
     private DateTime _posAt;
@@ -170,6 +172,7 @@ internal sealed class MediaWidget : IWidget
             {
                 if (!ReferenceEquals(_session, s)) return; // stale session
                 trackChanged = key != _trackKey;
+                bool firstTrack = _trackKey == null;   // attaching to a session is not "the track changed"
                 _title = title.Length > 0 ? title : (artist.Length > 0 ? artist : null);
                 _artist = artist;
                 _trackKey = key;
@@ -177,7 +180,21 @@ internal sealed class MediaWidget : IWidget
                 // new track: the timeline still holds the OLD track's position (e.g. 1:53 against a
                 // shorter new duration → bar pinned at the end until the real event lands). Zero it and
                 // bump the epoch so the bar restarts from 0 instead of gliding back from the end.
-                if (trackChanged) { _pos = TimeSpan.Zero; _end = TimeSpan.Zero; _posAt = DateTime.UtcNow; _trackEpoch++; }
+                // ...but only when a track actually gave way to another one. Attaching to a session also lands
+                // here, with the title arriving AFTER Hook() has already read a perfectly good timeline, and
+                // throwing that away left the pill with no bar at all until the next poll refilled it - the
+                // guard below made it worse by then refusing the refill as "the old track's", measured as a
+                // solid 2s of end=0 / ring=-1 at startup. There is no predecessor to protect against on the
+                // first track: keep everything Hook() learned.
+                if (trackChanged && !firstTrack)
+                {
+                    _prevEnd = _end;                       // how RefreshTimeline recognises the outgoing track
+                    _trackAt = Environment.TickCount64;
+                    _pos = _end = _start = TimeSpan.Zero;
+                    _minSeek = _maxSeek = TimeSpan.Zero;   // a leftover seek window clamps the NEW track's
+                    _posAt = DateTime.UtcNow;              // seeks into the old one's range
+                }
+                if (trackChanged) _trackEpoch++;
                 _version++;
             }
             if (trackChanged) DebugLog(title);
@@ -232,15 +249,41 @@ internal sealed class MediaWidget : IWidget
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return;
+                // A track change and its timeline do not land together: for up to a second or so the player
+                // keeps handing out the OUTGOING track's span and position. Believing it is what makes a new
+                // song's bar leap forward to wherever the last one ended and then fall back to the start.
+                // The leftover is recognisable by still carrying the old duration; wait it out - but only
+                // briefly, so a playlist of equal-length tracks can't stall the bar forever. Until it clears,
+                // _end is zero and the pill simply shows no bar, which is the honest state: not known yet.
+                if (_prevEnd > TimeSpan.Zero)
+                {
+                    if (MediaTiming.IsLeftover(t.EndTime, _prevEnd, Environment.TickCount64 - _trackAt)) return;
+                    _prevEnd = TimeSpan.Zero;
+                }
                 // StartTime is not always zero, and MinSeekTime/MaxSeekTime is not always the whole track.
                 // Windows' Media Player reports a window here, and treating position as "ticks from 0"
                 // against it is what made seeking backwards do nothing: the target landed before MinSeekTime
                 // and was rejected outright, while a forward target still fell inside the range and worked.
+                // ...but a zeroed span is not a report, it is the app declining to answer, and a browser does it
+                // constantly: Chrome pushes one real timeline when a video starts and then, once that tab is in
+                // the background, comes back with everything at zero. Taken literally that erased a duration we
+                // already knew (RingProgress goes to -1, the bar vanishes) and dragged the position back to the
+                // start, which is "the bar shows up once and never again". A blank answer about a track we
+                // already have a span for is no news at all. Only a track change forgets the span, and
+                // RefreshProps zeroes it there; a genuinely durationless live stream reports zero from the very
+                // first update, never reaches this state, and still correctly gets no bar.
+                if (MediaTiming.IsBlank(t.StartTime, t.EndTime, _start, _end)) return;
                 _start = t.StartTime;
                 _minSeek = t.MinSeekTime;
                 _maxSeek = t.MaxSeekTime;
                 _end = t.EndTime;
 
+                // The same players go quiet in a subtler way: the poll keeps returning the SAME position, frame
+                // after frame, while the video plays on. Re-stamping _posAt against an unchanged _pos restarts
+                // the extrapolation from the same instant every 200ms, so RingProgress can never grow past one
+                // poll's worth and the bar sits frozen. An identical reading is the player repeating itself,
+                // not time standing still: leave the clock alone and let the extrapolation carry the bar.
+                bool repeated = t.Position == _reported;
                 _reported = t.Position;
                 // While a seek is outstanding, the only report worth believing is one that AGREES with where
                 // we asked to be. A timestamp is not enough on its own: a player will happily stamp an update
@@ -250,13 +293,21 @@ internal sealed class MediaWidget : IWidget
                 // from. NudgeSeek is what makes that agreement happen, or gives up and lets reality back in.
                 bool stale = _seekPending is { } want
                     && (t.Position - want).Duration() > TimeSpan.FromSeconds(1.5);
+                bool confirming = _seekPending is not null;
                 if (!stale)
                 {
                     _seekPending = null;
-                    bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
-                    _pos = t.Position;
-                    _posAt = DateTime.UtcNow;
-                    if (moved) _version++;
+                    // Skip the re-stamp on a repeat, but never on the report that confirms a seek - that one
+                    // has to restart the clock at the position we landed on. If a repeat is really the video
+                    // buffering, the bar runs slightly ahead until the next differing report pulls it back,
+                    // and DrawCollapsed eases that correction rather than snapping it.
+                    if (MediaTiming.ShouldRestamp(repeated, _playing, confirming))
+                    {
+                        bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
+                        _pos = t.Position;
+                        _posAt = DateTime.UtcNow;
+                        if (moved) _version++;
+                    }
                 }
             }
         }
@@ -359,11 +410,10 @@ internal sealed class MediaWidget : IWidget
     /// <c>TryChangePlaybackPositionAsync</c> returning true for every single one. So sending on every tap
     /// throws away precisely the position the user actually wanted: the last one.
     ///
-    /// Hence: a tap moves a <i>target</i>, and this sends the target once the tapping has stopped for a
-    /// moment, then re-sends with a widening gap until the player reports itself there. The pill has already
-    /// moved to the target, so none of that waiting is visible. After about five seconds of being ignored it
-    /// gives up and lets the player's own position back in, because a pill showing a position the player is
-    /// not at has stopped being a status display.
+    /// Hence: a tap moves a <i>target</i>, and this sends it immediately when nothing is in flight, or waits
+    /// for the tapping to stop when it lands mid-burst. One retry covers a request the player swallowed while
+    /// busy; after that it stops asking, because the second seek of a video that is simply not reporting its
+    /// position is not a correction, it is another yank of the picture.
     /// </summary>
     private void NudgeSeek()
     {
@@ -383,14 +433,10 @@ internal sealed class MediaWidget : IWidget
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (tries == 0)
+        switch (MediaTiming.NextSeekStep(tries, (now - asked).TotalMilliseconds, (now - sent).TotalMilliseconds))
         {
-            if (now - asked < TimeSpan.FromMilliseconds(320)) return;   // the burst has not finished
-        }
-        else
-        {
-            if (tries >= 7) { lock (_lock) _seekPending = null; return; }
-            if (now - sent < TimeSpan.FromMilliseconds(500 + 300 * Math.Min(tries, 4))) return;
+            case MediaTiming.SeekStep.Wait: return;
+            case MediaTiming.SeekStep.GiveUp: lock (_lock) _seekPending = null; return;
         }
 
         lock (_lock) { _seekSentAt = now; _seekTries = tries + 1; _seekBusy = true; }
@@ -407,6 +453,26 @@ internal sealed class MediaWidget : IWidget
     // dev hooks (--probe-seek): the rapid-tap case can only be measured through the path the buttons use
     internal void SeekByForProbe(int secs) => SeekBy(secs);
     internal TimeSpan PositionForProbe { get { lock (_lock) return _pos; } }
+
+    // dev hook (--probe-media): the bar is a pure function of these numbers, and on screen a missing bar looks
+    // identical whether the player never reported a duration, the widget refused the span it was handed, or a
+    // track change is still being waited out. null = empty slot. Drives the same poll the draw path drives.
+    internal string? ProbeLine()
+    {
+        PollTimeline();
+        lock (_lock)
+        {
+            if (_title == null) return null;
+            static string F(TimeSpan t) => t == TimeSpan.Zero ? "0" : t.ToString(@"h\:mm\:ss");
+            var t = _title.Length > 22 ? _title[..22] : _title;
+            // accent too: PillBar draws NOTHING for a white accent, so "no bar" and "no colour extracted from
+            // the icon yet" are the same picture on screen
+            return $"{t,-22} play={(_playing ? 1 : 0)} end={F(_end),-7} pos={F(_pos),-7} " +
+                   $"rep={F(_reported),-7} prevEnd={F(_prevEnd),-7} seek={(_seekPending is { } p ? F(p) : "-"),-7} " +
+                   $"ring={RingProgress:0.000} accent={(_accent == Fx.White ? "WHITE (no bar!)" : _accent.ToString())} " +
+                   $"art={(_thumb == null ? "none" : "yes")}";
+        }
+    }
 
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
     private void Mute() { _meter.ToggleMute(); Bump(); }
@@ -1109,6 +1175,63 @@ internal sealed class MediaWidget : IWidget
         }
     }
 
+    // The collapsed bar's own frame clock, separate because Dt() is consumed by the panel and a frame that
+    // draws both would hand the second caller a dt of zero.
+    private long _pillTick;
+    private float PillDt()
+    {
+        long now = Environment.TickCount64;
+        float dt = _pillTick == 0 ? 1f / 60f : Math.Clamp((now - _pillTick) / 1000f, 1f / 240f, 0.1f);
+        _pillTick = now;
+        return dt;
+    }
+
+    private static readonly Color NeutralBar = Color.FromArgb(255, 222, 226, 232);
+
+    // The bar's colour comes from the album art, so every track change repainted the whole pill background
+    // between two frames. The target still comes straight from the art; only the pixels lag. The first cover
+    // snaps - washing in from the White sentinel would be a flash of grey, which is not a transition, it is a
+    // different glitch.
+    private Color _accentShown = Fx.White;
+    private bool _accentInit;
+    // ...and the bar itself fades rather than appearing the instant a duration lands and vanishing the instant
+    // a track change clears one. _lastProg holds the outgoing fill in place while it fades, so a track change
+    // cross-fades instead of blinking off and on.
+    private float _barIn;
+    private float _lastProg = -1f;
+
+    private static Color LerpColor(Color from, Color to, float dt, float tau)
+    {
+        float k = 1f - MathF.Exp(-dt / tau);
+        return Color.FromArgb(
+            (int)MathF.Round(from.A + (to.A - from.A) * k),
+            (int)MathF.Round(from.R + (to.R - from.R) * k),
+            (int)MathF.Round(from.G + (to.G - from.G) * k),
+            (int)MathF.Round(from.B + (to.B - from.B) * k));
+    }
+
+    // Extrapolation already carries the fill between reports; this is for the moment a report lands and
+    // disagrees - without it every correction is a visible step sideways. A track change or a real jump is not
+    // eased: a new song's bar belongs at the new song's position, not gliding back from where the last ended.
+    private float _pillFrac = -1f;
+    private int _pillEpoch = -1;
+    private float PillFrac(float frac, float dt)
+    {
+        if (frac < 0f) { _pillFrac = -1f; return frac; }
+        int epoch; lock (_lock) epoch = _trackEpoch;
+        // 0.02 of a three-minute song is under four seconds, so ordinary corrections - the ones that land every
+        // time the player finally reports - were being SNAPPED, and a snap is exactly what "not smooth" looks
+        // like. Only a track change or a real seek jumps now; everything else glides.
+        if (epoch != _pillEpoch || _pillFrac < 0f || Math.Abs(frac - _pillFrac) > 0.08f)
+        {
+            _pillEpoch = epoch;
+            return _pillFrac = frac;
+        }
+        _pillFrac = Ease(_pillFrac, frac, dt, 0.14f);
+        if (Math.Abs(frac - _pillFrac) < 0.0004f) _pillFrac = frac;
+        return _pillFrac;
+    }
+
     // Collapsed pill = album art on the left + an audio equalizer on the right (Dynamic-Island style).
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
@@ -1118,13 +1241,29 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
-        float prog = RingProgress;   // -1 for a live stream with no duration
+        float dt = PillDt();
+        float prog = PillFrac(RingProgress, dt);   // -1 for a live stream with no duration
 
         // Backmost: how far through the video you are, as the pill's own background — the same "the pill IS
         // the bar" language the agent pills use for a spent usage window, and a better use of it here, since
         // a video's progress is the number you actually keep glancing at.
         // alive: the wavefront breathes while it is playing and stands still when it is not
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f, alive: playing);
+        // 0.34 was a whisper meant for an agent pill's spent-usage window; this one is the thing you glance
+        // at the pill FOR, and at 0.34 it was barely there. 0.5 also brings in the sheen and the lip, which
+        // is what makes it read as one lit body rather than a flat block with a bright edge.
+        // A greyscale or monochrome cover makes AccentOf give up and answer Fx.White, and PillBar draws
+        // NOTHING for White - its other callers use that to mean "no colour worth painting with". Measured
+        // live: a playing track with real art, end and position all correct, ring at 0.219, and no bar on the
+        // pill at all. For this widget the bar IS the content, so White falls back to a neutral light grey -
+        // deliberately not Fx.White itself, which is the sentinel that means "skip".
+        var accentTarget = _accent == Fx.White ? NeutralBar : _accent;
+        if (!_accentInit) { _accentShown = accentTarget; _accentInit = true; }
+        else _accentShown = LerpColor(_accentShown, accentTarget, dt, 0.30f);
+
+        if (prog >= 0f) _lastProg = prog;
+        _barIn = Ease(_barIn, prog >= 0f ? 1f : 0f, dt, 0.20f);
+        if (_barIn > 0.01f && _lastProg >= 0f)
+            Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f, alive: playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
@@ -1332,4 +1471,48 @@ internal sealed class MediaWidget : IWidget
 
     private static Color Mul(Color c, float a)
         => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);
+}
+
+// The four rules that decide when a seek is spoken and which timeline reports are believed. Pure and out here
+// for the same reason NotchVisibility is: from the outside every one of them fails as a *rendering* bug - a bar
+// that leaps forward at the start of a track and falls back, a seek that keeps re-landing for seconds after the
+// tap, a fill frozen mid-video, a pill with no bar at all - so the logic has to be testable without a player.
+internal static class MediaTiming
+{
+    internal const int BurstMs = 320;      // quiet required before a burst's final target is spoken
+    internal const int FreshMs = 1200;     // nothing sent this recently → not a burst, speak at once
+    internal const int RetryMs = 700;
+    internal const int GiveUpMs = 2500;
+    internal const int MaxTries = 2;
+    internal const int LeftoverMs = 2000;  // how long a track change tolerates the old track's timeline
+
+    internal enum SeekStep { Wait, Send, GiveUp }
+
+    internal static SeekStep NextSeekStep(int tries, double msSinceAsked, double msSinceSent)
+    {
+        // an isolated ask goes out immediately; only one landing on the heels of a send waits for the tapping
+        // to stop, which is the case the debounce exists for
+        if (tries == 0)
+            return msSinceSent < FreshMs && msSinceAsked < BurstMs ? SeekStep.Wait : SeekStep.Send;
+        // one retry covers a request the player swallowed while busy; past that, asking again is not a
+        // correction, it is another yank of the picture
+        if (tries >= MaxTries || msSinceAsked > GiveUpMs) return SeekStep.GiveUp;
+        return msSinceSent < RetryMs ? SeekStep.Wait : SeekStep.Send;
+    }
+
+    // for a moment after a track change the player still serves the OUTGOING track's timeline, recognisable by
+    // still carrying its duration. Time-boxed, so a playlist of equal-length tracks can't stall the bar forever.
+    internal static bool IsLeftover(TimeSpan incomingEnd, TimeSpan prevEnd, double msSinceTrack)
+        => prevEnd > TimeSpan.Zero && incomingEnd == prevEnd && msSinceTrack < LeftoverMs;
+
+    // a zeroed span is the app declining to answer, not news about a track already measured. A live stream
+    // reports zero from the very first update, never has a span to keep, and correctly gets no bar.
+    internal static bool IsBlank(TimeSpan inStart, TimeSpan inEnd, TimeSpan knownStart, TimeSpan knownEnd)
+        => inEnd <= inStart && knownEnd > knownStart;
+
+    // an identical reading while playing is the player repeating itself, not time standing still: re-stamping
+    // the clock against it restarts extrapolation every poll and freezes the bar. The report that confirms a
+    // seek is always stamped - that one has to restart the clock at the position actually landed on.
+    internal static bool ShouldRestamp(bool repeated, bool playing, bool confirming)
+        => !repeated || !playing || confirming;
 }
