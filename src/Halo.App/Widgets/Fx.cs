@@ -87,8 +87,13 @@ internal static class Fx
     // very soft radial wash of the accent, clipped to the pill shape
     // (flat top flush to the screen edge + rounded bottom — same as LayeredNotch.PillPath;
     // an all-corners clip leaves a dark crescent at the top corners)
+    // alpha is a float, and deliberately so: it only ever reaches GDI+ through Matrix33 below, which is
+    // float the whole way. Declaring it int quantised every caller AT THE CALL SITE - PillBar's breathing
+    // glows landed on (int)(16*0.5*lit) and (int)(13*0.5*lit), which is four levels and three, so a pulse
+    // meant to be a slow swell stepped visibly through a handful of brightnesses. Nothing about the drawing
+    // needed the integer; the cast was the banding.
     public static void Glow(Graphics g, int w, int h, float fade, float cx, float cy,
-        float rx, float ry, int alpha, Color accent)
+        float rx, float ry, float alpha, Color accent)
     {
         if (accent == White || fade <= 0.01f) return;
         using var clip = PillClip(w, h);
@@ -185,7 +190,7 @@ internal static class Fx
             var oldG = g.Clip;
             g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
             Glow(g, w, h, fade, fill * 0.45f, h * 0.44f, Math.Max(fill, h * 1.2f), h * 1.9f,
-                 (int)(16 * strength * lit), accent);
+                 16 * strength * lit, accent);
             g.Clip = oldG;
         }
 
@@ -258,7 +263,7 @@ internal static class Fx
             var oldG = g.Clip;
             g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
             Glow(g, w, h, fade, fill, h / 2f, h * 1.1f, h * 1.45f,
-                 (int)(13 * strength * lit), accent);
+                 13 * strength * lit, accent);
             g.Clip = oldG;
         }
     }

@@ -496,7 +496,10 @@ internal sealed class DownloadWidget : IWidget
         bool paused, float iconRight)
     {
         var bar = paused ? Dim : accent;
-        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);   // both glows now live inside PillBar
+        // breathing while it is actually moving, the same as the media pill: a download that is 40% done and
+        // one that is stalled at 40% are the same still picture, and the bar is the thing you glance at to
+        // tell them apart. A paused download holds still, which is the other half of the answer.
+        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f, alive: !paused);   // both glows live inside PillBar
 
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it
