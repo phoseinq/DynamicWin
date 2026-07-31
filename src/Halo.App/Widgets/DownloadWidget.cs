@@ -428,7 +428,8 @@ internal sealed class DownloadWidget : IWidget
         bool paused, float iconRight)
     {
         var bar = paused ? Dim : accent;
-        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f);
+
+        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f, alive: !paused);
 
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade);
