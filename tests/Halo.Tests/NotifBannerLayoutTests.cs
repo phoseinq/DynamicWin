@@ -3,7 +3,7 @@ using Halo.Widgets;
 namespace Halo.Tests;
 
 // The banner's text column is positioned for a two-line body. Halo's own alerts are the ones that carry
-// no body at all -- "Screenshot captured", "Bad internet :/" -- and for months they drew their eyebrow and
+// no body at all -- "Screenshot captured", "Bad internet" -- and for months they drew their eyebrow and
 // title at those same offsets, leaving the text visibly high against the icon beside it. Nothing here
 // checks pixels; it checks that the two blocks agree on a centre, which is the property that was wrong.
 public class NotifBannerLayoutTests

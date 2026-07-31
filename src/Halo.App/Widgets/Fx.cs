@@ -74,7 +74,8 @@ internal static class Fx
         if (accent == White || fade <= 0.01f) return;
         using var clip = PillClip(w, h);
         var old = g.Clip;
-        g.SetClip(clip);
+
+        g.SetClip(clip, CombineMode.Intersect);
         var oldInterp = g.InterpolationMode;
         g.InterpolationMode = InterpolationMode.HighQualityBilinear;
 
@@ -100,6 +101,10 @@ internal static class Fx
         if (accent == White || fade <= 0.01f || strength <= 0f) return;
         frac = Math.Clamp(frac, 0f, 1f);
 
+        RgbToHsv(accent, out float ah, out float asat, out float av);
+        if (av < 0.62f)
+            accent = HsvToRgb(ah, asat < 0.12f ? asat : Math.Max(asat, 0.42f), 0.62f);
+
         using var pp = PillPath(w, h, h / 2f, 0.5f);
 
         RgbToHsv(accent, out float th, out float ts, out float tv);
@@ -110,11 +115,20 @@ internal static class Fx
         if (frac <= 0.001f) return;
 
         float fill = w * frac;
-        var solid = Alpha(accent, fade * 0.52f * strength);
+
+        float breath = alive ? 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2400 / 2400f * MathF.Tau) : 0f;
+
+        float lit = alive ? 0.78f + 0.42f * breath : 1f;
+        var solid = Alpha(accent, fade * 0.52f * strength * lit);
 
         if (fill > 6f)
+        {
+            var oldG = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
             Glow(g, w, h, fade, fill * 0.45f, h * 0.44f, Math.Max(fill, h * 1.2f), h * 1.9f,
-                 (int)(16 * strength), accent);
+                 (int)(16 * strength * lit), accent);
+            g.Clip = oldG;
+        }
 
         if (frac >= 0.999f) { using (var fb = new SolidBrush(solid)) g.FillPath(fb, pp); }
         else
@@ -155,44 +169,24 @@ internal static class Fx
 
         if (fill > 8f && strength >= 0.5f)
         {
-            float lipW = 26f, x0 = Math.Max(0f, fill - lipW);
-            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, (fill - x0) + 1f, h),
-                Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), LinearGradientMode.Horizontal);
-            var lipBlend = new ColorBlend(3)
-            {
-                Positions = new[] { 0f, 0.94f, 1f },
-                Colors = new[] { Color.FromArgb(0, accent), Alpha(accent, fade * 0.5f * strength), Color.FromArgb(0, accent) },
-            };
-            lip.InterpolationColors = lipBlend;
+            float lipW = Math.Min(38f, fill), x0 = fill - lipW;
+            using var lip = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, lipW + 1f, h),
+                Color.FromArgb(0, accent), Alpha(accent, fade * 0.3f * strength * lit),
+                LinearGradientMode.Horizontal);
             var old = g.Clip;
-            g.SetClip(new RectangleF(x0, 0, fill - x0, h), CombineMode.Intersect);
+            g.SetClip(new RectangleF(x0, 0, lipW, h), CombineMode.Intersect);
             g.FillPath(lip, pp);
             g.Clip = old;
         }
 
-        if (alive && fill > 3f)
-        {
-            float breath = 0.5f - 0.5f * MathF.Cos(Environment.TickCount64 % 2600 / 2600f * MathF.Tau);
-            float band = Math.Min(18f, fill);
-            float x0 = fill - band;
-            var lit = Alpha(accent, fade * (0.10f + 0.26f * breath));
-            using var pulse = new LinearGradientBrush(new RectangleF(x0 - 0.5f, 0, band + 1f, h),
-                Color.FromArgb(0, accent), lit, LinearGradientMode.Horizontal);
-            pulse.InterpolationColors = new ColorBlend(3)
-            {
-                Positions = new[] { 0f, 0.82f, 1f },
-                Colors = new[] { Color.FromArgb(0, accent), lit, Color.FromArgb(0, accent) },
-            };
-            var oldP = g.Clip;
-            g.SetClip(new RectangleF(x0, 0, band, h), CombineMode.Intersect);
-            g.FillPath(pulse, pp);
-            g.Clip = oldP;
-        }
-
         if (fill > 6f)
-            Glow(g, w, h, fade, fill, h / 2f, h * 1.0f, h * 1.45f,
-                 (int)(26 * strength * (alive ? 0.85f + 0.4f * (0.5f - 0.5f * MathF.Cos(
-                     Environment.TickCount64 % 2600 / 2600f * MathF.Tau)) : 1f)), accent);
+        {
+            var oldG = g.Clip;
+            g.SetClip(new RectangleF(0, 0, fill, h), CombineMode.Intersect);
+            Glow(g, w, h, fade, fill, h / 2f, h * 1.1f, h * 1.45f,
+                 (int)(13 * strength * lit), accent);
+            g.Clip = oldG;
+        }
     }
 
     public static float CenterLift(Font f)

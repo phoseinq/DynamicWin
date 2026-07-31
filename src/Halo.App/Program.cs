@@ -50,7 +50,8 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
 
-        if (args.Length >= 2 && args[0] == "--render-bar") { RenderBar(args[1]); return; }
+        if (args.Length >= 2 && args[0] == "--render-bar")
+        { RenderBar(args[1], args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null); return; }
 
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
 
@@ -160,6 +161,16 @@ internal static class Program
                     string.Join(" ", Array.ConvertAll(b, v => v.ToString("0.00"))));
                 System.Threading.Thread.Sleep(300);
             }
+            return;
+        }
+
+        if (args.Length >= 1 && args[0] == "--probe-timeline")
+        {
+
+            var probe = new System.Threading.Thread(() => ProbeTimeline());
+            probe.SetApartmentState(System.Threading.ApartmentState.MTA);
+            probe.Start();
+            probe.Join();
             return;
         }
 
@@ -468,10 +479,15 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
-    private static void RenderBar(string outPath)
+    private static void RenderBar(string outPath, string? accentHex, string? fracStr)
     {
         const int W = 220, H = 40, Zoom = 2, Rows = 7, Pad = 8;
         var accent = System.Drawing.Color.FromArgb(228, 168, 64);
+        float frac = fracStr != null
+            ? float.Parse(fracStr, System.Globalization.CultureInfo.InvariantCulture) : 0.42f;
+        if (accentHex != null)
+            accent = System.Drawing.Color.FromArgb(
+                (int)(uint.Parse(accentHex, System.Globalization.NumberStyles.HexNumber) | 0xFF000000));
         using var bmp = new System.Drawing.Bitmap(W * Zoom + Pad * 2 + 150,
             (H * Zoom + Pad) * Rows + Pad, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var g = System.Drawing.Graphics.FromImage(bmp);
@@ -491,7 +507,8 @@ internal static class Program
                 using (var back = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 12, 12, 14)))
                 using (var pp = Halo.Widgets.Fx.PillPath(W, H, H / 2f))
                     pg.FillPath(back, pp);
-                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, 0.42f, accent, 0.34f, alive: !paused);
+
+                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, frac, accent, 0.5f, alive: !paused);
             }
             g.DrawImage(pill, new System.Drawing.Rectangle(150, Pad + r * (H * Zoom + Pad), W * Zoom, H * Zoom));
             if (!paused) System.Threading.Thread.Sleep(430);
@@ -533,6 +550,24 @@ internal static class Program
             var now = s.GetTimelineProperties();
             Console.WriteLine($"  +{i * 400,4}ms pos={now.Position}  updated={now.LastUpdatedTime:HH:mm:ss.fff}"
                 + $"  widget.RingProgress={widget.RingProgress:0.0000}");
+        }
+    }
+
+    private static void ProbeTimeline()
+    {
+        var sessions = new Halo.Widgets.MediaSessions();
+
+        for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
+        var slots = new Halo.Widgets.MediaWidget[Halo.Widgets.MediaSessions.MaxSlots];
+        for (int s = 0; s < slots.Length; s++) slots[s] = new Halo.Widgets.MediaWidget(sessions, s);
+        for (int i = 0; i < 30; i++)
+        {
+            for (int s = 0; s < slots.Length; s++)
+            {
+                if (sessions.Session(s) is null) continue;
+                Console.WriteLine($"{i * 0.5,5:0.0}s [{s}] {slots[s].ProbeLine() ?? "session hooked, no title yet"}");
+            }
+            System.Threading.Thread.Sleep(500);
         }
     }
 

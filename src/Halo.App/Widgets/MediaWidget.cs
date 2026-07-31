@@ -35,6 +35,8 @@ internal sealed class MediaWidget : IWidget
     private TimeSpan? _seekPending;
     private DateTimeOffset _seekSentAt, _seekAskedAt;
     private TimeSpan _reported;
+    private TimeSpan _prevEnd;
+    private long _trackAt;
     private int _seekTries;
     private bool _seekBusy;
     private DateTime _posAt;
@@ -156,12 +158,21 @@ internal sealed class MediaWidget : IWidget
             {
                 if (!ReferenceEquals(_session, s)) return;
                 trackChanged = key != _trackKey;
+                bool firstTrack = _trackKey == null;
                 _title = title.Length > 0 ? title : (artist.Length > 0 ? artist : null);
                 _artist = artist;
                 _trackKey = key;
                 if (thumb != null || trackChanged) { _thumb = thumb; _thumbWide = wide; }
 
-                if (trackChanged) { _pos = TimeSpan.Zero; _end = TimeSpan.Zero; _posAt = DateTime.UtcNow; _trackEpoch++; }
+                if (trackChanged && !firstTrack)
+                {
+                    _prevEnd = _end;
+                    _trackAt = Environment.TickCount64;
+                    _pos = _end = _start = TimeSpan.Zero;
+                    _minSeek = _maxSeek = TimeSpan.Zero;
+                    _posAt = DateTime.UtcNow;
+                }
+                if (trackChanged) _trackEpoch++;
                 _version++;
             }
             if (trackChanged) DebugLog(title);
@@ -215,22 +226,35 @@ internal sealed class MediaWidget : IWidget
             {
                 if (!ReferenceEquals(_session, s)) return;
 
+                if (_prevEnd > TimeSpan.Zero)
+                {
+                    if (MediaTiming.IsLeftover(t.EndTime, _prevEnd, Environment.TickCount64 - _trackAt)) return;
+                    _prevEnd = TimeSpan.Zero;
+                }
+
+                if (MediaTiming.IsBlank(t.StartTime, t.EndTime, _start, _end)) return;
                 _start = t.StartTime;
                 _minSeek = t.MinSeekTime;
                 _maxSeek = t.MaxSeekTime;
                 _end = t.EndTime;
 
+                bool repeated = t.Position == _reported;
                 _reported = t.Position;
 
                 bool stale = _seekPending is { } want
                     && (t.Position - want).Duration() > TimeSpan.FromSeconds(1.5);
+                bool confirming = _seekPending is not null;
                 if (!stale)
                 {
                     _seekPending = null;
-                    bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
-                    _pos = t.Position;
-                    _posAt = DateTime.UtcNow;
-                    if (moved) _version++;
+
+                    if (MediaTiming.ShouldRestamp(repeated, _playing, confirming))
+                    {
+                        bool moved = (t.Position - _pos).Duration() > TimeSpan.FromMilliseconds(250);
+                        _pos = t.Position;
+                        _posAt = DateTime.UtcNow;
+                        if (moved) _version++;
+                    }
                 }
             }
         }
@@ -330,14 +354,10 @@ internal sealed class MediaWidget : IWidget
         }
 
         var now = DateTimeOffset.UtcNow;
-        if (tries == 0)
+        switch (MediaTiming.NextSeekStep(tries, (now - asked).TotalMilliseconds, (now - sent).TotalMilliseconds))
         {
-            if (now - asked < TimeSpan.FromMilliseconds(320)) return;
-        }
-        else
-        {
-            if (tries >= 7) { lock (_lock) _seekPending = null; return; }
-            if (now - sent < TimeSpan.FromMilliseconds(500 + 300 * Math.Min(tries, 4))) return;
+            case MediaTiming.SeekStep.Wait: return;
+            case MediaTiming.SeekStep.GiveUp: lock (_lock) _seekPending = null; return;
         }
 
         lock (_lock) { _seekSentAt = now; _seekTries = tries + 1; _seekBusy = true; }
@@ -353,6 +373,22 @@ internal sealed class MediaWidget : IWidget
 
     internal void SeekByForProbe(int secs) => SeekBy(secs);
     internal TimeSpan PositionForProbe { get { lock (_lock) return _pos; } }
+
+    internal string? ProbeLine()
+    {
+        PollTimeline();
+        lock (_lock)
+        {
+            if (_title == null) return null;
+            static string F(TimeSpan t) => t == TimeSpan.Zero ? "0" : t.ToString(@"h\:mm\:ss");
+            var t = _title.Length > 22 ? _title[..22] : _title;
+
+            return $"{t,-22} play={(_playing ? 1 : 0)} end={F(_end),-7} pos={F(_pos),-7} " +
+                   $"rep={F(_reported),-7} prevEnd={F(_prevEnd),-7} seek={(_seekPending is { } p ? F(p) : "-"),-7} " +
+                   $"ring={RingProgress:0.000} accent={(_accent == Fx.White ? "WHITE (no bar!)" : _accent.ToString())} " +
+                   $"art={(_thumb == null ? "none" : "yes")}";
+        }
+    }
 
     private void SetVol(float f) { _meter.SetVolume(f); Bump(); }
     private void Mute() { _meter.ToggleMute(); Bump(); }
@@ -963,6 +999,50 @@ internal sealed class MediaWidget : IWidget
         }
     }
 
+    private long _pillTick;
+    private float PillDt()
+    {
+        long now = Environment.TickCount64;
+        float dt = _pillTick == 0 ? 1f / 60f : Math.Clamp((now - _pillTick) / 1000f, 1f / 240f, 0.1f);
+        _pillTick = now;
+        return dt;
+    }
+
+    private static readonly Color NeutralBar = Color.FromArgb(255, 222, 226, 232);
+
+    private Color _accentShown = Fx.White;
+    private bool _accentInit;
+
+    private float _barIn;
+    private float _lastProg = -1f;
+
+    private static Color LerpColor(Color from, Color to, float dt, float tau)
+    {
+        float k = 1f - MathF.Exp(-dt / tau);
+        return Color.FromArgb(
+            (int)MathF.Round(from.A + (to.A - from.A) * k),
+            (int)MathF.Round(from.R + (to.R - from.R) * k),
+            (int)MathF.Round(from.G + (to.G - from.G) * k),
+            (int)MathF.Round(from.B + (to.B - from.B) * k));
+    }
+
+    private float _pillFrac = -1f;
+    private int _pillEpoch = -1;
+    private float PillFrac(float frac, float dt)
+    {
+        if (frac < 0f) { _pillFrac = -1f; return frac; }
+        int epoch; lock (_lock) epoch = _trackEpoch;
+
+        if (epoch != _pillEpoch || _pillFrac < 0f || Math.Abs(frac - _pillFrac) > 0.08f)
+        {
+            _pillEpoch = epoch;
+            return _pillFrac = frac;
+        }
+        _pillFrac = Ease(_pillFrac, frac, dt, 0.14f);
+        if (Math.Abs(frac - _pillFrac) < 0.0004f) _pillFrac = frac;
+        return _pillFrac;
+    }
+
     public void DrawCollapsed(Graphics g, int w, int h, float fade)
     {
         PollTimeline();
@@ -971,9 +1051,17 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
-        float prog = RingProgress;
+        float dt = PillDt();
+        float prog = PillFrac(RingProgress, dt);
 
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, _accent, 0.34f, alive: playing);
+        var accentTarget = _accent == Fx.White ? NeutralBar : _accent;
+        if (!_accentInit) { _accentShown = accentTarget; _accentInit = true; }
+        else _accentShown = LerpColor(_accentShown, accentTarget, dt, 0.30f);
+
+        if (prog >= 0f) _lastProg = prog;
+        _barIn = Ease(_barIn, prog >= 0f ? 1f : 0f, dt, 0.20f);
+        if (_barIn > 0.01f && _lastProg >= 0f)
+            Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f, alive: playing);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
@@ -1158,4 +1246,35 @@ internal sealed class MediaWidget : IWidget
 
     private static Color Mul(Color c, float a)
         => Color.FromArgb((int)Math.Clamp(c.A * a, 0, 255), c.R, c.G, c.B);
+}
+
+internal static class MediaTiming
+{
+    internal const int BurstMs = 320;
+    internal const int FreshMs = 1200;
+    internal const int RetryMs = 700;
+    internal const int GiveUpMs = 2500;
+    internal const int MaxTries = 2;
+    internal const int LeftoverMs = 2000;
+
+    internal enum SeekStep { Wait, Send, GiveUp }
+
+    internal static SeekStep NextSeekStep(int tries, double msSinceAsked, double msSinceSent)
+    {
+
+        if (tries == 0)
+            return msSinceSent < FreshMs && msSinceAsked < BurstMs ? SeekStep.Wait : SeekStep.Send;
+
+        if (tries >= MaxTries || msSinceAsked > GiveUpMs) return SeekStep.GiveUp;
+        return msSinceSent < RetryMs ? SeekStep.Wait : SeekStep.Send;
+    }
+
+    internal static bool IsLeftover(TimeSpan incomingEnd, TimeSpan prevEnd, double msSinceTrack)
+        => prevEnd > TimeSpan.Zero && incomingEnd == prevEnd && msSinceTrack < LeftoverMs;
+
+    internal static bool IsBlank(TimeSpan inStart, TimeSpan inEnd, TimeSpan knownStart, TimeSpan knownEnd)
+        => inEnd <= inStart && knownEnd > knownStart;
+
+    internal static bool ShouldRestamp(bool repeated, bool playing, bool confirming)
+        => !repeated || !playing || confirming;
 }

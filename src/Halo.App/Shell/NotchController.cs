@@ -596,7 +596,7 @@ internal sealed class NotchController
         _netBadShown = true;
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
-            App = "Network", Title = "Bad internet :/", Kind = "net", Duration = 6, Icon = NetBadge(),
+            App = "Network", Title = "Bad internet", Kind = "net", Duration = 6, Icon = NetBadge(),
         });
     }
 
@@ -608,6 +608,7 @@ internal sealed class NotchController
         _dt = _lastFrameAt == 0 ? 0.008f : Math.Clamp((frameNow - _lastFrameAt) / 1000f, 0.001f, 0.05f);
         _lastFrameAt = frameNow;
         AdaptFrameRate();
+        EaseRings();
         CheckAlerts();
         var notifStart = _notif;
         var fg = Win32.GetForegroundWindow();
@@ -914,12 +915,31 @@ internal sealed class NotchController
         return false;
     }
 
+    private readonly Dictionary<int, Color> _ringShown = new();
+    private void EaseRings()
+    {
+        for (int i = 0; i < _widgets.Length; i++)
+        {
+            if (_widgets[i].Ring is not { } target) { _ringShown.Remove(i); continue; }
+            if (!_ringShown.TryGetValue(i, out var shown)) { _ringShown[i] = target; continue; }
+            float k = 1f - MathF.Exp(-_dt / 0.22f);
+            _ringShown[i] = Color.FromArgb(
+                (int)MathF.Round(shown.A + (target.A - shown.A) * k),
+                (int)MathF.Round(shown.R + (target.R - shown.R) * k),
+                (int)MathF.Round(shown.G + (target.G - shown.G) * k),
+                (int)MathF.Round(shown.B + (target.B - shown.B) * k));
+        }
+    }
+
+    private Color? RingOf(int i)
+        => _widgets[i].Ring is { } target ? (_ringShown.TryGetValue(i, out var c) ? c : target) : null;
+
     private Color? GroupRing(int[] gr)
     {
         Color? first = null;
         foreach (var i in gr)
         {
-            if (_widgets[i].Ring is not { } rc) continue;
+            if (RingOf(i) is not { } rc) continue;
             first ??= rc;
             if (rc.R != rc.G || rc.G != rc.B) return rc;
         }
@@ -1226,7 +1246,7 @@ internal sealed class NotchController
             RowProgress = groups.ConvertAll(gr => _widgets[gr[0]].RingProgress).ToArray(),
 
             SessRings = groups.ConvertAll(gr => gr.Length >= 2
-                ? gr.Select((i, j) => (Color?)(_widgets[i].Ring is { } rc ? Fx.Shade(rc, j) : null)).ToArray()
+                ? gr.Select((i, j) => (Color?)(RingOf(i) is { } rc ? Fx.Shade(rc, j) : null)).ToArray()
                 : Array.Empty<Color?>()).ToArray(),
             Open = EaseOutBack(Math.Clamp(_menu, 0f, 1f)),
             OpenRow = _row,
@@ -1702,7 +1722,7 @@ internal sealed class NotchController
             Title = Halo.Notifications.NotifItem.ScreenshotTitle,
             Preview = shot, Icon = ShotBadge(),
         },
-        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet :/", Icon = NetBadge() },
+        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet", Icon = NetBadge() },
         new Halo.Notifications.NotifItem
         {
             App = "System", Title = "High CPU usage — 92%", Body = "chrome.exe is using the most.",
