@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using Halo.Interop;
 using Halo.Shell;
@@ -485,8 +485,9 @@ internal static class Program
         // TWO banners: a body longer than the summary can hold, and a short one. The grabber bar belongs to
         // the first and must be absent from the second — it promises "drag me, there is more", and for every
         // short message it used to promise it falsely. One image is the only way to check that by eye.
-        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 24;
-        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H * 2 + pad * 3);
+        // A third, DETAIL-state banner follows the two summaries, so the canvas carries room for it.
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 24, detailRoom = 340;
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H * 2 + detailRoom + pad * 4);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
@@ -544,6 +545,28 @@ internal static class Program
                 Title = "سلام",
                 Body = "بزن بریم",
             }, 0f, false);
+
+            // Third: the DETAIL state on a mixed-direction body — a Persian sentence followed by a block of
+            // English names separated by "|". One paragraph direction for the whole body is what mangled
+            // this: inside an RTL paragraph GDI+ reorders each latin run as a unit, so the separators end up
+            // between the wrong pieces. The summary banners above cannot show it; only the wrapped view can.
+            var mixed = new Halo.Notifications.NotifItem
+            {
+                Icon = icon,
+                App = "ChatGPT",
+                Title = "\u0633\u0627\u062e\u062a \u067e\u0646\u0644 \u0645\u062f\u06cc\u0631\u06cc\u062a \u062f\u0633\u062a\u0631\u0633\u06cc Halo",
+                Body = "\u0627\u0648\u06a9\u06cc\u060c \u0622\u062e\u0631\u06cc\u0646 \u0627\u0646\u062a\u062e\u0627\u0628: \u0645\u0646\u0648 \u0633\u0645\u062a \u0686\u067e\u060c \u0645\u062d\u062a\u0648\u0627\u06cc \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0633\u0645\u062a \u0631\u0627\u0633\u062a. "
+                     + "Halo | Media | [ Enabled ] | General | Appearance | Playback | "
+                     + "Auto-show on track change | FEATURES | Include VLC | Show collapsed progress | "
+                     + "Downloads | File Tray | Bluetooth | Follow active player | Notifications | "
+                     + "Idle timeout 15 sec | Claude",
+            };
+            int dh = Math.Min(detailRoom, Halo.Widgets.NotifBanner.DetailHeight(mixed));
+            g.TranslateTransform(0, H + pad);
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, dh, 26, 245, glass: false);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            Halo.Widgets.NotifBanner.Draw(g, W, dh, 1f, mixed, 1f, true);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }

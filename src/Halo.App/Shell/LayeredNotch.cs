@@ -287,9 +287,59 @@ internal sealed class LayeredNotch
         }
 
         raw.Dispose();
+
+        // A capture that produced the SAME backdrop must not bump the version. NotchController.Frame
+        // reads a version change as dirty and calls Apply(), which redraws the whole layered surface
+        // supersampled — so over a window that is not moving this was 20-60 full redraws a second spent
+        // putting back a picture identical to the one already on screen, and that was most of what the
+        // pill cost while it just sat there. Only the redraw is skipped; the grab still happens on its
+        // own cadence, so the glass still tracks a video the moment it actually changes.
+        ulong hash = PlateHash(blurred);
+        if (hash == _bgHash && _bg != null)
+        {
+            if (_staleStreak < 1000) _staleStreak++;
+            blurred.Dispose();
+            GlassTrace(how + " same", (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0
+                / System.Diagnostics.Stopwatch.Frequency);
+            return;
+        }
+        _bgHash = hash;
+        _staleStreak = 0;
         lock (_bgLock) { var old = _bg; _bg = blurred; old?.Dispose(); }
         System.Threading.Interlocked.Increment(ref _captureVersion);
         GlassTrace(how, (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    // Coarse fingerprint of a blurred plate. Read through Marshal rather than copying the buffer: the
+    // whole point is to be cheaper than the redraw it prevents, and ~1.1k sampled pixels answer "did
+    // anything visible change" on an image that has already been through a 1/14 thumbnail. Written by
+    // the capture thread only, which CaptureFrom serialises with _capturing.
+    private ulong _bgHash;
+    private int _staleStreak;
+
+    // How many captures in a row came back byte-identical. The hash below stops an unchanged plate
+    // forcing a redraw, but the grab itself is the larger cost — on the PrintWindow path it is ~30ms of
+    // waiting on the other app — so the caller uses this to stop grabbing so often when nothing behind
+    // the pill is moving. Any real change resets it, which is what keeps the glass live on a video.
+    internal int StaleStreak => _staleStreak;
+
+    private static ulong PlateHash(Bitmap b)
+    {
+        var data = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly,
+                              PixelFormat.Format32bppPArgb);
+        try
+        {
+            ulong h = 14695981039346656037UL;                       // FNV-1a
+            int stepX = Math.Max(1, b.Width / 48), stepY = Math.Max(1, b.Height / 24);
+            for (int y = 0; y < b.Height; y += stepY)
+                for (int x = 0; x < b.Width; x += stepX)
+                {
+                    int px = System.Runtime.InteropServices.Marshal.ReadInt32(data.Scan0, y * data.Stride + x * 4);
+                    h = (h ^ (uint)px) * 1099511628211UL;
+                }
+            return h;
+        }
+        finally { b.UnlockBits(data); }
     }
 
     private static Bitmap? GrabScreen(int x, int y)

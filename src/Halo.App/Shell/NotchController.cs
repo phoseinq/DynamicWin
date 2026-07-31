@@ -130,12 +130,16 @@ internal sealed class NotchController
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f; // open snappier than close. slowed after
     // the _dt fix made these hit their real wall-clock duration (old timer cadence ran them ~2x slower).
     private const float HoldSeconds = 0.75f; // press-and-hold on the pill this long → drag-to-move engages
-    // Glass capture cadence, in frames between captures. These used to be 2 and 12 — at 60fps that is a
-    // fresh backdrop every 33ms open and every 200ms collapsed, and 200ms is long enough to watch the glass
-    // trail behind a playing video. The old numbers were sized for a capture that cost ~57ms on
-    // GPU-composited content; reading the screen DC and expanding the blur only once brought that under
-    // 4ms, so the budget now allows every frame open and ~20fps collapsed. _heavy still multiplies by 3.
-    private const int CaptureFast = 1, CaptureSlow = 2;
+    // Glass capture cadence, in MILLISECONDS between captures — not in frames, which is what it used to
+    // be. As a frame count it rode whatever tier AdaptFrameRate had picked: "every 2 frames" is 20fps at
+    // the 40fps this was sized for, but 60fps at the idle 120fps tier, so the collapsed pill re-grabbed
+    // and re-blurred the backdrop three times more often than the budget above ever intended. Measured
+    // with HALO_GLASS_DEBUG=1: 30.9 captures/s at 6.19ms each = 19.1% of one core, for a pill that was
+    // only sitting there. In milliseconds the rate means the same thing at every tier.
+    //
+    // These are the glass BACKDROP's refresh rate and nothing else. Animation still gets its frames from
+    // AdaptFrameRate and IWidget.Animating, so nothing on screen moves less smoothly for this.
+    private const int CaptureOpenMs = 16, CaptureCollapsedMs = 50;   // 60fps open, 20fps collapsed
     private const int EmptyCatchAlpha = 1; // empty pill fades to this alpha: invisible, but ≥1 so it still catches OLE file drags
 
     private readonly LayeredNotch _notch;
@@ -217,7 +221,7 @@ internal sealed class NotchController
     private IntPtr _langFg;     // window that layout belonged to (only notify on a same-window switch)
     private long _langFgSince;  // when _langFg became foreground — swallow the OS's lazy per-app layout apply
     private IntPtr _behind = IntPtr.Zero;
-    private int _captureTick;
+    private long _lastCaptureAt;   // wall clock of the last glass grab; 0 = grab on the next frame
     private int _animTick;
     private int _lastCaptureVer;
     // edge-triggered system alerts (throttled to ~1/s in CheckAlerts); each flag fires once per episode
@@ -498,8 +502,11 @@ internal sealed class NotchController
         CheckBattery();
         CheckLimit("Claude", ClaudeCode.Limits.FiveHour, ClaudeCode.Limits.FiveHourReset, "5-hour");
         CheckLimit("Claude", ClaudeCode.Limits.Week, ClaudeCode.Limits.WeekReset, "weekly");
-        CheckLimit("Codex", CodexLimits.FiveHour, CodexLimits.FiveHourReset, "primary");
-        CheckLimit("Codex", CodexLimits.Week, CodexLimits.WeekReset, "weekly");
+        // "weekly" was a guess about the second bucket's length that nothing here ever verified; the
+        // rollout only tells us the order. Positional names cannot be wrong about a window Codex may
+        // not even have.
+        CheckLimit("Codex", CodexLimits.PrimaryFrac, CodexLimits.PrimaryReset, "primary");
+        CheckLimit("Codex", CodexLimits.SecondaryFrac, CodexLimits.SecondaryReset, "secondary");
         CheckInternet();
         CheckContext();
         CheckHourly();
@@ -947,14 +954,21 @@ internal sealed class NotchController
             bool desk = _notch.ProbeBehind(out _behind);
             deskChanged = desk != _lastDesktop;
             _lastDesktop = desk;
-            if (deskChanged && !desk) _captureTick = CaptureSlow; // enter app → capture glass this tick
+            if (deskChanged && !desk) _lastCaptureAt = 0; // enter app → capture glass this tick
         }
 
-        int captureEvery = _progress > 0.5f ? CaptureFast : CaptureSlow;
-        if (_heavy) captureEvery *= 3; // heavy load → refresh the glass far less often
-        if (!_lastDesktop && _behind != IntPtr.Zero && ++_captureTick >= captureEvery)
+        int captureEveryMs = _progress > 0.5f ? CaptureOpenMs : CaptureCollapsedMs;
+        if (_heavy) captureEveryMs *= 3; // heavy load → refresh the glass far less often
+        // A backdrop that keeps coming back byte-identical is not worth grabbing at full rate: the hash in
+        // DoCapture already stops it forcing a redraw, but the GRAB is the larger cost — on the PrintWindow
+        // path (which is what a capturable pill is forced onto) it is ~30ms of waiting on the other app.
+        // Measured: 597 of 600 consecutive captures identical while the pill just sat there. Collapsed
+        // only, because with the panel open the user is looking at it; and the streak resets on the first
+        // real change, so the glass snaps straight back to full rate on a video.
+        if (_progress <= 0.5f) captureEveryMs *= Math.Clamp(1 + _notch.StaleStreak / 6, 1, 4);
+        if (!_lastDesktop && _behind != IntPtr.Zero && frameNow - _lastCaptureAt >= captureEveryMs)
         {
-            _captureTick = 0;
+            _lastCaptureAt = frameNow;
             _notch.CaptureFrom(_behind); // async; re-render happens when CaptureVersion bumps
         }
         int cv = _notch.CaptureVersion;

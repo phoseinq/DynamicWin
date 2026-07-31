@@ -1,5 +1,83 @@
 # Halo — progress
 
+## 2026-08-01: pill text clipping, Codex limit naming, banner bidi (worktree `.worktrees/claude-master`)
+
+Done in an isolated worktree on `master`, because a Codex agent works the primary checkout and its
+branch switches twice discarded uncommitted edits mid-task. **Release 0/0, 433 tests pass (was 408).
+Running from the worktree's `bin/Release`; not committed, not pushed.**
+
+**Collapsed pill clipped long mood lines.** Three faults at once in `DrawCollapsed`, mirrored in both
+agent widgets: the clip opened to the pill's full width instead of the gap the words were measured
+against, so a long line ran under the timer and off the edge; `zoneW = avail + 16f` paid the entrance
+shift at every `e`, so a settled pill overhung its own budget by 16px (now tied to `1f - e`, which is
+what earns it); and there was no `Trimming`, so an over-long line was sliced through a glyph rather
+than ellipsised. "desk needs clearing" — 19 chars, the exact case `Moods.cs:43` already described.
+
+**Codex claimed a 5-hour window it does not have.** `CodexLimits.FiveHour`/`Week` were `Primary`/
+`Secondary` renamed — nothing ever checked `WindowMinutes`, so whatever the rollout reported first was
+called "the 5-hour limit". Now `PrimaryFrac`/`SecondaryFrac`/`PrimaryReset`/`SecondaryReset`, positional
+names for a positional projection, and the alert's "weekly" label became "secondary". `LimitCaption`
+knew only 300 and 10080 and called everything else "plan", which is how two buckets collided on one
+caption; it now derives the name from the real duration (13 tests).
+
+**Notification banner mangled mixed-direction text.** `IsRtl` was "any Hebrew..Arabic char anywhere",
+so one Persian word flipped a whole English message right-to-left and GDI+ bidi reordered every latin
+run as a block — the `|` separators landed between the wrong pieces. Now first-strong (UAX #9 P2/P3),
+and the detail view draws its body **line by line, each with its own direction** rather than one
+paragraph direction for the lot (12 tests). Verified by extending `--render-notif` with a third,
+detail-state banner carrying the reported content: the English lines now read in order; the one line
+that genuinely holds both scripts still leans on bidi, which is correct.
+
+**Glass capture was most of Halo's idle CPU.** Three compounding faults, all in the capture path:
+
+1. *Cadence was a frame count.* `CaptureFast/CaptureSlow` counted ticks, so the backdrop refresh rate
+   rode whatever tier `AdaptFrameRate` picked — "every 2 frames" is 20fps at the 40fps it was sized for
+   but 60fps at the idle 120fps tier. Now `CaptureOpenMs`/`CaptureCollapsedMs` in milliseconds, so the
+   rate means the same thing at every tier.
+2. *Every capture forced a full redraw.* Any `CaptureVersion` bump makes `Frame()` call `Apply()`, which
+   redraws the whole layered surface supersampled — even when the new plate was identical. `DoCapture`
+   now fingerprints the blurred plate (coarse FNV-1a grid, ~1.1k samples) and only bumps on a real
+   change. Measured: **597 of 600 consecutive captures were identical** while the pill just sat there.
+3. *A static backdrop was still being grabbed at full rate.* The grab is the larger cost — on the
+   PrintWindow path ~30ms of waiting on the other app. `LayeredNotch.StaleStreak` counts identical
+   plates and the collapsed cadence backs off up to 4x, resetting to full rate on the first real change.
+
+Nothing throttles animation: frames still come from `AdaptFrameRate` and `IWidget.Animating`, and the
+back-off is collapsed-only. Measured over 30s idle, same method both sides:
+
+| `capturable` | before | after |
+|---|---|---|
+| 1 (PrintWindow path) | 49.8% of one core | **24.2%** |
+| 0 (screen fast path) | 20.9% of one core | **12.3%** |
+
+Trap worth remembering: `capturable` (Ctrl+click the pushpin) *must* skip the screen fast path or the
+pill photographs its own glass, so it forces PrintWindow at ~30-43ms a grab. A measurement that does not
+pin this setting is not comparable — one run here was invalidated by exactly that.
+
+**Not done:** the management-panel buttons for these knobs. `SettingsWindow.cs` only exists on
+`codex/management-panel-foundation`; the constants above are the values those controls would drive.
+
+**Hook payloads were decoded with the console's OEM code page.** `Halo.Hooks.ReadInput` used
+`Console.In.ReadToEnd()`, but the hook payload is UTF-8 JSON, so every non-ASCII character arrived
+mangled — a Persian "د" is `D8 AF`, which CP437 renders as `╪»`. That reached the pill through `cwd`
+and `lastPrompt`, so a Persian prompt (and the repo's own `...\دسکتاپ\...` path) displayed as
+box-drawing garbage. Now reads the raw stdin stream through `UTF8Encoding`, which bypasses the console
+code page whatever the host set it to. Verified end to end: a `prompt` payload carrying U+0633 U+0644
+U+0627 U+0645 comes back out of the status file as exactly those codepoints.
+
+Note these two fields only refresh on their own hooks — `lastPrompt` on `prompt`, `cwd` on
+`session-start` — so already-stored mangled values persist until the next one fires, which reads as the
+fix having failed when it has not.
+
+**Deploy trap, learned the hard way here.** `%LOCALAPPDATA%\Programs\Halo\` holds a **self-contained**
+publish. Copying the four `Halo.Hooks.*` files from a plain `dotnet build` output puts a
+framework-dependent build there, and it cannot start: "No frameworks were found", every hook silently
+dead and the pill frozen on stale status. Tell them apart by `Halo.Hooks.deps.json` — 27309B
+self-contained against 422B framework-dependent. The quick deploy must come from
+`dotnet publish -r win-x64 --self-contained`, not from `bin/Release`.
+
+**Convention added:** source files stay ASCII, no Persian in code — see the invariants in `CLAUDE.md`.
+
 ## 2026-08-01 (later): 3.1.7 - the updater removed, and a privacy policy that had gone false
 
 Prompted by preparing for a Microsoft Store submission ("so Microsoft does not object").

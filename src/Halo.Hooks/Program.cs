@@ -193,7 +193,14 @@ internal static class Program
     {
         try
         {
-            var text = Console.In.ReadToEnd();
+            // Console.In decodes with the console's OEM code page, and the hook payload is UTF-8 JSON, so
+            // every non-ASCII character arrived mangled: a Persian "د" is D8 AF, and CP437 renders those
+            // two bytes as "╪»". That reached the pill through cwd and lastPrompt — a Persian prompt or a
+            // path like ...\دسکتاپ\... showed as box-drawing garbage. Read the raw stream instead; this
+            // bypasses the console code page entirely and cannot be undone by whatever the host set it to.
+            using var stdin = Console.OpenStandardInput();
+            using var reader = new System.IO.StreamReader(stdin, new System.Text.UTF8Encoding(false));
+            var text = reader.ReadToEnd();
             if (string.IsNullOrWhiteSpace(text)) return null;
             return JsonNode.Parse(text) as JsonObject;
         }

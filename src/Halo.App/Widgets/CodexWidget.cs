@@ -74,9 +74,10 @@ internal sealed class CodexWidget : IWidget
     public Color? Ring => Current is { } st ? RingColor(st) : null;
 
     // same as the Claude twin: colour is what it is doing, fill is how much of the window is spent.
-    // UsageFrac already prefers the 5-hour window and stands in the weekly one when it is missing.
+    // UsageFrac prefers whichever window the rollout reported first and stands in the other when it is
+    // missing. Deliberately not named after a duration: Codex plans do not all carry a 5-hour window.
     public float RingProgress
-        => Current is null || (CodexLimits.FiveHour < 0 && CodexLimits.Week < 0) ? -1f : UsageFrac();
+        => Current is null || (CodexLimits.PrimaryFrac < 0 && CodexLimits.SecondaryFrac < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
     public bool IsDesktop => _surface == CodexSurface.Desktop;
     public AgentNotice AgentNotice => Current is { } status
@@ -225,12 +226,21 @@ internal sealed class CodexWidget : IWidget
             Alignment = centred ? StringAlignment.Center : StringAlignment.Near,
             LineAlignment = StringAlignment.Center,
             FormatFlags = StringFormatFlags.NoWrap,
+            // a line that still will not fit at MinVerbPx ends in an ellipsis instead of being sliced
+            // through the middle of a glyph at the pill's edge, which is how "desk needs clearing" read
+            Trimming = StringTrimming.EllipsisCharacter,
         };
+        // right edge of the words: exactly the gap they were measured against. avail already excludes the
+        // timer, so this is what stops a long line running under the clock and off the end of the pill.
+        float originX = textX - 16f * (1f - e);   // the entrance: words slide out from behind the icon
+        float rightEdge = textX + avail;
         var clip = g.Clip;
-        g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h)); // text is born from behind the icon
-        float zoneW = centred ? avail - 34f : avail + 16f; // centred moods lean toward the icon
+        g.SetClip(new RectangleF(x + sz + 2, 0, rightEdge - (x + sz + 2), h)); // text is born behind the icon
+        // the old width was a flat avail + 16, where the 16 pays for that entrance shift — but it was paid
+        // at every e, so a settled pill overhung its own budget by 16px. Tie it to the shift that earns it.
+        float zoneW = (centred ? rightEdge - 34f : rightEdge) - originX; // centred moods lean toward the icon
         // lift comes from the font metrics (Fx.CenterLift), not a fixed pixel: px shrinks to fit
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
+        g.DrawString(verb, f, b, new RectangleF(originX, -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0) // timer zone, right-aligned and dimmer so the verb stays the focus
@@ -573,12 +583,24 @@ internal sealed class CodexWidget : IWidget
     }
 
     // Short captions, because the key column is 90px wide and "5-hour limit" does not fit beside its
-    // figure. The window length is the honest name for it; "plan" covers whatever else a plan reports.
-    private static string LimitCaption(CodexLimit limit) => limit.WindowMinutes switch
+    // figure. The window length is the honest name for it.
+    //
+    // The old table knew exactly three answers and called everything else "plan", so a plan whose
+    // buckets are neither 300 nor 10080 minutes long got two rows captioned "plan" and no way to tell
+    // them apart. Deriving the name from the duration means every window can say what it actually is,
+    // and two rows only ever share a caption when they genuinely are the same length — which is the
+    // truth, and the reset line beneath them still separates the two.
+    internal static string LimitCaption(CodexLimit limit) => LimitCaption(limit.WindowMinutes);
+
+    internal static string LimitCaption(int windowMinutes) => windowMinutes switch
     {
-        300 => "5-hour",
-        10_080 => "weekly",
-        _ => "plan",
+        <= 0 => "plan",                                    // nothing reported: do not invent a duration
+        10_080 => "weekly",                                // the one length worth a word instead of a number
+        < 60 => $"{windowMinutes}-min",
+        < 1440 when windowMinutes % 60 == 0 => $"{windowMinutes / 60}-hour",
+        < 1440 => $"{windowMinutes / 60}h{windowMinutes % 60}m",
+        _ when windowMinutes % 1440 == 0 => $"{windowMinutes / 1440}-day",
+        _ => $"{windowMinutes / 1440}d{windowMinutes % 1440 / 60}h",
     };
 
     // One element doing two jobs, in one slot so the title never shifts: while a prompt can be
@@ -828,10 +850,11 @@ internal sealed class CodexWidget : IWidget
 
     // ring mirrors the CLI spinner's colours, except its normal orange → green (orange = icon colour,
     // it would vanish): green = working, yellow = deep thinking / needs input, red = error, white = idle
-    // primary (5-hour) window first, secondary (weekly) as the stand-in; 0 draws nothing rather than
-    // implying an empty budget
+    // the window the rollout reported first, with the second as the stand-in; 0 draws nothing rather
+    // than implying an empty budget. Which durations those two are is the plan's business, not ours.
     private static float UsageFrac()
-        => CodexLimits.FiveHour >= 0 ? CodexLimits.FiveHour : CodexLimits.Week >= 0 ? CodexLimits.Week : 0f;
+        => CodexLimits.PrimaryFrac >= 0 ? CodexLimits.PrimaryFrac
+         : CodexLimits.SecondaryFrac >= 0 ? CodexLimits.SecondaryFrac : 0f;
 
     // the twin of the Claude ring: the states whose colour is the message stay exactly as they are, and
     // everything else rides the situation (see Fx.MoodRing)
@@ -890,11 +913,11 @@ internal sealed class CodexWidget : IWidget
 
     // Codex sits at its "limit reached" prompt still flagged "working" — swap mood + show when
     // it comes back instead of an ever-growing turn timer (same treatment as the CC widget)
-    private static bool LimitHit => CodexLimits.FiveHour >= 0.99f || CodexLimits.Week >= 0.99f;
+    private static bool LimitHit => CodexLimits.PrimaryFrac >= 0.99f || CodexLimits.SecondaryFrac >= 0.99f;
 
     private static string LimitReset()
     {
-        var r = ResetIn(CodexLimits.FiveHour >= 0.99f ? CodexLimits.FiveHourReset : CodexLimits.WeekReset);
+        var r = ResetIn(CodexLimits.PrimaryFrac >= 0.99f ? CodexLimits.PrimaryReset : CodexLimits.SecondaryReset);
         return r.Length > 0 ? "back in " + r : "";
     }
 
@@ -903,7 +926,7 @@ internal sealed class CodexWidget : IWidget
         CodexNetMon.NetDown ? Moods.Line("offline")
         : CodexNetMon.ApiDown ? Moods.Line("apiDown")
         : JustCompacted(st) ? Moods.Line("compacted")
-        : CodexLimits.FiveHour >= 0.95f ? Moods.Line("outOfCredit")
+        : CodexLimits.PrimaryFrac >= 0.95f ? Moods.Line("outOfCredit")
         : Moods.Line("idle", ctx);
 
     private static bool JustCompacted(CodexSnapshot? st) =>

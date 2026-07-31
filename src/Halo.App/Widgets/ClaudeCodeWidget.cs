@@ -211,12 +211,21 @@ internal sealed class ClaudeCodeWidget : IWidget
             Alignment = centred ? StringAlignment.Center : StringAlignment.Near,
             LineAlignment = StringAlignment.Center,
             FormatFlags = StringFormatFlags.NoWrap,
+            // twin of the Codex pill: a line that still does not fit at MinVerbPx ends in an ellipsis
+            // rather than being sliced through the middle of a glyph at the pill's edge
+            Trimming = StringTrimming.EllipsisCharacter,
         };
+        // the words end where the gap they were measured against ends. avail already excludes the timer,
+        // so this is what stops a long line running under the clock and off the end of the pill.
+        float originX = textX - 16f * (1f - e);   // the entrance: words slide out from behind the icon
+        float rightEdge = textX + avail;
         var clip = g.Clip;
-        g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h)); // text is born from behind the icon
-        float zoneW = centred ? avail - 34f : avail + 16f; // centred moods lean toward the icon
+        g.SetClip(new RectangleF(x + sz + 2, 0, rightEdge - (x + sz + 2), h)); // text is born behind the icon
+        // the old width was a flat avail + 16, where the 16 pays for that entrance shift — but it was paid
+        // at every e, so a settled pill overhung its own budget by 16px. Tie it to the shift that earns it.
+        float zoneW = (centred ? rightEdge - 34f : rightEdge) - originX; // centred moods lean toward the icon
         // lift comes from the font metrics (Fx.CenterLift), not a fixed pixel: px shrinks to fit
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
+        g.DrawString(verb, f, b, new RectangleF(originX, -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0) // timer zone, right-aligned and dimmer so the verb stays the focus

@@ -135,6 +135,11 @@ for the File Tray. Runtime state persists as loose files under `%LOCALAPPDATA%\H
   this project's only record of dozens of dead ends. Don't add comments that restate the code.
 - **UI strings are English** (`docs/decisions.md` locks this), lowercase-playful for agent moods
   ("outta juice :(", "googling :P"). Chat and docs may be Persian.
+- **Source files stay ASCII — no Persian anywhere in code**, not in comments, not in string literals,
+  not in test fixtures. Where RTL text is genuinely needed (bidi tests, the `--render-notif` mixed
+  FA+EN sample) write it as `\uXXXX` escapes and say what it means in an English comment. Beware: an
+  editor that resolves `\uXXXX` while writing will put the real character back — write those lines via
+  a literal-string replace and verify with a non-ASCII count over the file.
 - **Never display invented numbers.** If a value isn't obtainable from the OS, show an indeterminate
   or breathing state — fake percentages have been rejected twice. Likewise, hide a control the
   underlying app can't honor (e.g. SMTC playback rate) rather than shipping a silent no-op.

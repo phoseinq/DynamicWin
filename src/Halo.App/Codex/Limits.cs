@@ -129,11 +129,16 @@ internal static class CodexLimits
 
     internal static void ForceRefresh() => _statusStore?.ForceRefresh();
 
-    // Compatibility projections let a Claude-shaped renderer consume rollout-derived values while
-    // it migrates to Current.Primary and Current.Secondary.
-    internal static float FiveHour => Current?.Primary is { } primary ? (float)(primary.UsedPercent / 100) : -1;
-    internal static float Week => Current?.Secondary is { } secondary ? (float)(secondary.UsedPercent / 100) : -1;
-    internal static DateTimeOffset FiveHourReset => Current?.Primary?.ResetsAt ?? DateTimeOffset.MinValue;
-    internal static DateTimeOffset WeekReset => Current?.Secondary?.ResetsAt ?? DateTimeOffset.MinValue;
+    // These were called FiveHour and Week, borrowed from the Claude twin where those really are the two
+    // windows. Nothing here ever checked WindowMinutes, so they were positional all along: whatever the
+    // rollout reported first became "the 5-hour limit" even when Codex has no such window, and the pill
+    // said so. The captions in the panel already read the real WindowMinutes (CodexWidget.LimitCaption),
+    // which is why a plan with two week-long buckets showed two rows both saying "weekly" — the numbers
+    // were right and only these names were lying. Positional names, because the position is the only
+    // thing this projection actually knows.
+    internal static float PrimaryFrac => Current?.Primary is { } primary ? (float)(primary.UsedPercent / 100) : -1;
+    internal static float SecondaryFrac => Current?.Secondary is { } secondary ? (float)(secondary.UsedPercent / 100) : -1;
+    internal static DateTimeOffset PrimaryReset => Current?.Primary?.ResetsAt ?? DateTimeOffset.MinValue;
+    internal static DateTimeOffset SecondaryReset => Current?.Secondary?.ResetsAt ?? DateTimeOffset.MinValue;
     internal static void OnPanelOpen() => ForceRefresh();
 }
