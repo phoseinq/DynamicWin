@@ -4,6 +4,8 @@ using System.Threading;
 
 namespace Halo.Shell;
 
+internal enum CalendarKind { Gregorian, SolarHijri, SolarHijriAfghan, LunarHijri }
+
 internal static class Almanac
 {
 
@@ -129,21 +131,34 @@ internal static class Almanac
     internal static bool MetricFor(string? cc, bool fallback)
         => cc is { Length: 2 } c ? c is not ("US" or "LR" or "MM") : fallback;
 
-    internal static bool SolarHijriFor(string? cc, bool fallback)
-        => cc is { Length: 2 } c ? c == "IR" : fallback;
+    internal static CalendarKind CalendarFor(string? cc, CalendarKind fallback)
+        => cc is { Length: 2 } c
+            ? c switch
+            {
+                "IR" => CalendarKind.SolarHijri,
+
+                "AF" => CalendarKind.SolarHijriAfghan,
+                "SA" => CalendarKind.LunarHijri,
+                _ => CalendarKind.Gregorian,
+            }
+            : fallback;
 
     internal static bool Metric => MetricFor(PlaceCountry, RegionMetric);
 
-    internal static bool SolarHijri => SolarHijriFor(PlaceCountry, RegionIsIran);
+    internal static CalendarKind Calendar => CalendarFor(PlaceCountry, RegionCalendar);
 
     private static bool RegionMetric
     {
         get { try { return RegionInfo.CurrentRegion.IsMetric; } catch { return true; } }
     }
 
-    private static bool RegionIsIran
+    private static CalendarKind RegionCalendar
     {
-        get { try { return RegionInfo.CurrentRegion.TwoLetterISORegionName == "IR"; } catch { return false; } }
+        get
+        {
+            try { return CalendarFor(RegionInfo.CurrentRegion.TwoLetterISORegionName, CalendarKind.Gregorian); }
+            catch { return CalendarKind.Gregorian; }
+        }
     }
 
     private static readonly string[] JalaliMonths =
@@ -152,15 +167,49 @@ internal static class Almanac
         "Mehr", "Aban", "Azar", "Dey", "Bahman", "Esfand",
     };
 
-    internal static string? JalaliDate(DateTime now)
+    private static readonly string[] AfghanMonths =
+    {
+        "Hamal", "Sawr", "Jawza", "Saratan", "Asad", "Sunbula",
+        "Mizan", "Aqrab", "Qaws", "Jadi", "Dalw", "Hut",
+    };
+
+    private static readonly string[] HijriMonths =
+    {
+        "Muharram", "Safar", "Rabi I", "Rabi II", "Jumada I", "Jumada II",
+        "Rajab", "Sha'ban", "Ramadan", "Shawwal", "Dhu al-Qi'dah", "Dhu al-Hijjah",
+    };
+
+    internal static string? JalaliDate(DateTime now) => SolarDate(now, JalaliMonths);
+
+    internal static string? AfghanDate(DateTime now) => SolarDate(now, AfghanMonths);
+
+    private static string? SolarDate(DateTime now, string[] months)
     {
         try
         {
             var cal = new PersianCalendar();
-            return cal.GetDayOfMonth(now) + " " + JalaliMonths[cal.GetMonth(now) - 1];
+            return cal.GetDayOfMonth(now) + " " + months[cal.GetMonth(now) - 1];
         }
         catch { return null; }
     }
+
+    internal static string? HijriDate(DateTime now)
+    {
+        try
+        {
+            var cal = new UmAlQuraCalendar();
+            return cal.GetDayOfMonth(now) + " " + HijriMonths[cal.GetMonth(now) - 1];
+        }
+        catch { return null; }
+    }
+
+    internal static string? DateIn(CalendarKind kind, DateTime now) => kind switch
+    {
+        CalendarKind.SolarHijri => JalaliDate(now),
+        CalendarKind.SolarHijriAfghan => AfghanDate(now),
+        CalendarKind.LunarHijri => HijriDate(now),
+        _ => null,
+    };
 
         internal static (int glyph, int hue) SkyBadge(int code, bool day) => code switch
     {
@@ -201,12 +250,12 @@ internal static class Almanac
         return w is null ? t : t + " · " + Temp(w.TempC, metric);
     }
 
-        internal static string Detail(DateTime now, bool jalali)
+        internal static string Detail(DateTime now, CalendarKind kind)
         => now.ToString("dddd", CultureInfo.InvariantCulture) + ", "
-            + (jalali && JalaliDate(now) is { Length: > 0 } j
-                ? j : now.ToString("d MMM", CultureInfo.InvariantCulture));
+            + (DateIn(kind, now) is { Length: > 0 } d
+                ? d : now.ToString("d MMM", CultureInfo.InvariantCulture));
 
         internal static string Headline(DateTime now) => Headline(now, Latest, Metric);
 
-    internal static string Detail(DateTime now) => Detail(now, SolarHijri);
+    internal static string Detail(DateTime now) => Detail(now, Calendar);
 }

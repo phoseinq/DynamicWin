@@ -18,15 +18,15 @@ public class AlmanacTests
     public void EachRowCarriesOneThing()
     {
         Assert.Equal("1:00 PM · 34°", Almanac.Headline(Afternoon.Date.AddHours(13), new Almanac.Weather(34, 0), metric: true));
-        Assert.Equal("Thursday, 8 Mordad", Almanac.Detail(Afternoon, jalali: true));
-        Assert.Equal("Thursday, 30 Jul", Almanac.Detail(Afternoon, jalali: false));
+        Assert.Equal("Thursday, 8 Mordad", Almanac.Detail(Afternoon, CalendarKind.SolarHijri));
+        Assert.Equal("Thursday, 30 Jul", Almanac.Detail(Afternoon, CalendarKind.Gregorian));
     }
 
     [Fact]
     public void NothingIsSaidTwiceAndTheSkyIsNotSaidAtAll()
     {
         var whole = Almanac.Headline(Afternoon, new Almanac.Weather(34, 0), metric: true)
-            + " " + Almanac.Detail(Afternoon, jalali: true);
+            + " " + Almanac.Detail(Afternoon, CalendarKind.SolarHijri);
         Assert.Equal(1, whole.Count(c => c == '·'));
         Assert.DoesNotContain("Jul", whole);      // one calendar, the one the place keeps
         Assert.DoesNotContain("clear", whole);    // the sky is the badge
@@ -49,7 +49,7 @@ public class AlmanacTests
     public void TheSolarHijriDateIsAConversionNotAnEstimate()
     {
         Assert.Equal("8 Mordad", Almanac.JalaliDate(Afternoon));
-        Assert.Contains("8 Mordad", Almanac.Detail(Afternoon, jalali: true));
+        Assert.Contains("8 Mordad", Almanac.Detail(Afternoon, CalendarKind.SolarHijri));
     }
 
     // the sky is a glyph and a hue now. What must hold is that every code lands on a glyph that exists in
@@ -106,15 +106,45 @@ public class AlmanacTests
     {
         Assert.True(Almanac.MetricFor(null, fallback: true));
         Assert.False(Almanac.MetricFor(null, fallback: false));
-        Assert.True(Almanac.SolarHijriFor(null, fallback: true));
+        Assert.Equal(CalendarKind.SolarHijri, Almanac.CalendarFor(null, CalendarKind.SolarHijri));
     }
 
-    [Theory]
-    [InlineData("IR", true)]
-    [InlineData("US", false)]
-    [InlineData("AF", false)]   // also solar, but with different month names - not worth being wrong about
-    public void TheSolarCalendarIsForIran(string cc, bool jalali)
-        => Assert.Equal(jalali, Almanac.SolarHijriFor(cc, fallback: !jalali));
+    // Which calendar is CIVIL there, not which countries are Muslim-majority: Egypt, Turkey and Indonesia
+    // keep their diaries in Gregorian and a Hijri date would misinform them.
+    [Fact]
+    public void TheCalendarFollowsWhereTheMachineIs()
+    {
+        var cases = new (string cc, CalendarKind want)[]
+        {
+            ("IR", CalendarKind.SolarHijri),
+            ("AF", CalendarKind.SolarHijriAfghan),
+            ("SA", CalendarKind.LunarHijri),
+            ("US", CalendarKind.Gregorian),
+            ("EG", CalendarKind.Gregorian),
+            ("TR", CalendarKind.Gregorian),
+        };
+        foreach (var (cc, want) in cases)
+            Assert.Equal(want, Almanac.CalendarFor(cc, CalendarKind.Gregorian));
+    }
+
+    // Kabul and Tehran share a calendar and not its month names, which is why AF was left on Gregorian
+    // until there was a second table to put it on.
+    [Fact]
+    public void AfghanistanGetsItsOwnMonthNames()
+    {
+        Assert.Equal("Thursday, 8 Mordad", Almanac.Detail(Afternoon, CalendarKind.SolarHijri));
+        Assert.Equal("Thursday, 8 Asad", Almanac.Detail(Afternoon, CalendarKind.SolarHijriAfghan));
+    }
+
+    // the lunar one is a different date entirely, not a renaming
+    [Fact]
+    public void TheLunarCalendarIsADifferentDate()
+    {
+        var lunar = Almanac.Detail(Afternoon, CalendarKind.LunarHijri);
+        Assert.StartsWith("Thursday, ", lunar);
+        Assert.DoesNotContain("Mordad", lunar);
+        Assert.DoesNotContain("Jul", lunar);
+    }
 
     [Fact]
     public void TheMachinesOwnZoneResolvesToSomethingOrToNothing()
