@@ -65,7 +65,8 @@ internal static class Program
         // dev hook: `Halo.App --render-bar <out.png>` — the pill's background progress bar as a filmstrip,
         // one row per moment across a full breath, with a paused row for comparison. A pulse cannot be judged
         // from a single still, and "does it look like it is running" is the whole point of it.
-        if (args.Length >= 2 && args[0] == "--render-bar") { RenderBar(args[1]); return; }
+        if (args.Length >= 2 && args[0] == "--render-bar")
+        { RenderBar(args[1], args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null); return; }
         // dev hook: `Halo.App --probe-media` — every live SMTC slot, its app id, whether it ships a
         // thumbnail, and what each icon resolver answers for it. The pill falling back to a glyph is always
         // one of these three coming back empty, and guessing which is how a whole evening gets spent.
@@ -191,6 +192,24 @@ internal static class Program
                     string.Join(" ", Array.ConvertAll(b, v => v.ToString("0.00"))));
                 System.Threading.Thread.Sleep(300);
             }
+            return;
+        }
+        // dev hook: `Halo.App --probe-timeline` — 15s of what the media widget actually believes, twice a
+        // second. --probe-media next door dumps the SMTC session once; this one is about change over time:
+        // The pill's bar is a function of exactly these numbers, and "the bar is not there" is indistinguishable
+        // on screen from a duration the player never reported, a span the widget refused, or a track change it
+        // is still waiting out. Play something (browser tab included) while it runs.
+        if (args.Length >= 1 && args[0] == "--probe-timeline")
+        {
+            // Run the whole thing on an MTA thread. The widget fills itself in from `async void` handlers, and
+            // a WinRT completion arriving in an STA is a COM callback that only lands when the apartment pumps
+            // messages - which a probe sitting in Thread.Sleep never does, so the session hooked and the title
+            // never came. (ProbeMedia next door gets away with it because a blocking GetResult() on an STA
+            // pumps while it waits.) The real app pumps a DispatcherQueue; this was the harness, not a bug.
+            var probe = new System.Threading.Thread(() => ProbeTimeline());
+            probe.SetApartmentState(System.Threading.ApartmentState.MTA);
+            probe.Start();
+            probe.Join();
             return;
         }
         // dev hook: `Halo.App --moods` — the whole vocabulary, one line per key. These reach the screen
@@ -533,10 +552,17 @@ internal static class Program
     // `--probe-seek <±seconds> [count]` — count>1 fires them back to back, which is the case that broke:
     // each tap has to compute from where the LAST one put us, not from a position the player has not caught
     // up to reporting yet.
-    private static void RenderBar(string outPath)
+    // optional rrggbb: the bar's whole palette is derived from the album art's accent, so a dark cover is a
+    // completely different picture from a bright one and has to be renderable on demand
+    private static void RenderBar(string outPath, string? accentHex, string? fracStr)
     {
         const int W = 220, H = 40, Zoom = 2, Rows = 7, Pad = 8;
         var accent = System.Drawing.Color.FromArgb(228, 168, 64);   // the film's own amber, near enough
+        float frac = fracStr != null
+            ? float.Parse(fracStr, System.Globalization.CultureInfo.InvariantCulture) : 0.42f;
+        if (accentHex != null)
+            accent = System.Drawing.Color.FromArgb(
+                (int)(uint.Parse(accentHex, System.Globalization.NumberStyles.HexNumber) | 0xFF000000));
         using var bmp = new System.Drawing.Bitmap(W * Zoom + Pad * 2 + 150,
             (H * Zoom + Pad) * Rows + Pad, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         using var g = System.Drawing.Graphics.FromImage(bmp);
@@ -556,7 +582,10 @@ internal static class Program
                 using (var back = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 12, 12, 14)))
                 using (var pp = Halo.Widgets.Fx.PillPath(W, H, H / 2f))
                     pg.FillPath(back, pp);
-                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, 0.42f, accent, 0.34f, alive: !paused);
+                // 0.5 is what MediaWidget actually passes. This said 0.34 for a while, so every filmstrip
+                // eyeballed here was a weaker bar than the one that ships - the whole point of the hook is that
+                // it renders the real code path with the real numbers.
+                Halo.Widgets.Fx.PillBar(pg, W, H, 1f, frac, accent, 0.5f, alive: !paused);
             }
             g.DrawImage(pill, new System.Drawing.Rectangle(150, Pad + r * (H * Zoom + Pad), W * Zoom, H * Zoom));
             if (!paused) System.Threading.Thread.Sleep(430);   // walk through one full breath
@@ -608,6 +637,25 @@ internal static class Program
     // dev-only: what each live media session actually offers the pill to draw. Three things decide whether
     // the art tile shows something real or falls back to a glyph — the track's own thumbnail, then the shell's
     // icon for the app id, then the icon inside the app's exe — and this prints all three per slot.
+    private static void ProbeTimeline()
+    {
+        var sessions = new Halo.Widgets.MediaSessions();
+        // the manager hooks asynchronously; building the widgets against a slot that has no session yet is how
+        // the first run of this printed thirty blank lines
+        for (int i = 0; i < 40 && sessions.Session(0) is null; i++) System.Threading.Thread.Sleep(100);
+        var slots = new Halo.Widgets.MediaWidget[Halo.Widgets.MediaSessions.MaxSlots];
+        for (int s = 0; s < slots.Length; s++) slots[s] = new Halo.Widgets.MediaWidget(sessions, s);
+        for (int i = 0; i < 30; i++)
+        {
+            for (int s = 0; s < slots.Length; s++)
+            {
+                if (sessions.Session(s) is null) continue;
+                Console.WriteLine($"{i * 0.5,5:0.0}s [{s}] {slots[s].ProbeLine() ?? "session hooked, no title yet"}");
+            }
+            System.Threading.Thread.Sleep(500);
+        }
+    }
+
     private static void ProbeMedia()
     {
         var sessions = new Halo.Widgets.MediaSessions();
