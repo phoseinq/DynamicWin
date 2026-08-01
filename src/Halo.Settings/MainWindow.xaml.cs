@@ -27,54 +27,70 @@ public partial class MainWindow : Window
 
     private void BuildNav()
     {
-        foreach (var page in Catalog.Pages)
+        foreach (var group in Catalog.Nav)
         {
-            var icon = new Path
-            {
-                Data = Geometry.Parse(Catalog.Icon(page.Id)),
-                Stroke = (Brush)FindResource("Secondary"),
-                StrokeThickness = 1.3,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                StrokeLineJoin = PenLineJoin.Round,
-                Width = 16,
-                Height = 16,
-                Stretch = Stretch.None,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var label = new TextBlock
-            {
-                Text = page.Label,
-                Foreground = (Brush)FindResource("Secondary"),
-                FontSize = 12.5,
-                Margin = new Thickness(11, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
-            row.Children.Add(icon);
-            row.Children.Add(label);
-
-            var button = new Button { Style = (Style)FindResource("NavItem"), Content = row, Tag = page.Id };
-            button.Click += (_, _) => ShowPage(page.Id);
-            NavPanel.Children.Add(button);
-            _navButtons[page.Id] = button;
+            if (group.Header.Length > 0)
+                NavPanel.Children.Add(new TextBlock
+                {
+                    Text = group.Header,
+                    Foreground = (Brush)FindResource("Quiet"),
+                    FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+                    FontSize = 9.5,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(18, 16, 0, 6),
+                });
+            foreach (var id in group.Pages) NavPanel.Children.Add(BuildNavItem(Catalog.Get(id)));
         }
     }
 
-    // Selection is a filled frost bar plus blue ink, which is the only place blue appears outside focus.
+    private Button BuildNavItem(Page page)
+    {
+        var icon = new Path
+        {
+            Data = Geometry.Parse(Catalog.Icon(page.Id)),
+            Stroke = (Brush)FindResource("Secondary"),
+            StrokeThickness = 1.3,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Width = 16,
+            Height = 16,
+            Stretch = Stretch.None,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var label = new TextBlock
+        {
+            Text = page.Label,
+            Foreground = (Brush)FindResource("Secondary"),
+            FontSize = 12.5,
+            Margin = new Thickness(11, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(icon);
+        row.Children.Add(label);
+
+        var button = new Button { Style = (Style)FindResource("NavItem"), Content = row, Tag = page.Id };
+        button.Click += (_, _) => ShowPage(page.Id);
+        _navButtons[page.Id] = button;
+        return button;
+    }
+
+    // Selection is a blue-tinted pill with blue ink - the one place blue appears outside focus. Frost
+    // was the first attempt and it read as "hovered", not "you are here".
     private void Paint(PageId selected)
     {
         foreach (var (id, button) in _navButtons)
         {
             bool on = id == selected;
-            button.Background = on ? (Brush)FindResource("Frost") : Brushes.Transparent;
-            button.BorderBrush = on ? (Brush)FindResource("FrostEdge") : Brushes.Transparent;
+            button.Background = on ? (Brush)FindResource("Selected") : Brushes.Transparent;
+            button.BorderBrush = on ? (Brush)FindResource("SelectedEdge") : Brushes.Transparent;
             if (button.Content is not StackPanel row) continue;
             var ink = (Brush)FindResource(on ? "Navigation" : "Secondary");
             if (row.Children[0] is Path icon) icon.Stroke = ink;
             if (row.Children[1] is TextBlock text)
             {
-                text.Foreground = on ? (Brush)FindResource("Ink") : ink;
+                text.Foreground = ink;
                 text.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
             }
         }
@@ -102,27 +118,18 @@ public partial class MainWindow : Window
                 Margin = new Thickness(2, ContentPanel.Children.Count == 0 ? 0 : 22, 0, 8),
             });
 
-            var group = new Border
-            {
-                CornerRadius = new CornerRadius(16),
-                Background = (Brush)FindResource("RailFill"),
-                BorderBrush = (Brush)FindResource("FrostEdge"),
-                BorderThickness = new Thickness(1),
-            };
-            var stack = new StackPanel { Margin = new Thickness(2) };
-            for (int i = 0; i < section.Rows.Count; i++)
-            {
-                if (i > 0)
-                    stack.Children.Add(new Border
-                    {
-                        Height = 1,
-                        Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)),
-                        Margin = new Thickness(16, 0, 16, 0),
-                    });
-                stack.Children.Add(BuildRow(section.Rows[i]));
-            }
-            group.Child = stack;
-            ContentPanel.Children.Add(group);
+            // one card per row rather than one box with separators: a row is a thing you act on, and a
+            // shared container made four of them read as a single paragraph
+            foreach (var row in section.Rows)
+                ContentPanel.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(14),
+                    Background = (Brush)FindResource("RailFill"),
+                    BorderBrush = (Brush)FindResource("FrostEdge"),
+                    BorderThickness = new Thickness(1),
+                    Margin = new Thickness(0, 0, 0, 8),
+                    Child = BuildRow(row),
+                });
         }
     }
 
@@ -158,6 +165,7 @@ public partial class MainWindow : Window
         {
             RowKind.Toggle => BuildToggle(row),
             RowKind.Choice => BuildChoice(row),
+            RowKind.Slider => BuildSlider(row),
             _ => BuildAction(row),
         };
         Grid.SetColumn(control, 1);
@@ -237,6 +245,74 @@ public partial class MainWindow : Window
         cell.BorderThickness = new Thickness(1);
         ink.Foreground = (Brush)FindResource(on ? "Ink" : "Quiet");
         ink.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+    }
+
+    // A track with the stops the setting actually has, not a continuous one: pill scale is five values,
+    // and a slider that landed between them would be offering precision the pill cannot use.
+    private FrameworkElement BuildSlider(Row row)
+    {
+        string value = _store.Text(row.Key, row.Fallback);
+        var stops = new System.Collections.Generic.List<string>(row.Options);
+        int index = System.Math.Max(0, stops.IndexOf(value));
+        const double TrackW = 120;
+
+        var fill = new Border
+        {
+            Height = 4,
+            CornerRadius = new CornerRadius(2),
+            Background = (Brush)FindResource("Mint"),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        var track = new Border
+        {
+            Width = TrackW,
+            Height = 4,
+            CornerRadius = new CornerRadius(2),
+            Background = (Brush)FindResource("Graphite"),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = fill,
+        };
+        var readout = new TextBlock
+        {
+            Foreground = (Brush)FindResource("Ink"),
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Width = 46,
+            TextAlignment = TextAlignment.Right,
+            Margin = new Thickness(14, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var strip = new StackPanel { Orientation = Orientation.Horizontal };
+        strip.Children.Add(track);
+        strip.Children.Add(readout);
+        var host = new Border
+        {
+            Background = Brushes.Transparent,
+            Padding = new Thickness(10, 10, 10, 10),
+            Cursor = Cursors.Hand,
+            Child = strip,
+        };
+
+        void Paint()
+        {
+            fill.Width = stops.Count < 2 ? TrackW : TrackW * index / (stops.Count - 1);
+            readout.Text = stops[index];
+        }
+        void Pick(double x)
+        {
+            if (stops.Count < 2) return;
+            int next = (int)System.Math.Round(x / (TrackW / (stops.Count - 1)));
+            next = System.Math.Clamp(next, 0, stops.Count - 1);
+            if (next == index) return;
+            index = next;
+            _store.Set(row.Key, stops[index]);
+            Paint();
+        }
+        host.MouseLeftButtonDown += (_, e) => { host.CaptureMouse(); Pick(e.GetPosition(track).X); };
+        host.MouseMove += (_, e) => { if (host.IsMouseCaptured) Pick(e.GetPosition(track).X); };
+        host.MouseLeftButtonUp += (_, _) => host.ReleaseMouseCapture();
+        Paint();
+        return host;
     }
 
     private FrameworkElement BuildAction(Row row)

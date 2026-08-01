@@ -264,8 +264,13 @@ internal static class Program
         // the only way to read what the pill can actually say.
         if (args.Length >= 1 && args[0] == "--moods") { Moods(); return; }
 
+        // Launching Halo when Halo is already running is not a mistake to swallow silently - it is what
+        // clicking the shortcut, the Start tile or the taskbar icon DOES, and the only thing the user can
+        // have meant by it is "show me Halo". The pill is always on screen already, so the useful answer
+        // is the settings panel.
         using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
-        if (!created) return;
+        if (!created) { OpenSettingsPanel(); return; }
+        if (args.Contains("--settings", StringComparer.OrdinalIgnoreCase)) OpenSettingsPanel();
 
         try
         {
@@ -1108,6 +1113,20 @@ internal static class Program
                 g.DrawImage(badges[i], 10 + i * 84, 20, 64, 64);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    // The panel is its own executable, shipped beside this one. Separate on purpose: it is a WPF window
+    // with a compositor backdrop and this process is a layered GDI+ surface that must never block, and a
+    // settings window that cannot take the pill down with it is worth one more exe.
+    private static void OpenSettingsPanel()
+    {
+        try
+        {
+            string exe = System.IO.Path.Combine(AppContext.BaseDirectory, "Halo.Settings.exe");
+            if (!System.IO.File.Exists(exe)) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch { }
     }
 
     // dev-only: a labelled sheet of Segoe Fluent Icons code points. Either a contiguous block

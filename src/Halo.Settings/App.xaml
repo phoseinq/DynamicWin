@@ -18,6 +18,8 @@
         <SolidColorBrush x:Key="Coral" Color="#FF9A8B" />
         <SolidColorBrush x:Key="Graphite" Color="#64707D" />
         <SolidColorBrush x:Key="RailFill" Color="#3210151D" />
+        <SolidColorBrush x:Key="Selected" Color="#2E7CB4FF" />
+        <SolidColorBrush x:Key="SelectedEdge" Color="#557CB4FF" />
         <SolidColorBrush x:Key="Obsidian" Color="#52151A22" />
 
         <!-- Every control is templated. The preview's five faults were all default chrome showing
