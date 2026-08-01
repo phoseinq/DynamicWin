@@ -20,6 +20,36 @@ edge, so the clock coarsens to minutes during a compact and "big history…" fit
 Measured while checking whether the window itself was honest: this machine's transcripts peak at 728k
 tokens, so the hook's 1M window for Opus is right, not a guess.
 
+### The terminal is a readable, writable surface — and that solved two things at once
+
+**Deployed and verified live twice.** `Interop/ConsoleRead.cs`: a GUI process owns no console, so
+`AttachConsole(agentPid)` binds Halo to the agent's, `CONOUT$` reads what it is showing and `CONIN$`
+writes keys into it, then `FreeConsole`. No focus is taken — which is the whole point, since
+`SetForegroundWindow` from a background process is a dead end this project has already measured twice.
+`SetConsoleCtrlHandler(0, true)` while attached, or the Ctrl+C meant for the agent would end Halo.
+
+**The compact figure again.** The context fill was real but was not progress, which is not what was
+asked for. Checked the shipped `claude.exe` directly: the only `compact_progress` events it raises are
+`compact_start` / `compact_end` / `hooks_start`, and the transcript gets nothing between them — but the
+spinner renders the summary's streamed tokens off a `response_length` accumulator. So the pill reads
+that line (`CompactProgress`, once a second, on the pool, only while a session is compacting). The
+count is real and live; the denominator is the honest weak point, so it is *measured* — the final count
+of the last compact on this machine, kept in `%LOCALAPPDATA%\Halo\compact-tokens` — and until one has
+been observed the pill shows the count itself (`1.2k tok`) rather than a percentage over an invented
+total. Codex shows nothing there: its TUI has not been shown to publish a comparable counter.
+
+**The question box now appears in both places.** `AskFlow` publishes an `AskUserQuestion` and returns
+*no decision*, so the tool runs and Claude Code draws its own box; the pill mirrors it. The red
+`Error:` is gone with the deny that used to carry the answer. Clicking a numbered row types that digit
+into the agent's terminal. **"Something else" is back and real**: the box's free-text field sits one row
+past the last option and is reachable only by walking down off the end of the list — established by
+driving a live box and reading back what came out, not from any documentation. Arrows carry no
+character, so `ConsoleRead.Press` sends a virtual key. Verified end to end in this session: a numbered
+click returned that option, and a Persian sentence typed on the pill came back as the tool's answer
+(`words -> pid 22448 = True`). The `PostToolUse` hook clears the ask file when the box is dealt with in
+the terminal, which is how the banner comes down without the hook blocking. Banner text is now drawn
+right-to-left per string, since a Persian question over English labels is the normal case here.
+
 **Alert tiles: one per thing that can go wrong.** RAM wore the CPU's processor die *and* shared its
 `Kind` (so a queued CPU banner and a RAM banner deduped into one); "context nearly full" wore the same
 gauge as "weekly limit spent". Badge drawing moved out of `NotchController` into `Shell/Badges.cs` and
