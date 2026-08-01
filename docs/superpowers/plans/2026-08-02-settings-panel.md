@@ -87,3 +87,33 @@ the app version.
 4. Launch paths: clicking the Halo shortcut when an instance is already running opens the panel instead
    of exiting silently (today the mutex just returns); tray icon second.
 5. Access page last — it reads real permission state, so it needs its own probes.
+
+## Port it, do not redraw it (2026-08-02, after three rejected passes)
+
+Rebuilding the design from a screenshot produced something different every time. The reference is now in
+the repo — `docs/settings-reference/preview-28888.png`, captured from the running preview — and the next
+pass is a **mechanical port** of the branch's own source, not another re-derivation:
+
+    git show codex/liquid-glass-settings-preview:tools/Halo.SettingsPreview/MainWindow.xaml.cs
+    git show codex/liquid-glass-settings-preview:tools/Halo.SettingsPreview/PreviewCatalog.cs
+    git show codex/liquid-glass-settings-preview:tools/Halo.SettingsPreview/PreviewVisualPolicy.cs
+
+WinUI to WPF is a small, known substitution list: `SystemBackdropElement` → a `Border` over the window's
+own DWM backdrop, `Spacing` on a StackPanel/Grid → `Margin` on the children, `ColumnSpacing`/`RowSpacing`
+→ the same, `x:Bind` → nothing (it is all built in code anyway). Every number — 84px mark, 34px title,
+20px nav glyph, 16px corner radius — carries across unchanged.
+
+What the reference shows that this build still gets wrong:
+
+- **Nav icons are Segoe Fluent glyphs, each in its own colour**: Home mint `#74E6C2`, General blue
+  `#7CB4FF`, Features pink `#FF91C8`, Agents violet `#D79BFF`, Access amber `#F0AE72`, Docs cyan
+  `#5FDFE5`. Selection tints the pill and its border with the page's OWN accent, not one blue.
+- **Home is a hero page**: a large gradient RING (the Halo mark, ~76px, not the .ico), "Halo" at 34px,
+  the tagline "Your apps, activity and agents — surfaced when they matter.", then an `EXPLORE` eyebrow
+  over a 2x2 grid of shortcut cards. Each card: a rounded tinted TILE holding the page's glyph in its
+  accent, the page name, and a two-word subtitle ("Behaviour and appearance", "App surfaces", "Coding
+  sessions", "Windows controls"). The card's border carries the accent too.
+- Home's own subtitle is "A quieter place to begin".
+- A `CURRENT DRAFT` section sits under EXPLORE with a status line and a "Reset to defaults" button. Its
+  draft/apply wording does not apply here — settings are written on the touch and watched — so that
+  section becomes something honest or is dropped.

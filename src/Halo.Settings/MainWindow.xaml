@@ -31,17 +31,8 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
-                <Grid Width="25" Height="25">
-                    <Ellipse StrokeThickness="2">
-                        <Ellipse.Stroke>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="#7CB4FF" Offset="0.12" />
-                                <GradientStop Color="#78DDB2" Offset="0.82" />
-                            </LinearGradientBrush>
-                        </Ellipse.Stroke>
-                    </Ellipse>
-                    <Border Width="15" Height="7" CornerRadius="4" Background="#B8151A22" />
-                </Grid>
+                <Image Source="pack://application:,,,/halo.ico" Width="20" Height="20"
+                       VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
                 <TextBlock Text="Halo settings" Foreground="{StaticResource Ink}" Margin="10,0,0,0"
                            FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
                            FontSize="13" VerticalAlignment="Center" />

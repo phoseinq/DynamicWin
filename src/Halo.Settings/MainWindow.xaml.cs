@@ -45,17 +45,14 @@ public partial class MainWindow : Window
 
     private Button BuildNavItem(Page page)
     {
-        var icon = new Path
+        var icon = new TextBlock
         {
-            Data = Geometry.Parse(Catalog.Icon(page.Id)),
-            Stroke = (Brush)FindResource("Secondary"),
-            StrokeThickness = 1.3,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            StrokeLineJoin = PenLineJoin.Round,
-            Width = 16,
-            Height = 16,
-            Stretch = Stretch.None,
+            Text = Catalog.Glyph(page.Id),
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 16,
+            Foreground = Accent(page.Id),
+            Width = 20,
+            TextAlignment = TextAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
         var label = new TextBlock
@@ -83,17 +80,28 @@ public partial class MainWindow : Window
         foreach (var (id, button) in _navButtons)
         {
             bool on = id == selected;
-            button.Background = on ? (Brush)FindResource("Selected") : Brushes.Transparent;
-            button.BorderBrush = on ? (Brush)FindResource("SelectedEdge") : Brushes.Transparent;
+            var accent = Catalog.Accent(id);
+            button.Background = on
+                ? new SolidColorBrush(Color.FromArgb(0x2E, accent.R, accent.G, accent.B))
+                : Brushes.Transparent;
+            button.BorderBrush = on
+                ? new SolidColorBrush(Color.FromArgb(0x55, accent.R, accent.G, accent.B))
+                : Brushes.Transparent;
             if (button.Content is not StackPanel row) continue;
-            var ink = (Brush)FindResource(on ? "Navigation" : "Secondary");
-            if (row.Children[0] is Path icon) icon.Stroke = ink;
+            // the glyph keeps its colour whether selected or not - it is the entry's identity, not its
+            // state - and only the label and the tint behind it move
             if (row.Children[1] is TextBlock text)
             {
-                text.Foreground = ink;
+                text.Foreground = on ? (Brush)FindResource("Ink") : (Brush)FindResource("Secondary");
                 text.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
             }
         }
+    }
+
+    private Brush Accent(PageId page)
+    {
+        var (r, g, b) = Catalog.Accent(page);
+        return new SolidColorBrush(Color.FromRgb(r, g, b));
     }
 
     private void ShowPage(PageId id)
@@ -105,6 +113,8 @@ public partial class MainWindow : Window
         PageDescription.Text = page.Description;
         DetailScroll.ScrollToTop();
         ContentPanel.Children.Clear();
+
+        if (id == PageId.Home) { BuildHome(); return; }
 
         foreach (var section in page.Sections)
         {
@@ -324,6 +334,124 @@ public partial class MainWindow : Window
         };
         button.Click += (_, _) => Actions.Run(row.Key);
         return button;
+    }
+
+
+    // Home is not a settings page and is not built like one: a mark, the product's name, one line about
+    // what it is for, and then the four places to go. Rendering it through the row builder produced a
+    // list of switches with nothing above them, which is what every other page already is.
+    private void BuildHome()
+    {
+        var hero = new Grid { Margin = new Thickness(2, 2, 0, 20) };
+        hero.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        hero.ColumnDefinitions.Add(new ColumnDefinition());
+        hero.Children.Add(Mark(76));
+
+        var copy = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(22, 0, 0, 0) };
+        copy.Children.Add(new TextBlock
+        {
+            Text = "Halo",
+            Foreground = (Brush)FindResource("Ink"),
+            FontFamily = new FontFamily("Segoe UI Variable Display, Segoe UI"),
+            FontSize = 34,
+            FontWeight = FontWeights.SemiBold,
+        });
+        copy.Children.Add(new TextBlock
+        {
+            Text = "Your apps, activity and agents - surfaced when they matter.",
+            Foreground = (Brush)FindResource("Secondary"),
+            FontSize = 13,
+            FontWeight = FontWeights.Medium,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        });
+        Grid.SetColumn(copy, 1);
+        hero.Children.Add(copy);
+        ContentPanel.Children.Add(hero);
+
+        ContentPanel.Children.Add(Eyebrow("EXPLORE"));
+
+        var grid = new Grid { Margin = new Thickness(0, 0, 2, 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        PageId[] shortcuts = [PageId.General, PageId.Features, PageId.Agents, PageId.Access];
+        for (int i = 0; i < shortcuts.Length; i++)
+        {
+            var card = Shortcut(shortcuts[i]);
+            card.Margin = new Thickness(i % 2 == 0 ? 0 : 5, i < 2 ? 0 : 10, i % 2 == 0 ? 5 : 0, 0);
+            Grid.SetColumn(card, i % 2);
+            Grid.SetRow(card, i / 2);
+            grid.Children.Add(card);
+        }
+        ContentPanel.Children.Add(grid);
+    }
+
+    private FrameworkElement Shortcut(PageId id)
+    {
+        var page = Catalog.Get(id);
+        var stack = new StackPanel();
+        stack.Children.Add(new TextBlock
+        {
+            Text = Catalog.Glyph(id),
+            FontFamily = new FontFamily("Segoe Fluent Icons"),
+            FontSize = 19,
+            Foreground = Accent(id),
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = page.Label,
+            Foreground = (Brush)FindResource("Ink"),
+            FontSize = 13.5,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 9, 0, 0),
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = page.Description,
+            Foreground = (Brush)FindResource("Quiet"),
+            FontSize = 11.5,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+
+        var button = new Button
+        {
+            Style = (Style)FindResource("Glass"),
+            Content = stack,
+            Padding = new Thickness(16, 14, 16, 15),
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Background = (Brush)FindResource("RailFill"),
+        };
+        button.Click += (_, _) => ShowPage(id);
+        return button;
+    }
+
+    private static TextBlock Eyebrow(string text) => new()
+    {
+        Text = text,
+        Foreground = new SolidColorBrush(Color.FromRgb(0x82, 0x90, 0x9F)),
+        FontFamily = new FontFamily("Cascadia Mono, Consolas"),
+        FontSize = 9.5,
+        FontWeight = FontWeights.SemiBold,
+        Margin = new Thickness(2, 0, 0, 9),
+    };
+
+    // The product's own icon, not an approximation of it drawn in XAML. The hand-built ring and bar were
+    // a stand-in and looked like one next to the same icon in the taskbar.
+    private static FrameworkElement Mark(double size)
+    {
+        var image = new System.Windows.Controls.Image { Width = size, Height = size };
+        try
+        {
+            image.Source = System.Windows.Media.Imaging.BitmapFrame.Create(
+                new Uri("pack://application:,,,/halo.ico"),
+                System.Windows.Media.Imaging.BitmapCreateOptions.None,
+                System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+        }
+        catch { }
+        return image;
     }
 
     private void TitleBar_Drag(object sender, MouseButtonEventArgs e)

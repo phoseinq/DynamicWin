@@ -15,4 +15,9 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
+
+  <ItemGroup>
+    <Resource Include="..\Halo.App\Assets\halo.ico" Link="halo.ico" />
+  </ItemGroup>
+
 </Project>

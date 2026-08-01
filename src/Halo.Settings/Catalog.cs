@@ -142,15 +142,28 @@ internal static class Catalog
 
     internal static Page Get(PageId id) => System.Array.Find(Pages, p => p.Id == id)!;
 
-    // 16x16 vector paths. Drawn rather than set as text, because an icon font put unrelated symbols on
-    // half of these entries.
-    internal static string Icon(PageId page) => page switch
+    // Segoe Fluent Icons, not hand-drawn paths. The traced vectors were a stand-in and read as exactly
+    // that beside the system's own shell; these are the same code points the approved design uses.
+    internal static string Glyph(PageId page) => page switch
     {
-        PageId.Home => "M2,7.5 L8,2 L14,7.5 M3.5,6.5 L3.5,14 L12.5,14 L12.5,6.5 M6.5,14 L6.5,9.5 L9.5,9.5 L9.5,14",
-        PageId.General => "M2,4 L14,4 M5,2 L5,6 M2,12 L14,12 M11,10 L11,14",
-        PageId.Features => "M2,3.5 L14,3.5 M2,8 L14,8 M2,12.5 L14,12.5",
-        PageId.Agents => "M3,3 A1.5,1.5 0 1 0 3,6 A1.5,1.5 0 1 0 3,3 M13,3 A1.5,1.5 0 1 0 13,6 A1.5,1.5 0 1 0 13,3 M8,10 A1.5,1.5 0 1 0 8,13 A1.5,1.5 0 1 0 8,10 M4.2,5.5 L7,10 M11.8,5.5 L9,10",
-        PageId.Access => "M4,7 L12,7 L12,14 L4,14 Z M6,7 L6,5 A2,2 0 0 1 10,5 L10,7 M8,10 L8,12",
-        _ => "M5,2 C3.5,2 3.5,4 3.5,8 C3.5,12 3.5,14 5,14 M11,2 C12.5,2 12.5,4 12.5,8 C12.5,12 12.5,14 11,14",
+        PageId.Home => "\uE80F",
+        PageId.General => "\uE713",
+        PageId.Features => "\uE71D",
+        PageId.Agents => "\uE716",
+        PageId.Access => "\uE8D7",
+        _ => "\uE943",
+    };
+
+    // One accent per entry, so the rail is scannable by colour before it is read. Selection tints the
+    // pill with the page's OWN colour rather than one blue for everything, which is what made six
+    // different destinations look like six states of one thing.
+    internal static (byte R, byte G, byte B) Accent(PageId page) => page switch
+    {
+        PageId.Home => (0x74, 0xE6, 0xC2),
+        PageId.General => (0x7C, 0xB4, 0xFF),
+        PageId.Features => (0xFF, 0x91, 0xC8),
+        PageId.Agents => (0xD7, 0x9B, 0xFF),
+        PageId.Access => (0xF0, 0xAE, 0x72),
+        _ => (0x5F, 0xDF, 0xE5),
     };
 }
