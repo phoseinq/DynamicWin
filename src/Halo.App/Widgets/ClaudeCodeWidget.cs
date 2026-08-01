@@ -71,7 +71,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     // known, which as an ARC would read as a fresh budget, so that case asks for a full ring instead.
     public float RingProgress
         => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
-    public int Version => _store.Version + NetMon.Version;
+    public int Version => _store.Version + NetMon.Version + CompactProgress.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(Shown(status), ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
@@ -161,8 +161,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         // gap held twelve, and the renderer shrank the font until it fitted - 9px, which is present rather
         // than readable. Now the words are chosen to fit and the font stays legible.
         string el0 = LimitHit ? LimitReset() : Elapsed(st);
-        if (Compacting(st) && !LimitHit && ContextPct(st!) is { Length: > 0 } ctx)
-            el0 = el0.Length > 0 ? ctx + " · " + Coarse(el0) : ctx;
+        if (Compacting(st) && !LimitHit && CompactPct(st!) is { Length: > 0 } done)
+            el0 = el0.Length > 0 ? done + " · " + Coarse(el0) : done;
         float textX0 = x + sz + 11;
         if (st?.State == "waiting_input") textX0 += 16;
         using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -281,20 +281,16 @@ internal sealed class ClaudeCodeWidget : IWidget
         && ParseTime(st.StartedAt) is { } t
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
 
-    // What is actually known while a compact runs.
+    // How far the compact has got, read off the agent's own terminal (see CompactProgress: the number is
+    // the summary's streamed tokens, the same one the spinner is showing one window over). What used to
+    // sit here was elapsed against the PREVIOUS compact's duration — a progress bar for something that
+    // reports no progress — and the version after that showed the context fill instead, which was real
+    // but was not progress and so was not what had been asked for.
     //
-    // This used to be elapsed/expected against the PREVIOUS compact's duration, printed as "~47%" — a
-    // progress bar for something that reports no progress. Nothing is written to the transcript between
-    // pre-compact and post-compact, so there is no signal there to find, and the house rule is that a
-    // figure Halo cannot obtain is not shown at all.
-    //
-    // The real number is the one the compact is ABOUT: how full the context is, straight out of the
-    // transcript's own token usage, which is the same figure the panel's ring and the "context NN% full"
-    // banner carry — one number, not three. It is deliberately not a progress reading: it holds while the
-    // compact runs and DROPS when it lands, which is the event worth watching. Labelled, so it cannot be
-    // read as one either.
-    internal static string ContextPct(CcStatus st)
-        => st.Session is { ContextMax: > 0 } ? $"ctx {(int)(ContextFrac(st) * 100)}%" : "";
+    // Empty until the first sample lands, which is right: for the first second there is genuinely nothing
+    // to say, and the pill's breathing wash already says that something is running.
+    internal static string CompactPct(CcStatus st)
+        => CompactProgress.Caption();
 
     // Minutes only, once there are minutes. Two figures on the right of a 220px pill is one more than it
     // was designed for, and every character there is taken off the verb - which arrived truncated

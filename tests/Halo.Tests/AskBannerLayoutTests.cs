@@ -106,9 +106,11 @@ public class AskBannerLayoutTests
         Assert.NotSame(AskBanner.Layout(ask, AskBanner.W), AskBanner.Layout(ask, AskBanner.W - 40));
     }
 
-    // Claude Code's own question UI always lets you ignore the options and write something. The banner
-    // appends that row itself rather than having the hook invent an option Claude never offered, so what
-    // pins it is that it is there for a question, absent for a permission, and always last.
+    // Claude Code's own question box carries a free-text field one row past the last option, so the banner
+    // carries the same row. It is appended here rather than sent by the hook, which forwards only what the
+    // tool offered - and what pins it is that it is there for a question, absent for a permission (a hook
+    // decision is a word, not a sentence), and always last, because the number of options is exactly how
+    // far the pill has to walk down to reach the field.
     [Fact]
     public void A_question_gets_a_write_your_own_row_appended_last()
     {

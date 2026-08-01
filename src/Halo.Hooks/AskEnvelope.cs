@@ -24,6 +24,9 @@ internal sealed record AskEnvelope(
 {
     internal bool IsExpired(DateTimeOffset now) => now >= ExpiresAt;
 
+    // The one that is mirrored rather than blocked on: the terminal draws its own box for it.
+    internal bool IsQuestion => Tool == "AskUserQuestion";
+
     internal string ToJson()
     {
         var options = new JsonArray();

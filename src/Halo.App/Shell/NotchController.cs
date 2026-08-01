@@ -588,6 +588,7 @@ internal sealed class NotchController
         CheckLimit("Codex", CodexLimits.SecondaryFrac, CodexLimits.SecondaryReset, "secondary");
         CheckInternet();
         CheckContext();
+        CheckCompact();
         CheckHourly();
         Almanac.Poke();   // idempotent: arms the half-hourly weather refresh once, ~20s after launch
     }
@@ -623,6 +624,18 @@ internal sealed class NotchController
         // a warned session that has since exited would otherwise sit in the set for the life of the
         // process; nothing reads it again, but it is unbounded across a long uptime
         if (_ctxWarned.Count > _ctxLive.Count) _ctxWarned.IntersectWith(_ctxLive);
+    }
+
+    // A compact reports its progress nowhere except the terminal it is running in, so that is what gets
+    // read - once a second, only while one is actually running, and only for the session that is running
+    // it. CompactProgress does the scrape on the pool; this side only decides whose console to look at.
+    private void CheckCompact()
+    {
+        int pid = 0;
+        for (int s = 0; s < StatusStore.MaxSessions && pid == 0; s++)
+            if (_claudeStore.SessionLive(s) is { State: "compacting", Pid: > 0 } st) pid = st.Pid;
+        if (pid > 0) ClaudeCode.CompactProgress.Poke(pid);
+        else if (ClaudeCode.CompactProgress.Tokens >= 0) ClaudeCode.CompactProgress.Done();
     }
 
     // on the hour (2:00, 3:00 …) a small glance banner with the time. Init to the current hour so
@@ -1502,9 +1515,12 @@ internal sealed class NotchController
                     // the write-your-own row opens a field instead of answering; every other row is its
                     // own answer, which is the whole point of the banner
                     if (AskBanner.IsOther(_askChips[i].Option)) BeginTyping();
-                    else
+                    // A question is answered by typing into the agent's terminal, which can fail (the
+                    // session is gone, the console will not attach). The banner only comes down if the
+                    // answer actually went somewhere - otherwise the question is still standing over
+                    // there, and taking the banner away would be a lie about having answered it.
+                    else if (_asks.Answer(ask, _askChips[i].Option.Label))
                     {
-                        _asks.Answer(ask, _askChips[i].Option.Label);
                         EndTyping();
                         ClearDraft();
                         _ask = null;

@@ -61,6 +61,10 @@ internal static class AskBanner
 
     internal static bool IsOther(AskOption option) => ReferenceEquals(option, Other);
 
+    // Back on. It was off for exactly as long as it took to find the way into the box's own free-text
+    // field - one row past the last option, reachable only by walking down off the end of the list (see
+    // AskStore.Write). The row is Halo's, not Claude's: the hook never invents an option Claude did not
+    // offer, and this one is appended by the banner and delivered as words rather than as a number.
     private static bool HasOther(PendingAsk ask) => ask.IsQuestion;
 
     // Layout is separate from painting so the hit-test and the drawing cannot disagree - a row you can see
@@ -189,7 +193,7 @@ internal static class AskBanner
 
         using (var tf = new Font("Segoe UI Semibold", TitlePx, GraphicsUnit.Pixel))
         using (var sf = Wrap(StringAlignment.Center))
-            Ink(g, Title(ask), tf, Slack(layout.Title), sf, White, a, seeThrough);
+            InkRtl(g, Title(ask), tf, Slack(layout.Title), sf, White, a, seeThrough);
 
         if (HasTarget(ask))
             using (var gf = new Font("Consolas", TargetPx, GraphicsUnit.Pixel))
@@ -284,11 +288,11 @@ internal static class AskBanner
             return;
         }
 
-        Ink(g, row.Option.Label, lf, Slack(row.Label), sf, White, a, seeThrough);
+        InkRtl(g, row.Option.Label, lf, Slack(row.Label), sf, White, a, seeThrough);
         if (row.Desc.Height <= 0f) return;
         // the description is the first thing to go over a bright window, so over an app it gives up some
         // of its recessiveness
-        Ink(g, row.Option.Description, df, Slack(row.Desc), sf, seeThrough ? DimClear : Dim, a, seeThrough);
+        InkRtl(g, row.Option.Description, df, Slack(row.Desc), sf, seeThrough ? DimClear : Dim, a, seeThrough);
     }
 
     private const float CaretW = 2f;
@@ -310,6 +314,18 @@ internal static class AskBanner
     // own antialiased edge as the only edge in the result.
     private static readonly PointF[] Halo =
         [new(-1f, 0f), new(1f, 0f), new(0f, -1f), new(0f, 1f)];
+
+    // Persian reads right to left, and every string on this banner comes from Claude or from the user, so
+    // any of them can be. DirectionRightToLeft is the whole fix: it flips what Near and Center mean and
+    // puts the ellipsis on the correct end. Applied per STRING rather than per banner - a Persian question
+    // over English option labels is the normal case here, not an edge one.
+    private static void InkRtl(Graphics g, string text, Font f, RectangleF r, StringFormat sf, Color c,
+        float a, bool seeThrough)
+    {
+        if (!Fx.IsRtl(text)) { Ink(g, text, f, r, sf, c, a, seeThrough); return; }
+        using var rsf = new StringFormat(sf) { FormatFlags = sf.FormatFlags | StringFormatFlags.DirectionRightToLeft };
+        Ink(g, text, f, r, rsf, c, a, seeThrough);
+    }
 
     private static void Ink(Graphics g, string text, Font f, RectangleF r, StringFormat sf, Color c,
         float a, bool seeThrough)

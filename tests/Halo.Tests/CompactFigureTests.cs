@@ -1,48 +1,50 @@
 using Halo.ClaudeCode;
-using Halo.Codex;
 using Halo.Widgets;
 using Xunit;
 
 namespace Halo.Tests;
 
-// The figure beside a running compact used to be elapsed/expected: a progress reading for something that
-// reports no progress, invented from the PREVIOUS compact's duration. What is shown now is the one number
-// that is real at that moment - how full the context is - and these pin the two properties that make it
-// worth showing at all: it is the SAME number the ring and the "context NN% full" banner carry, and it is
-// absent rather than guessed when there is no session to read.
+// The figure beside a running compact. Two wrong answers came before this one: elapsed against the
+// previous compact's duration (a progress bar for something that reports no progress) and then the
+// context fill (real, but a different question). What is read now is the summary's streamed tokens off
+// the agent's own terminal - the same counter the spinner is showing - so these pin the parsing and the
+// one honest weak point, which is what that count is divided by.
 public class CompactFigureTests
 {
-    private static CcStatus Ctx(long used, long max) =>
-        new() { State = "compacting", Session = new CcSession { ContextUsed = used, ContextMax = max } };
-
     [Theory]
-    [InlineData(0, 200_000, "ctx 0%")]
-    [InlineData(126_731, 1_000_000, "ctx 12%")]
-    [InlineData(170_000, 200_000, "ctx 85%")]
-    [InlineData(200_000, 200_000, "ctx 100%")]
-    public void TheCompactingPillReadsTheRealContextFill(long used, long max, string expected)
-        => Assert.Equal(expected, ClaudeCodeWidget.ContextPct(Ctx(used, max)));
+    [InlineData("* Compacting conversation... (esc to interrupt - 12s - 1.2k tokens)", 1200)]
+    [InlineData("* Infusing... (4m 10s - 13.1k tokens)", 13100)]
+    [InlineData("  832 tokens", 832)]
+    [InlineData("* Compacting conversation... (esc to interrupt - 3s)", null)]
+    [InlineData("dotnet build -c Release", null)]
+    [InlineData("", null)]
+    public void TheStreamedCountIsReadOffTheSpinner(string line, int? expected)
+        => Assert.Equal(expected, CompactProgress.Streamed(line));
 
-    // Truncated, not rounded, because the banner and the ring truncate: 84.9% must not read as 85 in one
-    // place and 84 in another when the whole point is that they agree.
+    // the spinner glyph is one of a rotating set and the wording changes between versions; the parse
+    // deliberately hangs on nothing but the number and the word after it
     [Fact]
-    public void ItTruncatesTheWayTheBannerDoes()
+    public void NeitherTheGlyphNorTheWordingIsPartOfTheContract()
     {
-        Assert.Equal("ctx 84%", ClaudeCodeWidget.ContextPct(Ctx(169_999, 200_000)));
-        Assert.Equal((int)(169_999 / 200_000.0 * 100) + "%", ClaudeCodeWidget.ContextPct(Ctx(169_999, 200_000))[4..]);
+        Assert.Equal(1200, CompactProgress.Streamed("~ Whatever it says next (1.2k tokens)"));
+        Assert.Equal(1200, CompactProgress.Streamed("1.2k tokens"));
     }
 
-    // No session, no window, nothing to divide by: the pill says nothing rather than 0% or a guess.
-    [Fact]
-    public void NothingKnownShowsNothing()
-    {
-        Assert.Equal("", ClaudeCodeWidget.ContextPct(new CcStatus { State = "compacting" }));
-        Assert.Equal("", ClaudeCodeWidget.ContextPct(Ctx(50_000, 0)));
-    }
+    // No previous compact to measure against means no percentage - the reading itself is shown, because
+    // it is real and it moves, and a percentage over an invented total would not be.
+    [Theory]
+    [InlineData(-1, 1200, "1.2k tok")]
+    [InlineData(-1, 832, "832 tok")]
+    [InlineData(-1, 0, "")]
+    [InlineData(-1, -1, "")]
+    [InlineData(47, 1200, "47%")]
+    [InlineData(99, 40000, "99%")]
+    public void ThePercentageOnlyAppearsOnceThereIsSomethingRealToDivideBy(int percent, int tokens, string expected)
+        => Assert.Equal(expected, CompactProgress.Caption(percent, tokens));
 
-    // Both figures share the right-hand end of a 220px pill, and what is left over is the verb's budget.
-    // With "2m 0s" beside the fill, the mood arrived cut mid-word ("big histo..."); with the seconds gone
-    // the same line fits whole. Seconds under a minute are kept - that is the whole reading at that point.
+    // While a compact runs the pill carries both the progress and the clock, and what is left is the
+    // verb's budget. With "2m 0s" beside it the mood arrived cut mid-word ("big histo..."); with the
+    // seconds gone the same line fits whole. Seconds under a minute stay - that is the whole reading then.
     [Theory]
     [InlineData("2m 0s", "2m")]
     [InlineData("14m 37s", "14m")]
@@ -50,17 +52,4 @@ public class CompactFigureTests
     [InlineData("", "")]
     public void TheClockCoarsensOnlyOnceThereAreMinutes(string elapsed, string expected)
         => Assert.Equal(expected, ClaudeCodeWidget.Coarse(elapsed));
-
-    private static CodexSnapshot Codex(long used, long max) => new(
-        CodexSurface.Cli, "compacting", null, System.DateTimeOffset.UtcNow, null, null, null, 7, 7,
-        used, max, 0, null, null, System.DateTimeOffset.UtcNow, true);
-
-    // Codex is the twin and gets the same treatment; its window is real too (model_context_window out of
-    // the rollout), which is what made the 180-second pacing it used to print indefensible.
-    [Fact]
-    public void TheCodexPillReadsItsOwnWindow()
-    {
-        Assert.Equal("ctx 40%", CodexWidget.ContextPct(Codex(108_800, 272_000)));
-        Assert.Equal("", CodexWidget.ContextPct(Codex(108_800, 0)));
-    }
 }

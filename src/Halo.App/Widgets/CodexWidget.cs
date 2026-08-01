@@ -182,8 +182,11 @@ internal sealed class CodexWidget : IWidget
         // the layout is measured before the words are chosen: the gap decides how long a line may be, or the
         // renderer ends up shrinking it to 9px to make a nineteen-character line fit twelve characters of room
         string el0 = LimitHit ? LimitReset() : Elapsed(st);
-        if (Compacting(st) && !LimitHit && ContextPct(st!) is { Length: > 0 } ctx)
-            el0 = el0.Length > 0 ? ctx + " · " + ClaudeCodeWidget.Coarse(el0) : ctx;
+        // No figure here on purpose. The Claude pill reads its compact's progress off the agent's own
+        // terminal; Codex's TUI has not been shown to publish a comparable counter, and the two numbers
+        // that were tried instead - elapsed against a flat 180s, then the context fill - were an invention
+        // and an answer to a different question. The clock and the breathing wash carry it until there is
+        // something real to read.
         float textX0 = x + sz + 11;
         if (st?.State == "waiting_input") textX0 += 16;
         using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -291,12 +294,6 @@ internal sealed class CodexWidget : IWidget
     private static bool Compacting(CodexSnapshot? st) =>
         st?.State == "compacting" && st.StartedAt is { } t && t != _cancelledCompactKey
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
-
-    // Twin of the Claude pill: the figure beside a running compact is how full the context is, not a
-    // fabricated bar. What sat here was elapsed/180s, a number with no source at all — Codex reports no
-    // compaction progress, but it DOES report model_context_window in its rollout, so the fill is real.
-    internal static string ContextPct(CodexSnapshot st)
-        => st.ContextMax > 0 ? $"ctx {(int)(ContextFrac(st) * 100)}%" : "";
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
     {

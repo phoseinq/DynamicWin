@@ -136,20 +136,22 @@ internal sealed class AskStore
         catch { }   // a failed probe is normal here and must degrade silently
     }
 
-    // A permission answers with the chip's own word, which Claude Code takes literally. A question cannot:
-    // a hook has no way to return WHICH option was chosen, so the pick is delivered as a deny naming the
-    // choice. That trade was put to the author when the design was approved and taken deliberately.
-    internal void Answer(PendingAsk ask, string label)
+    // A question and a permission are answered through completely different doors.
+    //
+    // A permission's answer IS the hook's decision, so it goes back through the rendezvous file the hook is
+    // sitting on. A question's cannot: a PreToolUse hook has no way to say "the user picked option two",
+    // and the deny-with-the-answer-in-the-reason trick that used to live here meant Claude Code never drew
+    // its own box and rendered the answer in red under "Error:". So the tool now runs, the terminal draws
+    // its box, and the pill answers it the way a human at that keyboard would - by typing the number into
+    // that terminal. No focus is taken (see ConsoleRead.Type), so answering on the pill does not pull the
+    // window forward.
+    internal bool Answer(PendingAsk ask, string label)
     {
+        if (ask.IsQuestion) return Press(ask, label);
         try
         {
-            // A question can only be answered from outside by DENYING the call and putting the answer in
-            // the reason, because a PreToolUse hook has no way to say "the user picked option two". Claude
-            // Code renders any denied call in red under "Error:", so the answer arrives looking like a
-            // failure. The word cannot be changed from here - it is the terminal's, not the pill's - so the
-            // reason says what it is instead, and the user's own words follow.
-            string decision = ask.IsQuestion ? "deny" : label;
-            string reason = ask.IsQuestion ? $"answered on the pill: {label}" : $"{label} from the pill";
+            string decision = label;
+            string reason = $"{label} from the pill";
             var json = new JsonObject
             {
                 ["nonce"] = ask.Nonce,
@@ -168,6 +170,79 @@ internal sealed class AskStore
             lock (_lock) _queue.Remove(ask.Nonce);
             System.Threading.Interlocked.Increment(ref _version);
         }
+        return true;
+    }
+
+    // Type the option's number into the agent's own terminal, exactly as the person sitting at it would.
+    //
+    // Nothing is sent if the terminal cannot be reached - a keystroke aimed at a window we have not found
+    // would land in whatever DID have focus, and typing a stray digit into someone's editor is a worse
+    // failure than the banner simply not working. The banner stays up in that case, because the question
+    // in the terminal is still standing too.
+    private bool Press(PendingAsk ask, string label)
+    {
+        if (ask.Pid <= 0) { Trace($"no pid for {ask.Nonce}"); return false; }
+        int index = -1;
+        for (int i = 0; i < ask.Options.Count && index < 0; i++)
+            if (string.Equals(ask.Options[i].Label, label, StringComparison.Ordinal)) index = i;
+
+        bool sent = index >= 0 && index < 9
+            // the box numbers its rows from one, and beyond nine there is no single key to send
+            ? Interop.ConsoleRead.Type(ask.Pid, (index + 1).ToString())
+            : Write(ask, label);
+        Trace($"{(index >= 0 ? "row " + (index + 1) : "words")} -> pid {ask.Pid} = {sent}");
+        if (!sent) return false;
+
+        // Dropped locally the moment it is sent rather than waiting for the hook's PostToolUse sweep: the
+        // banner must go on the click, and a rescan finding the file still there would put it straight back.
+        lock (_lock) _queue.Remove(ask.Nonce);
+        Forget(ask.Nonce);
+        try { File.Delete(Path.Combine(_dir, $"ask-{ask.Nonce}.json")); } catch { }
+        System.Threading.Interlocked.Increment(ref _version);
+        return true;
+    }
+
+    // Words of your own, into the box's own free-text field.
+    //
+    // The field is real - the tool's own description calls it "a skip button and a free-text input box for
+    // custom answers" - but nothing reaches it by typing: letters sent while an option is highlighted go
+    // nowhere and Enter just takes the highlight. It sits one row PAST the last option, so the way in is to
+    // walk down off the end of the list. Established by driving a live box and reading back what came out
+    // (the answer arrived as "halo typed this"), not from any documentation of the key map.
+    //
+    // The walk is done here and now, because its result is what tells the caller whether the banner may
+    // come down; the typing and the Enter follow on the pool, since the box needs a moment to swap fields
+    // and a quarter-second of sleeps on the render thread is a visible stutter.
+    private static bool Write(PendingAsk ask, string text)
+    {
+        int pid = ask.Pid, rows = ask.Options.Count;
+        if (rows <= 0 || string.IsNullOrWhiteSpace(text)) return false;
+        if (!Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkDown, rows)) return false;
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                System.Threading.Thread.Sleep(140);
+                if (!Interop.ConsoleRead.Type(pid, text)) return;
+                System.Threading.Thread.Sleep(140);
+                Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkEnter);
+            }
+            catch { }
+        });
+        return true;
+    }
+
+    // Dev trace for the one path that cannot be watched any other way: the pill is uncapturable, the
+    // keystroke goes to a window that is not in front, and "it did not send" has no other evidence.
+    private static void Trace(string line)
+    {
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "ask-debug.txt");
+            File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {line}\n");
+        }
+        catch { }
     }
 
     private void Forget(string nonce)

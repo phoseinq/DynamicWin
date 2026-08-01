@@ -183,9 +183,15 @@ internal static class Program
             // After the save, deliberately: the pill has to have this tool call on screen before the hook
             // parks itself for up to 20 seconds waiting for someone to click a chip. Claude only, because
             // Codex has no equivalent decision channel — that is a stated non-goal, not an omission.
+            int askOwner = status["pid"] is JsonValue pv && pv.TryGetValue<int>(out var askPid) ? askPid : 0;
             if (cmd == "tool" && !codex)
-                AskFlow.Run(ClaudeDir, input, Field("session_id"), Field("cwd"),
-                    status["pid"] is JsonValue pv && pv.TryGetValue<int>(out var askPid) ? askPid : 0);
+                AskFlow.Run(ClaudeDir, input, Field("session_id"), Field("cwd"), askOwner);
+
+            // The question is no longer answered by this hook, so nothing else would ever take it down:
+            // the box in the terminal has been dealt with by the time the tool finishes, however it was
+            // dealt with, and the mirrored banner has to go with it.
+            if (cmd == "tool-done" && !codex && Field("tool_name") == "AskUserQuestion")
+                AskFlow.Clear(ClaudeDir, askOwner);
 
             return 0;
         }

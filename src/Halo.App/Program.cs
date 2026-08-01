@@ -75,6 +75,38 @@ internal static class Program
         // sheet of Segoe Fluent Icons. Badge glyphs used to be chosen from memory of the MDL2 chart and
         // verified afterwards by looking for tofu, which is backwards: this shows what the font actually
         // has, so a code point is picked because it draws the right thing rather than because it exists.
+        // dev hook: `Halo.App --probe-console <pid> <out.txt>` — what that process's terminal is showing
+        // right now. Written to a FILE rather than printed: attaching to another console means letting go
+        // of ours, so there is nothing left to print to.
+        if (args.Length >= 3 && args[0] == "--probe-console")
+        {
+            int.TryParse(args[1], out int cpid);
+            int cbelow = args.Length > 3 && int.TryParse(args[3], out var cb) ? cb : 0;
+            System.IO.File.WriteAllText(args[2], Halo.Interop.ConsoleRead.Describe(cpid, 16, cbelow));
+            return;
+        }
+        // dev hook: `Halo.App --probe-type <pid> <text> <out.txt>` — type into that terminal without
+        // taking the foreground, then read back what it now shows. The read-back is the point: this is the
+        // mechanism the pill answers Claude's own question box with, and "did the key arrive" is not
+        // something to assume.
+        if (args.Length >= 4 && args[0] == "--probe-type")
+        {
+            int.TryParse(args[1], out int tpid);
+            // "down:3" / "enter" / plain text — the named keys exist because arrows carry no character
+            bool sent = args[2] switch
+            {
+                "enter" => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkEnter),
+                "tab" => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkTab),
+                var s when s.StartsWith("down:") && int.TryParse(s[5..], out var n)
+                    => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkDown, n),
+                var s when s.StartsWith("up:") && int.TryParse(s[3..], out var n)
+                    => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkUp, n),
+                _ => Halo.Interop.ConsoleRead.Type(tpid, args[2]),
+            };
+            System.Threading.Thread.Sleep(400);
+            System.IO.File.WriteAllText(args[3], $"sent={sent}\n" + Halo.Interop.ConsoleRead.Dump(tpid, 10));
+            return;
+        }
         if (args.Length >= 2 && args[0] == "--render-fluent")
         { RenderFluent(args[1], args.Length > 2 ? args[2] : "E700", args.Length > 3 ? args[3] : "256"); return; }
         // dev hook: `Halo.App --render-bar <out.png>` — the pill's background progress bar as a filmstrip,
