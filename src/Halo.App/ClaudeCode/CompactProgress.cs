@@ -15,10 +15,8 @@ namespace Halo.ClaudeCode;
 // exactly what makes AttachConsole to the agent's possible.
 //
 // What is read is real and live: the tokens of the summary written so far, the same number the user is
-// looking at one window over. The DENOMINATOR is the honest weak point - nothing announces how long the
-// summary will be - so it is measured rather than invented: the final count of the last compact on this
-// machine, written to disk when compact_end lands. Until one has been observed there is no percentage at
-// all and the token count itself is shown, which is a real reading that moves.
+// looking at one window over. The denominator is the honest weak point - nothing announces how long the
+// summary will be - and it is measured rather than invented (see TypicalSummary).
 internal static class CompactProgress
 {
     // -1 = nothing known. Volatile: written on the pool, read on the render thread.
@@ -26,11 +24,26 @@ internal static class CompactProgress
     public static volatile int Tokens = -1;
     public static int Version;
 
+    // What the summary is expected to come to.
+    //
+    // Claude Code computes no percentage of its own - the spinner carries elapsed time and the streamed
+    // count, and that is all there is - so the denominator has to come from somewhere else. It is
+    // measured, not guessed: the four compactions in this project's own transcripts produced summaries of
+    // 5.0k, 5.3k, 5.9k and 6.5k tokens, a 1.3x spread, because the summarising prompt bounds the shape of
+    // what comes back. Hence a real figure to divide by from the FIRST compact, replaced by what this
+    // machine actually did as soon as one has been watched to the end.
+    //
+    // The numerator is exact and starts at zero, which is what makes this work at all: the counter is
+    // RESET immediately before compact_start (verified in the shipped binary - `{type:"response_length",
+    // op:"reset"}` sits directly before the compact_start event), so during a compact it counts the
+    // summary and nothing else, even when an auto-compact interrupts a turn that had already written a lot.
+    private const int TypicalSummary = 5700;
+
     private static int _busy;
     private static long _polledAt;
     private static int _pid;
     private static int _peak;            // the highest reading of THIS compact, for calibration
-    private static int _expect;          // what the last compact finished at
+    private static int _expect = TypicalSummary;
     private static bool _loaded;
 
     private static readonly string CalibPath = Path.Combine(
@@ -81,8 +94,19 @@ internal static class CompactProgress
 
         if (t > _peak) _peak = t;
         Tokens = t;
-        Percent = _expect > 0 ? (int)Math.Clamp(100L * t / _expect, 1, 99) : -1;
+        // Never backwards, and never 100 until it is actually over: a summary that runs longer than the
+        // last one would otherwise sit at 99 having appeared to finish, which is a worse lie than a bar
+        // that slows down. compact_end is what takes it off the pill.
+        int now = Share(t);
+        Percent = Percent < 0 ? now : Math.Max(Percent, now);
         Interlocked.Increment(ref Version);
+    }
+
+    // Pure: the reading as a share of what the summary is expected to come to.
+    internal static int Share(int tokens, int expect = 0)
+    {
+        int total = expect > 0 ? expect : _expect;
+        return total <= 0 || tokens <= 0 ? -1 : (int)Math.Clamp(100L * tokens / total, 1, 99);
     }
 
     // "(esc to interrupt - 12s - 1.2k tokens)" -> 1200. Pure, and the whole of what is parsed: the arrow,

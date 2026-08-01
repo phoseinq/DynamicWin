@@ -30,6 +30,20 @@ public class CompactFigureTests
         Assert.Equal(1200, CompactProgress.Streamed("1.2k tokens"));
     }
 
+    // Claude Code shows no percentage of its own - its spinner carries the elapsed clock and the streamed
+    // count, nothing else - so the share is Halo's arithmetic over a measured expectation. Four real
+    // compactions in this project's transcripts came to 5.0k / 5.3k / 5.9k / 6.5k tokens, so a summary
+    // running to about its expectation must read as nearly done, and one that overruns must not reach 100
+    // (only compact_end ends it).
+    [Theory]
+    [InlineData(0, 5700, -1)]
+    [InlineData(570, 5700, 10)]
+    [InlineData(2850, 5700, 50)]
+    [InlineData(5700, 5700, 99)]
+    [InlineData(9000, 5700, 99)]
+    public void TheShareIsTheReadingOverWhatASummaryComesTo(int tokens, int expect, int share)
+        => Assert.Equal(share, CompactProgress.Share(tokens, expect));
+
     // No previous compact to measure against means no percentage - the reading itself is shown, because
     // it is real and it moves, and a percentage over an invented total would not be.
     [Theory]
