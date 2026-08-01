@@ -1,0 +1,124 @@
+<Application x:Class="Halo.Settings.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <!-- The palette is lifted from the approved preview, unchanged: ink, two quieter greys, four
+             frost levels for glass surfaces, and three accents. Blue belongs to selected navigation and
+             focus only, mint means a thing is on, coral means it wants attention. -->
+        <SolidColorBrush x:Key="Ink" Color="#F7F9FB" />
+        <SolidColorBrush x:Key="Secondary" Color="#C2CCD7" />
+        <SolidColorBrush x:Key="Quiet" Color="#82909F" />
+        <SolidColorBrush x:Key="Frost" Color="#18FFFFFF" />
+        <SolidColorBrush x:Key="FrostHover" Color="#27FFFFFF" />
+        <SolidColorBrush x:Key="FrostPressed" Color="#34FFFFFF" />
+        <SolidColorBrush x:Key="FrostEdge" Color="#2EFFFFFF" />
+        <SolidColorBrush x:Key="Navigation" Color="#7CB4FF" />
+        <SolidColorBrush x:Key="Mint" Color="#78DDB2" />
+        <SolidColorBrush x:Key="Coral" Color="#FF9A8B" />
+        <SolidColorBrush x:Key="Graphite" Color="#64707D" />
+        <SolidColorBrush x:Key="RailFill" Color="#3210151D" />
+        <SolidColorBrush x:Key="Obsidian" Color="#52151A22" />
+
+        <!-- Every control is templated. The preview's five faults were all default chrome showing
+             through - a ScrollViewer's inset, a Button's blue pressed state - so nothing here inherits
+             a stock template. -->
+        <Style x:Key="Glass" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource Frost}" />
+            <Setter Property="BorderBrush" Value="{StaticResource FrostEdge}" />
+            <Setter Property="Foreground" Value="{StaticResource Ink}" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="13,7" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Shell" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostHover}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostPressed}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="NavItem" TargetType="Button" BasedOn="{StaticResource Glass}">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="Margin" Value="8,1" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+
+        <!-- The window buttons are the one place a hover has to read as "this will close the window",
+             so close warms to coral rather than to more frost. -->
+        <Style x:Key="Caption" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource Secondary}" />
+            <Setter Property="Cursor" Value="Arrow" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Shell" Background="{TemplateBinding Background}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostHover}" />
+                                <Setter Property="Foreground" Value="{StaticResource Ink}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CloseCaption" TargetType="Button" BasedOn="{StaticResource Caption}">
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource Coral}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- A scrollbar wide enough to grab and quiet enough to ignore. The stock one drew a track and
+             two arrow buttons over the glass. -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="7" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Track x:Name="PART_Track" IsDirectionReversed="True">
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border Background="#33FFFFFF" CornerRadius="3" Margin="2,0" />
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                        </Track>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
+</Application>

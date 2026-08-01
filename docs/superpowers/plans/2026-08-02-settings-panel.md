@@ -4,6 +4,35 @@ Approved: **WPF**, the visual design from `codex/management-panel-foundation`'s 
 written here. Not a merge of that branch — its 30 commits sit on a base 13 behind master and rewrite
 `NotchController` and `NotifSource`, both of which master changed heavily the same night.
 
+## The design is on the LIQUID-GLASS branch, not the foundation one
+
+Corrected after the first build: `codex/management-panel-foundation` carries the older twelve-page flat
+rail, and what was approved is `codex/liquid-glass-settings-preview` — six entries under group headers,
+which is a different information architecture, not a restyle.
+
+    Home
+    SETTINGS   General · Features · Agents
+    SYSTEM     Access
+    REFERENCE  Docs & About
+
+Deltas from what is built here now, all visible in the approved screenshot:
+
+1. **Nav**: 6 entries with `SETTINGS` / `SYSTEM` / `REFERENCE` headers between them, plus a Home page
+   above the first header. The eleven feature pages collapse into one **Features** page and the three
+   agent pages into **Agents**.
+2. **Selection**: a blue-tinted rounded pill behind the row, blue icon and blue label — not the frost
+   fill built here. Blue is still confined to selection.
+3. **Rows**: one card per row with a gap between them, not one grouped container with hairline
+   separators.
+4. **A slider row exists** (`Pill scale`, a track with a "100%" readout on the right). `RowKind.Slider`
+   is not implemented here yet.
+5. Type is a step larger: page title ~30px, row label ~13.5px, description ~12px.
+
+Its `MainWindow.xaml.cs` is 1270 lines and also carries `SettingsDraftSession`, `SettingsPanelPolicy`,
+`PreviewInteractionPolicy` and a `HaloRestartCoordinator`. The draft/apply machinery is deliberately NOT
+wanted: settings here are written on the touch and picked up by the pill's watcher, so there is nothing
+to apply and nothing to restart.
+
 ## What comes from the branch
 
 Design only, ported by hand:

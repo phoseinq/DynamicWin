@@ -1,0 +1,90 @@
+<Window x:Class="Halo.Settings.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Halo settings" Height="580" Width="880" MinHeight="470" MinWidth="720"
+        WindowStartupLocation="CenterScreen" Background="Transparent"
+        TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True"
+        FontFamily="Segoe UI Variable Text, Segoe UI">
+    <!-- GlassFrameThickness -1 extends the frame on all four sides, which is the whole difference
+         between a window sitting ON the acrylic and one with a bright inset down its left edge.
+         CaptionHeight 0 because the title bar below is ours; the drag is wired by hand. -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" CornerRadius="0" GlassFrameThickness="-1"
+                            ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- one full-window tint, not a rectangular patch: the preview's grey block was a patch -->
+        <Border Grid.RowSpan="2" Background="{StaticResource Obsidian}" IsHitTestVisible="False" />
+
+        <Grid x:Name="TitleBar" MouseLeftButtonDown="TitleBar_Drag" Background="Transparent">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
+                <Grid Width="25" Height="25">
+                    <Ellipse StrokeThickness="2">
+                        <Ellipse.Stroke>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#7CB4FF" Offset="0.12" />
+                                <GradientStop Color="#78DDB2" Offset="0.82" />
+                            </LinearGradientBrush>
+                        </Ellipse.Stroke>
+                    </Ellipse>
+                    <Border Width="15" Height="7" CornerRadius="4" Background="#B8151A22" />
+                </Grid>
+                <TextBlock Text="Halo settings" Foreground="{StaticResource Ink}" Margin="10,0,0,0"
+                           FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                           FontSize="13" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <!-- The caption buttons are the SYSTEM's. Drawing our own beside them is what the first run
+                 did, and Windows drew both; the native ones also carry Snap Layouts on hover, which a
+                 hand-drawn pair silently loses. The column below just keeps the title clear of them. -->
+            <Border Grid.Column="2" Width="150" Background="Transparent" IsHitTestVisible="False" />
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="12,0,12,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="190" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border CornerRadius="20" Background="{StaticResource RailFill}"
+                    BorderBrush="{StaticResource FrostEdge}" BorderThickness="1">
+                <ScrollViewer VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                              Focusable="False">
+                    <StackPanel x:Name="NavPanel" Margin="0,12" />
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Column="1" Margin="24,13,6,10">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <StackPanel Margin="0,0,0,14">
+                    <TextBlock x:Name="PageTitle" Foreground="{StaticResource Ink}"
+                               FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                               FontSize="27" />
+                    <TextBlock x:Name="PageDescription" Foreground="{StaticResource Secondary}"
+                               FontSize="12.5" FontWeight="Medium" Margin="0,3,0,0" TextWrapping="Wrap" />
+                </StackPanel>
+                <ScrollViewer x:Name="DetailScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled" Focusable="False"
+                              Background="Transparent">
+                    <StackPanel x:Name="ContentPanel" Margin="0,2,12,10" />
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>
