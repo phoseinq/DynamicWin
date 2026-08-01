@@ -286,7 +286,6 @@ internal sealed class NotchController
     private int _lastCaptureVer;
     // edge-triggered system alerts (throttled to ~1/s in CheckAlerts); each flag fires once per episode
     private long _alertAt;
-    private bool _battWarned;                                   // low-battery banner already shown this discharge
     // usage>=80% banners: one per RESET WINDOW, keyed by the window's reset time — a value that dips
     // and climbs again (Codex rollout values oscillate between sessions) must NOT re-fire ("اسپم").
     // Persisted: an in-memory-only map re-fired the banner after every restart/deploy.
@@ -322,7 +321,6 @@ internal sealed class NotchController
         }
         catch { }
     }
-    private bool _netBadShown;                                  // "bad internet" already shown this bad spell
     public NotchController(LayeredNotch notch)
     {
         _notch = notch;
@@ -339,11 +337,11 @@ internal sealed class NotchController
         _keys.OnChar = TypedChar;
         _keys.OnKey = TypedKey;
 
-        // Read and stamped in the same breath. If it were stamped when the animation ENDS, a launch that
-        // was closed or crashed halfway through would greet again on the next one, and the settings panel
-        // restarting Halo is exactly the workload that would find that.
+        // Read and stamped in the same breath. If it were stamped when the animation ENDS, a launch closed
+        // or crashed halfway through would replay the long introduction on the next one, and the settings
+        // panel restarting Halo is exactly the workload that would find that.
         _greet = GreetingGate.Read(GreetedPath);
-        if (_greet != GreetingKind.None) GreetingGate.Mark(GreetedPath);
+        GreetingGate.Mark(GreetedPath);
         _codexStore = new CodexStatusStore();
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
@@ -501,8 +499,13 @@ internal sealed class NotchController
     // ended up translating one and missing the other. One shape now: the resource word, whose process
     // list to blame, and whether an unknown top process still deserves a banner (CPU: no, RAM: yes).
     // Sampling CPU takes ~500ms → stays off the UI thread; EnqueueLocal is thread-safe. English (Halo rule).
+    //
+    // The tile and the kind follow the resource. They used to be hard-coded to the CPU's, so a memory
+    // warning arrived wearing a processor die — and shared a Kind with it, which meant a queued CPU banner
+    // and a RAM banner deduped into one.
     private void QueueLoadNotice(string resource, int pct, Func<string?> topProcess, string? fallbackBody)
     {
+        bool cpu = resource == "CPU";
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
         {
             string? top = topProcess();
@@ -511,7 +514,8 @@ internal sealed class NotchController
             _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
             {
                 App = "System", Title = $"High {resource} usage — {pct}%",
-                Body = body, Kind = "cpu", Duration = 7, Icon = CpuBadge(),
+                Body = body, Kind = cpu ? "cpu" : "memory", Duration = 7,
+                Icon = cpu ? Badges.Cpu() : Badges.Memory(),
             });
         });
     }
@@ -613,7 +617,7 @@ internal sealed class NotchController
             {
                 App = "Claude", Title = $"Context {(int)(frac * 100)}% full",
                 Body = "Answers get vaguer from here — /compact when you can.",
-                Kind = "ctx-" + id, Duration = 8, Icon = LimitBadge(),
+                Kind = "ctx-" + id, Duration = 8, Icon = Badges.Context(),
             });
         }
         // a warned session that has since exited would otherwise sit in the set for the life of the
@@ -637,7 +641,7 @@ internal sealed class NotchController
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
             App = Almanac.Label, Title = Almanac.Headline(t), Body = Almanac.Detail(t),
-            Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
+            Kind = "hourly", Duration = 6, Icon = Badges.Hourly(),
         });
     }
 
@@ -677,7 +681,7 @@ internal sealed class NotchController
                     _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
                     {
                         App = Almanac.Label, Title = Almanac.Headline(t), Body = Almanac.Detail(t),
-                        Kind = "hourly", Duration = 6, Icon = HourlyBadge(),
+                        Kind = "hourly", Duration = 6, Icon = Badges.Hourly(),
                     });
                     break;
             }
@@ -685,20 +689,38 @@ internal sealed class NotchController
         catch { }
     }
 
+    // Two rungs rather than one. A single 20% latch meant a laptop that went 19% → 6% said nothing the
+    // second time, which is the moment the warning is actually for; the tier only ever ratchets DOWN while
+    // unplugged, so the second banner costs one more interruption and never nags. Plugging in re-arms both.
+    private static readonly int[] BatteryTiers = [20, 10];
+    private int _battTier = -1;
+
     private void CheckBattery()
     {
         if (!Win32.GetSystemPowerStatus(out var s)) return;
         bool onBattery = s.ACLineStatus == 0;   // 1 = plugged, 255 = unknown
         int pct = s.BatteryLifePercent;          // 255 = unknown
-        if (!onBattery) { _battWarned = false; return; }   // plugged → re-arm
-        if (pct > 20 || pct > 100) { _battWarned = false; return; } // above threshold / unknown → re-arm
-        if (_battWarned) return;
-        _battWarned = true;
+        if (!onBattery || pct > 100) { _battTier = -1; return; }   // plugged / unknown → re-arm
+        int tier = BatteryTier(pct);
+        if (tier <= _battTier) { if (tier < 0) _battTier = -1; return; }
+        _battTier = tier;
+        bool dead = tier >= 1;
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
-            App = "Battery", Title = $"Battery low — {pct}%", Body = "Tap to turn on Power Saver.",
-            Kind = "battery", Duration = 8, OnActivate = EnablePowerSaver, Icon = BatteryBadge(),
+            App = "Battery", Title = $"Battery {(dead ? "critical" : "low")} — {pct}%",
+            Body = "Tap to turn on Power Saver.",
+            Kind = "battery", Duration = 8, OnActivate = EnablePowerSaver,
+            Icon = dead ? Badges.BatteryDead() : Badges.BatteryLow(),
         });
+    }
+
+    // -1 above the first rung, then 0 (low) and 1 (critical). Pure so the ratchet can be tested without a
+    // battery to drain.
+    internal static int BatteryTier(int pct)
+    {
+        int t = -1;
+        for (int i = 0; i < BatteryTiers.Length; i++) if (pct <= BatteryTiers[i]) t = i;
+        return t;
     }
 
     // switch to the built-in Power saver scheme (GUID). ponytail: some Win11 builds hide legacy plans,
@@ -733,19 +755,73 @@ internal sealed class NotchController
         _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
         {
             App = app, Title = $"{app} usage {p}%", Body = $"You've used {p}% of your {window} limit.",
-            Kind = $"limit-{app}-{window}", Duration = 8, Icon = LimitBadge(),
+            Kind = $"limit-{app}-{window}", Duration = 8,
+            Icon = LongWindow(window) ? Badges.LimitLong() : Badges.Limit(),
         });
     }
 
+    // A window measured in days gets a calendar, one you can burn through in an afternoon gets a bolt. The
+    // names are positional for Codex ("primary"/"secondary") because nothing here can verify how long its
+    // second bucket actually is.
+    internal static bool LongWindow(string window) => window is "weekly" or "secondary";
+
+    // Three different pieces of news, which used to be one. Slow was the only one that ever raised a
+    // banner, so an outright outage — the case where you want to stop typing and go look at the router —
+    // arrived as "Bad internet", if it arrived at all. Ordered by which fact supersedes the others: with
+    // no internet at all it is pointless to also say the API is unreachable.
+    private string? _netShown;
     private void CheckInternet()
     {
-        if (!ClaudeCode.NetMon.Slow) { _netBadShown = false; return; }
-        if (_netBadShown) return;
-        _netBadShown = true;
-        _notifSrc.EnqueueLocal(new Halo.Notifications.NotifItem
+        var trouble = NetTrouble(ClaudeCode.NetMon.NetDown, ClaudeCode.NetMon.ApiDown, ClaudeCode.NetMon.Slow);
+        if (trouble == _netShown) return;   // unchanged, or cleared: nothing to say either way
+        _netShown = trouble;
+        if (trouble is null) return;        // recovered — the pill's own colour already says so
+        var item = trouble switch
         {
-            App = "Network", Title = "Bad internet", Kind = "net", Duration = 6, Icon = NetBadge(),
-        });
+            "offline" => new Halo.Notifications.NotifItem
+            {
+                App = "Network", Title = "No internet", Body = "Nothing is getting out right now.",
+                Kind = "net", Duration = 7, Icon = Badges.NetDown(),
+            },
+            "api" => new Halo.Notifications.NotifItem
+            {
+                App = "Claude", Title = "Claude is unreachable", Body = "Your connection is fine — theirs isn't.",
+                Kind = "net", Duration = 7, Icon = Badges.ApiDown(),
+            },
+            _ => new Halo.Notifications.NotifItem
+            {
+                App = "Network", Title = "Bad internet", Kind = "net", Duration = 6, Icon = Badges.NetSlow(),
+            },
+        };
+        _notifSrc.EnqueueLocal(item);
+    }
+
+    // pure: which of the three the sample deserves, worst first. Null = nothing wrong.
+    internal static string? NetTrouble(bool netDown, bool apiDown, bool slow)
+        => netDown ? "offline" : apiDown ? "api" : slow ? "slow" : null;
+
+    // Waking is a start too, and the one this machine actually does - a laptop that sleeps instead of
+    // shutting down can go weeks without a boot, which is how the hand ended up being something the user
+    // had never seen outside a dev run.
+    //
+    // Detected from the render loop rather than from a power broadcast: the process is frozen while the
+    // machine is suspended, so a frame arriving a long wall-clock gap after the last one IS the wake. No
+    // window to subscribe with (this one is NOACTIVATE and takes no WM_POWERBROADCAST), no new dependency,
+    // and it cannot miss a wake by having slept through the notification itself. _dt is no use for this:
+    // it is clamped to 50ms precisely so a resume advances one step instead of leaping.
+    internal static readonly TimeSpan WakeGap = TimeSpan.FromSeconds(90);
+    private DateTime _lastTickUtc = DateTime.UtcNow;
+
+    private void CheckWake()
+    {
+        var now = DateTime.UtcNow;
+        var gap = now - _lastTickUtc;
+        _lastTickUtc = now;
+        // a banner, a question or a greeting already on screen owns the pill; the hand waits for the next
+        // wake rather than cutting in front of something that has a reader
+        if (gap < WakeGap || _greet != GreetingKind.None || _notif != null || _ask != null) return;
+        _greet = GreetingKind.Login;
+        _greetT = 0f;
     }
 
     // real per-frame delta (seconds), so animations run at the same wall-clock speed whether the
@@ -916,6 +992,7 @@ internal sealed class NotchController
         // "hello" can be missed without cost.
         float prevGreetT = _greetT;
         var prevGreet = _greet;
+        CheckWake();
         if (_greet != GreetingKind.None)
         {
             if (_asks.Pending != null) { _greet = GreetingKind.None; _greetT = 0f; }
@@ -2239,7 +2316,7 @@ internal sealed class NotchController
             LaunchPath = path,    // click → open the saved image
             // this was the one banner shipping no icon at all: the preview takes the icon slot, so the
             // badge was simply never drawn and Fx.AccentOf(null) left it the only banner with no glow
-            Icon = isScreenshot ? ShotBadge() : ClipBadge(),
+            Icon = isScreenshot ? Badges.Shot() : Badges.Clip(),
         });
     }
 
@@ -2282,7 +2359,7 @@ internal sealed class NotchController
         catch { }
         var item = new Halo.Notifications.NotifItem
         {
-            App = "Keyboard", Title = name, Icon = LangBadge(code),
+            App = "Keyboard", Title = name, Icon = Badges.Language(code),
             Kind = "language", Duration = 1, // flips are glances — 1s, and a rapid burst shouldn't queue
         };
         // rapid Alt+Shift: swap the banner that's already showing (instant, no re-morph) instead of
@@ -2298,107 +2375,53 @@ internal sealed class NotchController
         _notifSrc.EnqueueLocal(item);
     }
 
-    // rounded badge with the language's 2-letter code (EN / FA …). Vivid gradient whose hue is derived
-    // from the code so each language is distinct AND the banner's glow (Fx.AccentOf) has a real colour.
-    private static Bitmap LangBadge(string code)
-    {
-        var b = new Bitmap(64, 64, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(b);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-        int hue = ((code.Length > 0 ? code[0] : 'A') * 37 + (code.Length > 1 ? code[1] : 0) * 17) % 360;
-        using (var lg = new LinearGradientBrush(new RectangleF(3, 3, 58, 58),
-                   Fx.HsvToRgb(hue, 0.60f, 0.96f), Fx.HsvToRgb((hue + 20) % 360, 0.72f, 0.78f), 90f))
-        using (var p = Fx.Rounded(new RectangleF(3, 3, 58, 58), 17f))
-            g.FillPath(lg, p);
-        using var f = new Font("Segoe UI Semibold", 25f, GraphicsUnit.Pixel);
-        using var wb = new SolidBrush(Color.FromArgb(245, 255, 255, 255));
-        using var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-        g.DrawString(code, f, wb, new RectangleF(0, 0, 64, 64), sf);
-        return b;
-    }
-
-    // fun badge for Halo's OWN system notifs that ship no app icon (battery / network / usage / clock /
-    // cpu). Same recipe as LangBadge — a vivid rounded gradient tile + a Fluent glyph — so the banner's
-    // glow (Fx.AccentOf) still picks up a real colour instead of the plain letter-in-a-ring fallback.
-    // Glyph centred by ink bounds (metric-centred Fluent glyphs read visibly off).
-    private static readonly FontFamily BadgeGlyphFont = new("Segoe Fluent Icons");
-    private static Bitmap LocalBadge(int glyphCp, int hue, float glyphPx = 30f)
-    {
-        var b = new Bitmap(64, 64, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(b);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var lg = new LinearGradientBrush(new RectangleF(3, 3, 58, 58),
-                   Fx.HsvToRgb(hue, 0.62f, 0.96f), Fx.HsvToRgb((hue + 24) % 360, 0.74f, 0.78f), 90f))
-        using (var p = Fx.Rounded(new RectangleF(3, 3, 58, 58), 17f))
-            g.FillPath(lg, p);
-        using var path = new GraphicsPath();
-        using var sf = new StringFormat(StringFormat.GenericTypographic);
-        path.AddString(((char)glyphCp).ToString(), BadgeGlyphFont, (int)FontStyle.Regular, glyphPx, PointF.Empty, sf);
-        path.Flatten();
-        var gb = path.GetBounds();
-        if (gb.Width > 0 && gb.Height > 0)
-        {
-            using var m = new Matrix();
-            m.Translate(MathF.Round(32f - gb.Width / 2f - gb.X), MathF.Round(32f - gb.Height / 2f - gb.Y));
-            path.Transform(m);
-            using var wb = new SolidBrush(Color.FromArgb(245, 255, 255, 255));
-            g.FillPath(wb, path);
-        }
-        return b;
-    }
-
-    // glyphs verified via --render-notif (no tofu). hue sets the tile colour + the banner glow.
-    private static Bitmap BatteryBadge() => LocalBadge(0xE996, 12);   // BatterySaver — amber/red
-    private static Bitmap NetBadge()     => LocalBadge(0xEB5E, 5, 34f);// WifiWarning — red
-    private static Bitmap BtBadge()      => LocalBadge(0xE702, 215);   // Bluetooth — blue
-    private static Bitmap LimitBadge()   => LocalBadge(0xE9D9, 285);   // Speed/gauge — purple
-    private static Bitmap ClockBadge()   => LocalBadge(0xE917, 205);   // Recent (clock) — blue
-    private static Bitmap CpuBadge()     => LocalBadge(0xE950, 28);       // Processor icon tile
-    private static Bitmap ShotBadge()    => LocalBadge(0xE722, 200, 28f);// Camera — blue
-    private static Bitmap ClipBadge()    => LocalBadge(0xE8C8, 155, 28f);// Copy — teal
-
-    // The hourly badge carries the sky, which is why the chime's text no longer has to. Falls back to the
-    // clock when there is no reading — a banner with no weather in it must not imply one.
-    private static Bitmap HourlyBadge()
-    {
-        if (Almanac.Latest is not { } wx) return ClockBadge();
-        var (glyph, hue) = Almanac.SkyBadge(wx.Code, wx.Day);
-        return LocalBadge(glyph, hue, 32f);
-    }
-
-    // dev-only: the generated notif badges in a row, for a tofu eyeball via --render-badges. The four sky
-    // tiles are listed by hand rather than through HourlyBadge(), which would only ever render today's
-    // weather — and the flake is the one glyph here that is a stand-in rather than the real thing.
-    internal static Bitmap[] AllLocalBadges() => new[]
-    {
-        BatteryBadge(), NetBadge(), LimitBadge(), ClockBadge(), CpuBadge(), ShotBadge(), ClipBadge(),
-        LocalBadge(0xE706, 30, 32f), LocalBadge(0xE708, 232, 32f),
-        LocalBadge(0xE753, 220, 32f), LocalBadge(0xEA38, 188, 32f),
-    };
-
-    // dev-only: the banners Halo raises itself, for --render-local. They live here, beside the badge
-    // factories and the real EnqueueLocal calls, because the alignment bug this hook exists to catch was
-    // invisible for months — every hook rendered a MIRRORED toast, which always has a body, and it is the
-    // body-less ones that were broken. Kept next to the originals so the two cannot drift apart quietly.
+    // dev-only: the banners Halo raises itself, for --render-local. They live here, beside the real
+    // EnqueueLocal calls, because the alignment bug this hook exists to catch was invisible for months —
+    // every hook rendered a MIRRORED toast, which always has a body, and it is the body-less ones that were
+    // broken. Kept next to the originals so the two cannot drift apart quietly.
     internal static Halo.Notifications.NotifItem[] SampleLocalNotices(Bitmap shot) => new[]
     {
         new Halo.Notifications.NotifItem
         {
             App = Halo.Notifications.NotifItem.ScreenshotApp,
             Title = Halo.Notifications.NotifItem.ScreenshotTitle,
-            Preview = shot, Icon = ShotBadge(),
+            Preview = shot, Icon = Badges.Shot(),
         },
-        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet", Icon = NetBadge() },
+        new Halo.Notifications.NotifItem { App = "Network", Title = "Bad internet", Icon = Badges.NetSlow() },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Network", Title = "No internet", Body = "Nothing is getting out right now.",
+            Icon = Badges.NetDown(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Claude", Title = "Claude is unreachable", Body = "Your connection is fine — theirs isn't.",
+            Icon = Badges.ApiDown(),
+        },
         new Halo.Notifications.NotifItem
         {
             App = "System", Title = "High CPU usage — 92%", Body = "chrome.exe is using the most.",
-            Icon = CpuBadge(),
+            Icon = Badges.Cpu(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "System", Title = "High memory usage — 88%", Body = "Chrome is using the most.",
+            Icon = Badges.Memory(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Battery", Title = "Battery critical — 7%", Body = "Tap to turn on Power Saver.",
+            Icon = Badges.BatteryDead(),
+        },
+        new Halo.Notifications.NotifItem
+        {
+            App = "Claude", Title = "Context 85% full",
+            Body = "Answers get vaguer from here — /compact when you can.", Icon = Badges.Context(),
         },
         new Halo.Notifications.NotifItem
         {
             App = "Claude", Title = "Claude usage 85%", Body = "You've used 85% of your weekly limit.",
-            Icon = LimitBadge(),
+            Icon = Badges.LimitLong(),
         },
         // the chime, with a reading it will not have on a fresh process: this is the shape that has to be
         // looked at, since the whole point of the rewrite was how crowded the line was
@@ -2407,7 +2430,7 @@ internal sealed class NotchController
             App = "Tehran",
             Title = Almanac.Headline(DateTime.Today.AddHours(1), new Almanac.Weather(27, 0, Day: false), metric: true),
             Body = Almanac.Detail(DateTime.Today.AddHours(1), CalendarKind.SolarHijri),
-            Icon = LocalBadge(0xE708, 232, 32f),
+            Icon = Badges.Local(0xE708, 232, 32f),
         },
     };
 

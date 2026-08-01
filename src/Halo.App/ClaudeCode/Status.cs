@@ -38,7 +38,6 @@ internal sealed class CcStatus
     public string? StartedAt { get; set; }
     public string? Message { get; set; } // what Claude is asking (notify hook)
     public string? CompactedAt { get; set; } // when the last compact finished
-    public long LastCompactMs { get; set; } // how long the last compact took (drives the % estimate)
     public CcSession? Session { get; set; }
     public CcUsage? Usage { get; set; }
     public string? UpdatedAt { get; set; }

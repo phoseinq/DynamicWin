@@ -71,6 +71,12 @@ internal static class Program
         // StringFormat centring beside the ink centring, with crosshairs through the true centre. A glyph
         // being 2px high in a 20px tile is exactly the kind of claim that cannot be settled by eye.
         if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
+        // dev hook: `Halo.App --render-fluent <out.png> [E700 100 | E7BA,E783,...]` — a labelled contact
+        // sheet of Segoe Fluent Icons. Badge glyphs used to be chosen from memory of the MDL2 chart and
+        // verified afterwards by looking for tofu, which is backwards: this shows what the font actually
+        // has, so a code point is picked because it draws the right thing rather than because it exists.
+        if (args.Length >= 2 && args[0] == "--render-fluent")
+        { RenderFluent(args[1], args.Length > 2 ? args[2] : "E700", args.Length > 3 ? args[3] : "256"); return; }
         // dev hook: `Halo.App --render-bar <out.png>` — the pill's background progress bar as a filmstrip,
         // one row per moment across a full breath, with a paused row for comparison. A pulse cannot be judged
         // from a single still, and "does it look like it is running" is the whole point of it.
@@ -377,6 +383,10 @@ internal static class Program
                 ("an mcp server", "working", "mcp__serena__find_symbol", 0, 120_000, 0.30f, null),
                 ("a tool with no slot", "working", "SomeOtherTool", 0, 120_000, 0.30f, null),
                 ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f, null),
+                // the compacting rows: the figure beside the clock is the context fill, which is a REAL
+                // number and a long one, so what has to be looked at is whether the verb still has room
+                ("compacting, just in", "compacting", null, 0, 920_000, 0.30f, null),
+                ("compacting, 2 min in", "compacting", null, 2, 986_000, 0.30f, null),
                 ("named, but context 92%", "working", "Edit", 1, 920_000, 0.30f, "Fx.cs"),
                 ("shell, usage 96%", "working", "Bash", 1, 120_000, 0.96f, null),
                 ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f, null),
@@ -1055,7 +1065,7 @@ internal static class Program
     // strip, so a bad Fluent code point shows up as tofu instead of shipping invisible.
     private static void RenderBadges(string outPath)
     {
-        var badges = Halo.Shell.NotchController.AllLocalBadges();
+        var badges = Halo.Shell.Badges.All();
         using var bmp = new System.Drawing.Bitmap(badges.Length * 84 + 20, 104);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
@@ -1064,6 +1074,53 @@ internal static class Program
             g.Clear(System.Drawing.Color.FromArgb(28, 28, 32));
             for (int i = 0; i < badges.Length; i++)
                 g.DrawImage(badges[i], 10 + i * 84, 20, 64, 64);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    // dev-only: a labelled sheet of Segoe Fluent Icons code points. Either a contiguous block
+    // ("E700" "256") or an explicit comma-separated list of candidates. A missing code point draws as the
+    // font's tofu box, which on this sheet is a fact you can see rather than one you find out later.
+    private static void RenderFluent(string outPath, string startOrList, string countArg)
+    {
+        var codes = new System.Collections.Generic.List<int>();
+        if (startOrList.Contains(','))
+        {
+            foreach (var part in startOrList.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                if (int.TryParse(part.Trim(), System.Globalization.NumberStyles.HexNumber, null, out var c)) codes.Add(c);
+        }
+        else if (int.TryParse(startOrList, System.Globalization.NumberStyles.HexNumber, null, out var start))
+        {
+            int n = int.TryParse(countArg, out var parsed) ? parsed : 256;
+            for (int i = 0; i < n; i++) codes.Add(start + i);
+        }
+        if (codes.Count == 0) return;
+
+        const int Cell = 92, Cols = 12, Label = 18;
+        int rows = (codes.Count + Cols - 1) / Cols;
+        using var bmp = new System.Drawing.Bitmap(Cols * Cell, rows * (Cell + Label) + 10);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.Clear(System.Drawing.Color.FromArgb(24, 24, 28));
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using var glyphFont = new System.Drawing.Font("Segoe Fluent Icons", 46f, System.Drawing.GraphicsUnit.Pixel);
+            using var labelFont = new System.Drawing.Font("Consolas", 14f, System.Drawing.GraphicsUnit.Pixel);
+            using var ink = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+            using var dim = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(150, 160, 170));
+            using var sf = new System.Drawing.StringFormat
+            {
+                Alignment = System.Drawing.StringAlignment.Center,
+                LineAlignment = System.Drawing.StringAlignment.Center,
+            };
+            for (int i = 0; i < codes.Count; i++)
+            {
+                float x = i % Cols * Cell, y = i / Cols * (Cell + Label);
+                g.DrawString(((char)codes[i]).ToString(), glyphFont, ink,
+                    new System.Drawing.RectangleF(x, y, Cell, Cell), sf);
+                g.DrawString(codes[i].ToString("X4"), labelFont, dim,
+                    new System.Drawing.RectangleF(x, y + Cell - 4, Cell, Label), sf);
+            }
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }

@@ -161,7 +161,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         // gap held twelve, and the renderer shrank the font until it fitted - 9px, which is present rather
         // than readable. Now the words are chosen to fit and the font stays legible.
         string el0 = LimitHit ? LimitReset() : Elapsed(st);
-        if (Compacting(st) && !LimitHit && el0.Length > 0) el0 = CompactPct(st!) + " · " + el0;
+        if (Compacting(st) && !LimitHit && ContextPct(st!) is { Length: > 0 } ctx)
+            el0 = el0.Length > 0 ? ctx + " · " + Coarse(el0) : ctx;
         float textX0 = x + sz + 11;
         if (st?.State == "waiting_input") textX0 += 16;
         using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -280,14 +281,29 @@ internal sealed class ClaudeCodeWidget : IWidget
         && ParseTime(st.StartedAt) is { } t
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
 
-    // deliberately approximate: % of the LAST compact's duration (post-compact hook records it),
-    // capped at 99 — no real progress signal exists, this is honest pacing, not ground truth
-    private static string CompactPct(CcStatus st)
+    // What is actually known while a compact runs.
+    //
+    // This used to be elapsed/expected against the PREVIOUS compact's duration, printed as "~47%" — a
+    // progress bar for something that reports no progress. Nothing is written to the transcript between
+    // pre-compact and post-compact, so there is no signal there to find, and the house rule is that a
+    // figure Halo cannot obtain is not shown at all.
+    //
+    // The real number is the one the compact is ABOUT: how full the context is, straight out of the
+    // transcript's own token usage, which is the same figure the panel's ring and the "context NN% full"
+    // banner carry — one number, not three. It is deliberately not a progress reading: it holds while the
+    // compact runs and DROPS when it lands, which is the event worth watching. Labelled, so it cannot be
+    // read as one either.
+    internal static string ContextPct(CcStatus st)
+        => st.Session is { ContextMax: > 0 } ? $"ctx {(int)(ContextFrac(st) * 100)}%" : "";
+
+    // Minutes only, once there are minutes. Two figures on the right of a 220px pill is one more than it
+    // was designed for, and every character there is taken off the verb - which arrived truncated
+    // mid-word the first time both were shown. During a compact the seconds are noise anyway: the question
+    // is whether this is taking long, not exactly how long.
+    internal static string Coarse(string elapsed)
     {
-        if (ParseTime(st.StartedAt) is not { } t) return "";
-        // ×3: user-tuned pacing — crawling past reality beats finishing before the compact does
-        double expect = 3 * (st.LastCompactMs is > 3000 and < 600_000 ? st.LastCompactMs / 1000.0 : 60);
-        return $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / expect, 1, 99)}%";
+        int m = elapsed.IndexOf('m');
+        return m > 0 ? elapsed[..(m + 1)] : elapsed;
     }
 
     private static DateTimeOffset? ParseTime(string? s) =>

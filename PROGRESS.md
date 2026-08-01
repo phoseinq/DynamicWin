@@ -1,5 +1,50 @@
 # Halo — progress
 
+## 2026-08-02: the compacting figure is real, one tile per alert, and the greeting actually shows up
+
+**Release 0/0, 552 tests pass (was 523). Deployed** — `dist\app` published self-contained and copied
+over `%LOCALAPPDATA%\Programs\Halo`, which is what the Startup shortcut launches. Not pushed yet.
+
+**The "~47%" beside a running compact was invented.** Root cause: `CompactPct` paced elapsed against the
+*previous* compact's duration (`lastCompactMs`, times three), and Codex's twin paced against a flat 180
+seconds. Nothing anywhere reports compaction progress — checked the transcript directly, nothing is
+written between pre-compact and post-compact — so the number could not be made real and had to go. What
+is shown instead is the figure the compact is *about*: `ctx 92%`, the context fill straight out of the
+transcript's own token usage, which is the same number the ring and the "context NN% full" banner carry.
+It holds while the compact runs and drops when it lands. `lastCompactMs` lost its only reader and is
+gone from both the hook and `CcStatus`; pre-compact now calls `UpdateContext` so the figure describes the
+compact rather than the last tool call. Verified on `--render-pill`, which gained two compacting rows —
+the first pass showed the verb truncated mid-word ("big histo…") because two figures now share the right
+edge, so the clock coarsens to minutes during a compact and "big history…" fits whole.
+
+Measured while checking whether the window itself was honest: this machine's transcripts peak at 728k
+tokens, so the hook's 1M window for Opus is right, not a guess.
+
+**Alert tiles: one per thing that can go wrong.** RAM wore the CPU's processor die *and* shared its
+`Kind` (so a queued CPU banner and a RAM banner deduped into one); "context nearly full" wore the same
+gauge as "weekly limit spent". Badge drawing moved out of `NotchController` into `Shell/Badges.cs` and
+grew a sheen, a rim and a glyph shadow. New `--render-fluent` dev hook prints a labelled contact sheet of
+Segoe Fluent Icons — glyphs used to be picked from memory of the MDL2 chart and checked for tofu
+afterwards, which is how the battery tile turned out to be a battery with a **cross** through it
+(`0xE996`, "unknown") for as long as it has existed. Now: battery low vs critical (two rungs, so 19% and
+then 6% are two pieces of news), CPU die vs DIMM, wifi-warning vs wifi-crossed vs a robot for "Claude is
+unreachable" — the last two are new banners, since `Slow` used to be the only internet state that ever
+raised one. Limits split by window length: a bolt for the five-hour, a calendar for the weekly.
+Eyeballed on `--render-badges` (17 tiles, no tofu) and `--render-local` (10 banners, each glow picking up
+its own tile's hue).
+
+**The greeting had never once played on a real boot.** Root cause was not the gate: the Startup folder
+launches `%LOCALAPPDATA%\Programs\Halo\Halo.App.exe`, and that copy was the 31 July build, from before
+the greeting existed. The gate was wrong too, though — it asked "has Halo run since Windows came up",
+and a laptop that sleeps instead of shutting down almost never answers yes. It now asks "is this Halo
+starting": every launch gets the hand, waking from sleep counts as one (detected from the render loop —
+the process is frozen while suspended, so a frame arriving 90s after the last one *is* the wake; no
+power broadcast to subscribe to on a NOACTIVATE window and no new dependency), and the long introduction
+is kept for a version that has not run here before. The marker under `%LOCALAPPDATA%\Halo\greeted` holds
+the version rather than a boot stamp, which is what keeps a settings-panel restart from replaying it.
+Verified live: the deployed launch read the old timestamp marker, played the install greeting and
+rewrote the marker to `3.1.7.0`.
+
 ## 2026-08-01: answerable banner — hook half (design in `docs/superpowers/specs/2026-08-01-answerable-banner-design.md`)
 
 The half that lives in `Halo.Hooks` is done and verified end to end. **Release 0/0, 479 tests pass

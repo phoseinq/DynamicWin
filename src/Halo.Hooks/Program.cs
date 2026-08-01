@@ -105,6 +105,9 @@ internal static class Program
                     status["state"] = "compacting";
                     status["startedAt"] = DateTimeOffset.UtcNow.ToString("o");
                     status["message"] = null;
+                    // the pill shows how full the context is while the compact runs, so read it here
+                    // rather than leaving the figure at whatever the last tool call happened to see
+                    UpdateContext(status, Field("transcript_path"));
                     break;
                 case "prompt":
                     status["state"] = "working";
@@ -132,14 +135,9 @@ internal static class Program
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
-                    // remember how long it took — the widget paces its % estimate off this
-                    if (!codex && status["state"]?.GetValue<string>() == "compacting"
-                        && DateTimeOffset.TryParse(status["startedAt"]?.GetValue<string>(), null,
-                            System.Globalization.DateTimeStyles.RoundtripKind, out var compactStart))
-                    {
-                        var ms = (long)(DateTimeOffset.UtcNow - compactStart).TotalMilliseconds;
-                        if (ms is > 3000 and < 600_000) status["lastCompactMs"] = ms;
-                    }
+                    // lastCompactMs used to be recorded here to pace a "~47%" progress estimate on the
+                    // pill. That estimate is gone (nothing reports compaction progress, so it was invented),
+                    // and with it the only reader of the duration.
                     // auto-compact happens mid-turn (the turn resumes); manual /compact goes idle
                     status["state"] = codex || Field("trigger") == "auto" ? "working" : "idle";
                     status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");

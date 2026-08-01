@@ -6,46 +6,44 @@ namespace Halo.Tests;
 
 public class GreetingGateTests
 {
-    private static readonly DateTime Boot = new(2026, 8, 1, 9, 0, 0, DateTimeKind.Utc);
+    private const string Version = "3.1.7.0";
 
     [Fact]
-    public void No_stamp_means_this_machine_has_never_seen_it()
-        => Assert.Equal(GreetingKind.Install, GreetingGate.Decide(null, Boot));
+    public void No_marker_means_this_build_has_never_run_here()
+        => Assert.Equal(GreetingKind.Install, GreetingGate.Decide(null, Version));
+
+    // the marker used to hold a boot timestamp; an upgrade reads that and must treat it as "not this build"
+    [Fact]
+    public void A_marker_it_cannot_recognise_is_a_new_build()
+        => Assert.Equal(GreetingKind.Install, GreetingGate.Decide("2026-07-31T17:11:05.4669755Z", Version));
 
     [Fact]
-    public void An_unreadable_stamp_greets_rather_than_staying_silent_forever()
-        => Assert.Equal(GreetingKind.Install, GreetingGate.Decide("not a date", Boot));
+    public void An_upgrade_introduces_itself()
+        => Assert.Equal(GreetingKind.Install, GreetingGate.Decide("3.1.6.0", Version));
 
-    // The one that matters: the settings panel restarts Halo on apply, and the boot it comes back to is
-    // the same boot it left. A greeting there would fire on every changed setting.
+    // The one that matters: the settings panel restarts Halo on apply. Same build, so the long
+    // introduction stays put - but the hand still comes, which is what was asked for.
     [Fact]
-    public void A_restart_inside_the_same_windows_session_says_nothing()
+    public void A_restart_of_the_same_build_gets_the_hand_and_not_the_introduction()
+        => Assert.Equal(GreetingKind.Login, GreetingGate.Decide(Version, Version));
+
+    // whitespace happens to a file written by a text editor; it is not a different build
+    [Fact]
+    public void The_marker_is_compared_trimmed()
+        => Assert.Equal(GreetingKind.Login, GreetingGate.Decide(" 3.1.7.0\r\n", Version));
+
+    // a real version, not "0": the fallback would make every launch an install
+    [Fact]
+    public void The_running_build_reports_a_version()
     {
-        var stamp = GreetingGate.Stamp(Boot.AddSeconds(0.4));   // same boot, measured a moment later
-        Assert.Equal(GreetingKind.None, GreetingGate.Decide(stamp, Boot));
+        Assert.NotEqual("0", GreetingGate.Version);
+        Assert.Equal(GreetingKind.Login, GreetingGate.Decide(GreetingGate.Version, GreetingGate.Version));
     }
 
+    // Long enough that no stall, alt-tab storm or fps tier can reach it, short enough that a nap does.
     [Fact]
-    public void The_first_run_after_a_reboot_gets_the_short_greeting()
-    {
-        var stamp = GreetingGate.Stamp(Boot.AddDays(-1));
-        Assert.Equal(GreetingKind.Login, GreetingGate.Decide(stamp, Boot));
-    }
-
-    // a clock moved backwards is not a boot that has not happened yet
-    [Fact]
-    public void A_stamp_from_the_future_is_treated_as_a_new_session_not_ignored()
-    {
-        var stamp = GreetingGate.Stamp(Boot.AddHours(5));
-        Assert.Equal(GreetingKind.Login, GreetingGate.Decide(stamp, Boot));
-    }
-
-    [Fact]
-    public void Drift_inside_the_slack_is_still_the_same_session()
-    {
-        var stamp = GreetingGate.Stamp(Boot.AddSeconds(-(GreetingGate.Slack.TotalSeconds / 2)));
-        Assert.Equal(GreetingKind.None, GreetingGate.Decide(stamp, Boot));
-    }
+    public void A_wake_is_a_gap_no_running_frame_could_produce()
+        => Assert.True(NotchController.WakeGap >= TimeSpan.FromSeconds(60));
 }
 
 public class ScriptTests
