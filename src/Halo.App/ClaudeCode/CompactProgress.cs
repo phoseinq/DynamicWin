@@ -86,11 +86,14 @@ internal static class CompactProgress
     private static void Sample(int pid)
     {
         var rows = Interop.ConsoleRead.Tail(pid, 8);
-        if (rows is null) return;
         int? tokens = null;
-        foreach (var row in rows)
-            if (Streamed(row) is { } n) tokens = n;   // the spinner is the last such line on screen
-        if (tokens is not { } t) return;
+        if (rows is not null)
+            foreach (var row in rows)
+                if (Streamed(row) is { } n) tokens = n;   // the spinner is the last such line on screen
+        // Traced because there is no other way to see this fail: the terminal it reads is not ours, the
+        // pill cannot be screenshotted, and "no percentage appeared" has three different causes.
+        Trace(pid, rows, tokens);
+        if (rows is null || tokens is not { } t) return;
 
         if (t > _peak) _peak = t;
         Tokens = t;
@@ -133,6 +136,22 @@ internal static class CompactProgress
          : "";
 
     public static string Caption() => Caption(Percent, Tokens);
+
+    private static void Trace(int pid, string[]? rows, int? tokens)
+    {
+        try
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo",
+                "compact-debug.txt");
+            string last = rows is { Length: > 0 } ? rows[^1] : "(none)";
+            if (last.Length > 90) last = last[..90];
+            File.AppendAllText(path,
+                $"{DateTime.Now:HH:mm:ss.fff} pid={pid} rows={rows?.Length.ToString() ?? "null"} " +
+                $"tokens={tokens?.ToString() ?? "-"} expect={_expect} last={last}" + Environment.NewLine);
+        }
+        catch { }
+    }
 
     private static void Load()
     {
