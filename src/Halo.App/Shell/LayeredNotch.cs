@@ -35,7 +35,20 @@ internal struct MenuFrame
 
 internal sealed class LayeredNotch
 {
-    private const int CaptureW = 560, CaptureH = 220;
+    private const int CaptureW = 560, CaptureBaseH = 220;
+
+    // How tall a strip the glass grabs. It was a const 220, which is enough for the pill and for a
+    // notification banner (188 at its tallest) and NOT enough for anything taller: below the captured
+    // strip there is no backdrop at all, and since the tint alone is translucent, the surplus renders as
+    // a bare pane over the raw desktop. Reported as the third option's row being see-through and
+    // unreadable, which is exactly what it was.
+    //
+    // Grown on demand rather than raised outright: capture cost is area, and doubling the strip for a
+    // banner that is up for twenty seconds would tax every frame of the other twenty-three hours.
+    internal static int CaptureH { get; private set; } = CaptureBaseH;
+
+    internal static void WantCaptureHeight(int logicalHeight)
+        => CaptureH = Math.Max(CaptureBaseH, Math.Min(720, logicalHeight + 8));
     // ponytail: circle is full collapsed-band height (40), flush to top, hugging the pill
     public const int CircleD = 40, CircleGap = 4, CircleY = 0;
 
@@ -243,6 +256,22 @@ internal sealed class LayeredNotch
         Bitmap? raw = _capturable ? null : GrabScreen(nx, ny);
         how = raw != null ? "screen" : "";
 
+        // A capturable pill cannot use the window DC either, which is what the guard above assumed. BitBlt
+        // off a window's DC returns what is ON SCREEN over that region - overlapping windows included - so
+        // the pill still photographs itself, just by a different route. It was verified by eye in the
+        // HALO_DUMP_GLASS raw grab: "CLAUDE CODE ASKS" and the banner's own top edge were baked into the
+        // backdrop the banner was about to be drawn over. Feed that forward at ~5fps and it converges on
+        // the pill's own tint, which is why the ask banner - tall enough that the strip is nearly ALL pill -
+        // came out a flat dark slab while the short notification banner still looked like glass.
+        // PrintWindow re-renders the target window itself, so the pill cannot be in the result. It costs
+        // ~29ms, and that is the right trade here: capturable is the recording/screenshot mode, not the
+        // default, and the default path above is untouched.
+        if (raw == null && _capturable)
+        {
+            var direct = CaptureViaPrintWindow(behind, wr, sx, sy);
+            if (direct != null) { raw = direct; how = "printwindow"; }
+        }
+
         if (raw == null)
         {
             raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
@@ -437,7 +466,7 @@ internal sealed class LayeredNotch
 
     public void Render(int w, int h, int radius, int tintAlpha, float contentFade, float collapsedFade, bool glass,
         MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed,
-        float glassFade = 1f)
+        float glassFade = 1f, float clarity = 0f)
     {
         int menuX = w + CircleGap + PrivacyPad; // strip slides right to open a gap for the privacy dot
         // reserve the strip's max extent (transparent padding is free): widest fan + all rows
@@ -481,7 +510,7 @@ internal sealed class LayeredNotch
         {
             g.Clear(Color.Transparent);
             g.ScaleTransform(S, S);
-            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade);
+            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade, clarity);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             if (collapsedFade > 0.01f) drawCollapsed(g, w, h, collapsedFade);
@@ -549,9 +578,10 @@ internal sealed class LayeredNotch
     // whatever was behind it. The result was a small grey rectangle that appeared to "match the background"
     // because it literally was the background — left behind after the last app closed. Fading them together
     // makes the empty pill actually empty.
-    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass, float glassFade = 1f)
+    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass,
+        float glassFade = 1f, float clarity = 0f)
     {
-        lock (_bgLock) ShapeInto(g, w, h, radius, tintAlpha, glass ? _bg : null, glassFade);
+        lock (_bgLock) ShapeInto(g, w, h, radius, tintAlpha, glass ? _bg : null, glassFade, clarity);
     }
 
     // Two supersampled buffers, reused. The composite runs every frame the pill is on screen, and it used to
@@ -584,17 +614,24 @@ internal sealed class LayeredNotch
     // third of the local level and the eye reads relative differences in the dark, not absolute ones.
     private const float FrostDesat = 0.40f, FrostContrast = 0.34f, FrostFloor = 0.05f;
 
-    private static ColorMatrix Frost(float alpha)
+    // clarity backs all three off toward "leave the backdrop alone". The squeeze above is right for the
+    // widget panel, where opaque content sits on the glass and a legible band behind it reads as a shape
+    // INSIDE the pill. A banner is the other case: it is mostly backdrop, the user is looking THROUGH it,
+    // and at contrast 0.34 with a 0.05 floor the entire brightness range behind the pill lands between 9
+    // and 72 - white bands, dark editors and colourful games all composite to the same dark slab, which is
+    // exactly the report. 0 keeps the panel's behaviour untouched.
+    private static ColorMatrix Frost(float alpha, float clarity)
     {
         const float lr = 0.2126f, lg = 0.7152f, lb = 0.0722f;
-        float d = FrostDesat, c = FrostContrast;
+        float k = Math.Clamp(clarity, 0f, 1f);
+        float d = FrostDesat * (1f - k), c = FrostContrast + (1f - FrostContrast) * k;
         return new ColorMatrix(new[]
         {
             new[] { ((1 - d) + lr * d) * c, lr * d * c,             lr * d * c,             0f, 0f },
             new[] { lg * d * c,             ((1 - d) + lg * d) * c, lg * d * c,             0f, 0f },
             new[] { lb * d * c,             lb * d * c,             ((1 - d) + lb * d) * c, 0f, 0f },
             new[] { 0f,                     0f,                     0f,                     alpha, 0f },
-            new[] { FrostFloor,             FrostFloor,             FrostFloor,             0f, 1f },
+            new[] { FrostFloor * (1 - k),   FrostFloor * (1 - k),   FrostFloor * (1 - k),   0f, 1f },
         });
     }
 
@@ -602,7 +639,7 @@ internal sealed class LayeredNotch
     // can drive the REAL path with a known backdrop. The edge behaviour here has been wrong twice; it needs
     // to be inspectable without a screenshot of a window that refuses to be screenshotted.
     internal static void ShapeInto(Graphics g, int w, int h, int radius, int tintAlpha,
-                                   Bitmap? backdrop, float glassFade)
+                                   Bitmap? backdrop, float glassFade, float clarity = 0f)
     {
         const int ss = 2;
 
@@ -622,12 +659,20 @@ internal sealed class LayeredNotch
             if (backdrop != null && glassFade > 0.004f)
             {
                 int sx = (CaptureW - w) / 2;
+                // Clamped to what the plate actually holds. A capture taller than the current one is
+                // requested the moment a tall banner opens, but the grab that satisfies it is a frame or
+                // two behind - and reading past the bitmap's edge is how the surplus ended up rendering as
+                // bare glass over the desktop. Stretching the last row is invisible for a frame; a hole
+                // is not.
+                int srcW = Math.Min(w, backdrop.Width - Math.Max(0, sx));
+                int srcH = Math.Min(h, backdrop.Height);
                 cg.InterpolationMode = InterpolationMode.HighQualityBilinear;
                 cg.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 using var ia = new ImageAttributes();
-                ia.SetColorMatrix(Frost(Math.Clamp(glassFade, 0f, 1f)));
-                cg.DrawImage(backdrop, new Rectangle(0, 0, w * ss, h * ss),
-                    sx, 0, w, h, GraphicsUnit.Pixel, ia);
+                ia.SetColorMatrix(Frost(Math.Clamp(glassFade, 0f, 1f), clarity));
+                if (srcW > 0 && srcH > 0)
+                    cg.DrawImage(backdrop, new Rectangle(0, 0, w * ss, h * ss),
+                        Math.Max(0, sx), 0, srcW, srcH, GraphicsUnit.Pixel, ia);
             }
             using var tint = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8));
             cg.FillRectangle(tint, 0, 0, w * ss, h * ss);

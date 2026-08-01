@@ -27,4 +27,23 @@ internal static class Clipboard
         }
         finally { Win32.CloseClipboard(); }
     }
+
+    // The read half, for Ctrl+V into the ask banner's answer field. Same best-effort contract: a clipboard
+    // held by another app for the moment we asked is normal and returns null rather than throwing.
+    public static string? Text()
+    {
+        if (!Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT)) return null;
+        if (!Win32.OpenClipboard(IntPtr.Zero)) return null;
+        try
+        {
+            IntPtr h = Win32.GetClipboardData(Win32.CF_UNICODETEXT);   // owned by the clipboard, don't free
+            if (h == IntPtr.Zero) return null;
+            IntPtr p = Win32.GlobalLock(h);
+            if (p == IntPtr.Zero) return null;
+            try { return Marshal.PtrToStringUni(p); }
+            finally { Win32.GlobalUnlock(h); }
+        }
+        catch { return null; }
+        finally { Win32.CloseClipboard(); }
+    }
 }

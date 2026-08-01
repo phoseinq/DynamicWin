@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
 
 namespace Halo.ClaudeCode;
@@ -50,6 +51,8 @@ internal sealed class AskQueue
 
     internal void Remove(string nonce) => _items.RemoveAll(i => i.Nonce == nonce);
 
+    internal IReadOnlyList<string> Nonces() => _items.ConvertAll(i => i.Nonce);
+
     internal IReadOnlyList<string> Sweep(DateTimeOffset now)
     {
         var dropped = new List<string>();
@@ -96,10 +99,12 @@ internal sealed class AskStore
             string? before;
             lock (_lock) before = _queue.Head(now)?.Nonce;
 
+            var onDisk = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in Directory.GetFiles(_dir, "ask-*.json"))
             {
                 var ask = Parse(path);
                 if (ask is null || now >= ask.ExpiresAt) continue;
+                onDisk.Add(ask.Nonce);
                 lock (_lock) _queue.Observe(ask);
 
                 // Ack EVERY ask on sight, not just the one on screen. The hook gives up after 300ms
@@ -107,6 +112,18 @@ internal sealed class AskStore
                 // to the terminal before its turn ever came.
                 if (_acked.Add(ask.Nonce)) Touch(Path.Combine(_dir, $"ack-{ask.Nonce}"));
             }
+
+            // The hook deletes its ask file the moment it gives up or gets an answer, and nothing here was
+            // noticing: the queue kept serving a question whose asker had already walked away, so the pill
+            // showed the PREVIOUS question while the new one waited behind it. The directory is the
+            // authority on what is still being asked.
+            List<string> gone;
+            lock (_lock)
+            {
+                gone = [.. _queue.Nonces().Where(n => !onDisk.Contains(n))];
+                foreach (var nonce in gone) _queue.Remove(nonce);
+            }
+            foreach (var nonce in gone) Forget(nonce);
 
             List<string> expired;
             lock (_lock) expired = [.. _queue.Sweep(now)];

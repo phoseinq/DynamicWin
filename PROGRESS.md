@@ -49,6 +49,150 @@ Verified with a new `--render-ask` hook showing both forms, one chip hovered.
 non-null and routing chip clicks to `AskStore.Answer`. Until that lands the feature does nothing in a
 real session.
 
+### Pill half, part 2: the banner sizes itself to its text
+
+**Release 0/0, 497 tests pass (was 489).** The wiring is in (`_askChips`/`_askH` in `NotchController`),
+so this pass was the look, driven by answering real questions on the live pill.
+
+**Root cause of the visible complaint: the layout was arithmetic over constants.** `RowH = 46f` meant a
+two-line description was ellipsised away while the banner had the entire screen above it to grow into,
+and the reflex fix — smaller type — is backwards. The text is the content, so the geometry follows it:
+`AskBanner.Layout` measures each label and description, gives every row its own height, wraps the title
+to up to three lines, and `Chips`/`Height` are now views onto that one layout.
+
+Measuring needs a `Graphics`, which is what the old comment was avoiding — the property it was
+protecting (callers may recompute every frame, and nobody caches a height that can drift out of step
+with what `Draw` painted) is kept by a one-entry memo keyed on the ask instance, plus a 1x1 measuring
+surface held for the process lifetime. Type went **up**, not down: title 17.5→19, label 13.5→15,
+description 11.5→12.5, eyebrow icon 16→19, number disc 28→32.
+
+Two GDI+ traps paid for on the way. `StringFormat` centring sits a glyph high **and left** of its box —
+the disc numerals were visibly off-centre, and the fix is the ink-bounds centring `LayeredNotch.
+DrawGlyphCentered` already records, measured back at 0.5px. And `GenericTypographic` sets `LineLimit`,
+which silently drops the last line of a rect sized to an exact number of lines; cleared, plus 3px of
+slack in the drawn rect.
+
+The numerals are glass too (alpha 150/215 white) — a solid white digit was the one opaque thing left on
+a banner whose whole idea is panes you can see through.
+
+Verified by extending `--render-ask` with a title and a description long enough to wrap — before, that
+sample fitted on one line and proved nothing — then by raising real asks on the running pill. 8 new
+tests pin what breaks when geometry comes from text: a long description makes a taller row, rows stack
+without overlapping and stay inside `Height`, the hit-test rect still covers the number outside the
+glass, and `Chips`/`Height` agree with the layout they read from.
+
+**Running from the worktree's `bin/Release`; not committed, not pushed**, and the installed build under
+`%LOCALAPPDATA%\Programs\Halo` is untouched.
+
+### Pill half, part 3: "this is glass, what you made is not" — three real bugs under one complaint
+
+**Release 0/0, 497 tests pass.** Reported as "the option rows are not glass". Two visual guesses were
+made and both were wrong, in opposite directions — first darkening the whole banner to 170 so the rows
+would read, then giving the rows a dark fill — and each was correctly rejected: the first went flat over
+a dark app, the second turned the rows into blacker holes in a black panel. What settled it was a
+reference screenshot next to a screenshot of the banner, and then `HALO_DUMP_GLASS=1`. **Three separate
+bugs, none of them in `AskBanner`:**
+
+1. **The pill was photographing itself.** `_capturable` (the Ctrl+click-the-pushpin recording mode, which
+   this user leaves on) skips the screen-DC grab because the pill is no longer excluded from capture —
+   but it fell through to the *window*-DC BitBlt, and that returns what is on screen over the region,
+   overlapping windows included. So the pill read its own glass back in and fed it forward at ~5fps,
+   converging on its own tint. Visible directly in the dump: "CLAUDE CODE ASKS" and the banner's own top
+   edge baked into the backdrop the banner was about to be drawn over. It hit the **ask** banner hardest
+   because it is tall enough that the capture strip is almost entirely pill, which is exactly why the
+   short notification banner in the reference still looked like glass. Capturable now goes straight to
+   `PrintWindow`, which re-renders the target window and cannot contain the pill.
+2. **Banners were drawn with no glass layer at all.** `glassFade` fades the captured backdrop out with
+   the tint when `_empty` — correct for the invisible drop-catch strip it was written for, but `_empty`
+   is the *normal* state when a question arrives with no agent on the strip, so `_shrink` hit 1 and the
+   banner composited tint over nothing. Banners are now exempt.
+3. **The frost squeeze crushed every backdrop into the same dark slab.** `FrostContrast 0.34` +
+   `FrostFloor 0.05` map the full brightness range behind the pill onto 9..72 before the tint even lands
+   — deliberate for the widget panel, where a bright band behind opaque widgets reads as a shape *inside*
+   the pill, and wrong for a banner, which is mostly backdrop and meant to be looked through. `Frost` now
+   takes a `clarity`, threaded `Render → DrawShape → ShapeInto`; banners pass `BannerClarity = 0.8`, the
+   panel still passes 0 and is bit-for-bit unchanged.
+
+With those fixed the last of the black was the notch's own flat wash, which is what "the notch gives the
+options their black colour" correctly identified: `TintAsk{Desk,App}` are now **60 / 34**, far below the
+panel's 245 / 48. Everything drawn on the banner brings its own contrast instead — lit capsule rims and a
+1px shadow under every line of text.
+
+The rows themselves are **empty capsules** now, per the reference: body alpha 7, and the shape carried by
+a single 0.7px rim lit brightest at the top plus two fading specular streaks. The number beads match,
+minus the specular blob — it sat on the digit like a smudge. A second stroke inside the rim was tried for
+wall thickness, which is the textbook way to draw glass and is wrong at this scale: it reads as two
+outlines, not as one thick one.
+
+Verified by screenshotting the real pill over a purpose-built backdrop window carrying a near-white band,
+a near-black band and a colour gradient — the case both earlier attempts failed at opposite ends of. The
+white band now passes through the banner and through the capsules with its own colour. Two traps worth
+remembering for the next time this needs eyeballing live: a borderless maximised window trips the
+fullscreen-hide and the pill vanishes, and `HALO_CAPTURABLE=1` used to *create* the very artefact being
+investigated (bug 1) — that is fixed, but it is why the first three screenshots were misleading.
+
+**Not committed, not pushed; installed build untouched.**
+
+### Pill half, part 4: write-your-own answers, and the hooks actually deployed
+
+**Release 0/0, 499 tests pass (was 497).** Claude Code's own question UI always lets you ignore the
+options and type something, and a banner offering only the canned answers quietly removed that. There is
+no new channel for it: `AskStore.Answer` already returns a question's pick as a *deny whose reason is the
+chosen label*, and a reason is a free string — so free text rides the path that was already there.
+
+The row is appended by `AskBanner`, not sent by the hook: the hook forwards the tool's own options
+untouched, and putting a pill-invented option in that payload would claim Claude offered a choice it did
+not. Told apart by reference identity (`AskBanner.IsOther`), because the label is display text and a real
+option could legitimately carry the same words.
+
+Getting keystrokes into it cost four wrong answers, each worth keeping:
+
+1. **Drop `WS_EX_NOACTIVATE` and take focus.** `SetForegroundWindow` returned true and changed nothing.
+   Windows hands the foreground only to a process that already owns it, and Halo is a background pill
+   that by construction never does. `AttachThreadInput` onto the foreground thread moved it no further.
+   Every keystroke kept landing in the terminal behind. Abandoned: `Interop/KeyGrab.cs` installs a
+   `WH_KEYBOARD_LL` hook while the field is open instead, so the user's app keeps the focus it had and
+   only the keys the field uses are taken from it — Alt and Win chords are never touched, so Alt+Tab
+   still leaves.
+2. **`WM_CHAR` for the text.** It never arrived: WM_CHAR is synthesised by `TranslateMessage`, and this
+   thread's pump belongs to the framework. `ToUnicodeEx` on the key-down is self-contained.
+3. **Two heap corruptions on that one call** — `0xc0000374`, no managed exception, nothing in
+   `halo-crash.log`, because a corrupt native heap does not unwind. First a `StringBuilder` marshalled as
+   `[Out] LPWStr`, which is not a valid combination. Then `char[]`, which is the subtle one: `DllImport`
+   defaults to `CharSet.Ansi`, so the marshaller hands the API an 8-**byte** scratch buffer and
+   `ToUnicodeEx` writes 8 UTF-16 characters — 16 bytes — into it. Now `byte[]`, blittable and pinned.
+4. **Change detection compared a snapshot taken in the same frame.** Keystrokes arrive *between* frames
+   from the hook, so `_askTyped != prevAskTyped` was always false: the field drew its caret once and then
+   never updated. It compares against the last *drawn* value now.
+
+The handlers themselves only touch state — Apply used to be called from inside the hook callback, which
+is a Windows callback on a timeout. An empty Enter cancels rather than sending a blank reason that would
+read as a choice. Long answers scroll the tail under the caret instead of ellipsising the end being
+written.
+
+**Nothing takes the pill mid-sentence.** A toast winning the slot over a question is normally right, but
+it tears down the banner being typed into — and the language-flip toast fires exactly when someone
+switches layout to write the answer. Leaving it queued was the first attempt and only moved the
+interruption: it popped the instant the field closed, telling the user about a layout change they made
+minutes earlier. It is dropped now — a mirrored toast is a copy, and the original is still in Action
+Centre. And closing the field is never discarding it: Escape, a stolen pill, a re-served question all file the
+text as a draft against that question's nonce and restore it when the question comes back. Only actually
+answering throws the words away.
+
+**Deployed, for the first time in this feature's life.** `settings.json` already pointed `PreToolUse` at
+`%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.exe`; the binary there predated the ask feature entirely. Now
+published `-r win-x64 --self-contained` and the four `Halo.Hooks.*` files copied over it.
+
+Verified through the deployed hook rather than by hand-writing rendezvous files: a real `PreToolUse`
+`AskUserQuestion` payload on stdin produced `ask-*.json`, the pill acked inside the 300ms window, and
+with nobody answering the hook printed **nothing** — the safety contract intact. Answered, the same run
+printed
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"neither - profile it first, then decide"}}`,
+which is the typed text arriving back at Claude verbatim. `--render-ask` carries the new row and a
+mid-typing frame, since that state cannot be reached by clicking around a static image.
+
+**Halo.App is still worktree-only and uncommitted; only the hooks are installed.**
+
 ## 2026-08-01: pill text clipping, Codex limit naming, banner bidi (worktree `.worktrees/claude-master`)
 
 Done in an isolated worktree on `master`, because a Codex agent works the primary checkout and its

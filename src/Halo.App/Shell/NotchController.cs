@@ -116,7 +116,8 @@ internal sealed class NotchController
 {
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
     private const int ExpandedW = 560, ExpandedH = 220, ExpandedR = 30;
-    private const int TintDeskCollapsed = 255, TintDeskExpanded = 245;
+    private const int TintDeskCollapsed = 255;
+    internal const int TintDeskExpanded = 245;
     // 48 = the open panel over an app is ~81% window, and that transparency IS the glass. It also means a
     // bright strip behind it (a message bar, a title bar) shows through as a pale block inside the panel.
     // That was tried at 140, which measured better on the offending capture - band spread 13.7 -> 8.3,
@@ -127,6 +128,29 @@ internal sealed class NotchController
     // This is the knob if that trade is ever revisited.
     // collapsed stays at 120: the small pill has no room to lose contrast under its own content.
     internal const int TintAppCollapsed = 120, TintAppExpanded = 48;
+    // The ask banner's own panel, and it is deliberately far clearer than the widget panel's - on BOTH
+    // sides, including the desktop, which the rest of the pill keeps near-opaque at 245.
+    //
+    // The reason is the option rows. They are empty capsules now: they change almost nothing behind them,
+    // so whatever the panel shows IS what shows through them. Against a 245 panel that is black, and the
+    // capsules read as holes cut in a dark slab - "the pill itself is dark, that is why the capsules have
+    // black behind them". A clear capsule needs the panel to be glass too, or there is nothing for it to
+    // be clear ABOUT. On the desktop the window's own acrylic blur supplies that (it was simply buried
+    // under 245); over an app the captured backdrop does.
+    //
+    // Everything drawn on this panel therefore carries its own contrast - lit rims on the capsules,
+    // a shadow under every line of text - because at these values the panel guarantees none.
+    // Low, and lower than anything else in the pill. This tint is a flat black wash over the WHOLE banner,
+    // so it is the last thing still painting the option rows dark once the frost squeeze is off them - the
+    // rows do not have a black background of their own, they were inheriting the notch's. Everything drawn
+    // on top brings its own contrast (lit capsule rims, a shadow under every line of text), so the wash is
+    // only here to stop a busy backdrop turning the banner into noise.
+    internal const int TintAskDesk = 60, TintAskApp = 34;
+    // How much of LayeredNotch's frost squeeze a banner opts out of. The squeeze exists so a bright band
+    // behind the WIDGET panel cannot read as a shape inside the pill; a banner has the opposite job, and
+    // at full squeeze every backdrop - white bar, dark editor, colourful game - composited to the same
+    // dark slab. Not 1: some blur and desaturation is still what separates glass from a hole in the screen.
+    internal const float BannerClarity = 0.8f;
     private const float OpenSeconds = 0.30f, CloseSeconds = 0.38f; // open snappier than close. slowed after
     // the _dt fix made these hit their real wall-clock duration (old timer cadence ran them ~2x slower).
     private const float HoldSeconds = 0.75f; // press-and-hold on the pill this long → drag-to-move engages
@@ -208,6 +232,24 @@ internal sealed class NotchController
     private readonly Widgets.BtWidget _btWidget = new(); // transient collapsed-pill battery display on connect
     private System.Threading.Timer? _testTrigger; // demo: file-driven fake banners for recordings (see PollTestNotif)
     private Halo.Notifications.NotifItem? _notif;
+    // The answerable banner: a question the hook parked, waiting for a chip to be clicked. It rides the
+    // same morph as a notification because it IS the same pill changing shape - only the body and the
+    // hit-test differ. A real toast wins the slot: it expires on its own, while a question waits for a
+    // human and can afford to come second.
+    private readonly AskStore _asks;
+    private PendingAsk? _ask;
+    private float _askT;
+    private int _askH = 120;
+    private int _askHover = -1;
+    private System.Collections.Generic.List<(RectangleF Rect, Halo.ClaudeCode.AskOption Option)> _askChips = [];
+    // non-null while a free-text answer is being composed. The question's own options answer with their
+    // label; this one answers with whatever is in here, which the hook passes through verbatim.
+    private string? _askTyped;
+    private string? _drawnTyped;
+    private string _askDraft = "";
+    private string? _askDraftNonce;
+    private readonly Halo.Interop.KeyGrab _keys = new();
+
     private float _notifT;        // 0..1 pill → banner morph
     private bool _notifClosing;
     private bool _notifDetailOn;  // grabber clicked → full message
@@ -269,6 +311,15 @@ internal sealed class NotchController
         _notch.ClipboardImage += OnClipboardImage; // Windows won't deliver the snip toast → mirror it from the clipboard
         _notch.WantsHandCursor = OverPressable;
         _claudeStore = new StatusStore();
+        // The asks live beside the status files, so they ride that store's watcher and 1s poll rather than
+        // starting a timer here: the hook gives up 300ms after an unacked ask, and the frame loop's own
+        // once-a-second tick would miss that window most of the time.
+        _asks = new AskStore(System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "notch"));
+        _claudeStore.AfterLoad = _asks.Rescan;
+        _asks.Rescan();   // a question raised while Halo was starting is still worth answering
+        _keys.OnChar = TypedChar;
+        _keys.OnKey = TypedKey;
         _codexStore = new CodexStatusStore();
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
@@ -827,7 +878,17 @@ internal sealed class NotchController
         Win32.GetCursorPos(out var p);
 
         // ── notification banner: mirror the next toast once the pill is idle ──
-        if (_notif == null && !_notifClosing && _progress <= 0.02f && _drop < 0f
+        // Nothing takes the pill mid-sentence. A toast winning the slot is normally right - it expires on
+        // its own while a question waits for a human - but it also tears down the banner the user is
+        // typing into, and the language-flip toast fires exactly when someone switches layout to write the
+        // answer.
+        //
+        // Dropped, not held. Holding was tried and only moves the interruption: the flip toast sat in the
+        // queue and popped the moment the field closed, which is the least useful time to be told about a
+        // layout change made minutes ago. Nothing is lost that the user can't still see - a mirrored toast
+        // is a copy, and the original is in Action Center.
+        if (_askTyped != null) { while (_notifSrc.Dequeue() is not null) { } }
+        else if (_notif == null && !_notifClosing && _progress <= 0.02f && _drop < 0f
             && _notifSrc.Dequeue() is { } item)
         {
             _notif = item;
@@ -836,6 +897,41 @@ internal sealed class NotchController
             _notifDetailH = NotifBanner.DetailHeight(item);
             _notifDeadline = DateTime.UtcNow.AddSeconds(item.Duration); // 6s for real toasts; 1s for language flips
         }
+        // A pending question takes the pill only when no toast is using it: a toast expires on its own,
+        // a question waits for a human and can afford to come second.
+        float prevAskT = _askT;
+        int prevAskHover = _askHover;
+        var pendingAsk = _notif == null ? _asks.Pending : null;
+        if (pendingAsk?.Nonce != _ask?.Nonce)
+        {
+            EndTyping();   // before _ask moves, so the draft is filed against the question it was written for
+            _ask = pendingAsk;
+            _askHover = -1;
+            // and if this IS that question coming back - a toast borrowed the pill, or it was reopened -
+            // the field comes back with the words still in it
+            if (_ask != null && _askDraftNonce == _ask.Nonce && _askDraft.Length > 0) BeginTyping();
+        }
+        // Recomputed every frame, not cached on the nonce changing. Both are arithmetic over constants, and
+        // a cached height that drifted out of step with what Draw lays out is exactly what left the last
+        // option hanging below the pill's body with the desktop showing through it.
+        if (_ask != null)
+        {
+            _askChips = AskBanner.Chips(_ask, AskBanner.W);
+            _askH = AskBanner.Height(_ask, AskBanner.W);
+            // the glass strip is 220 tall by default, which a three-option banner outgrows; ask for the
+            // taller grab while this is up and hand it back when it closes
+            LayeredNotch.WantCaptureHeight(_askH);
+        }
+        else if (_notif == null) LayeredNotch.WantCaptureHeight(0);
+        _askT = Math.Clamp(_askT + (_ask != null ? _dt / 0.24f : -_dt / 0.30f), 0f, 1f);
+        if (_ask != null)
+        {
+            _askHover = -1;
+            if (InRect(p, NotifLeft(), _ct, Sc(_curW), Sc(_curH)))
+                for (int i = 0; i < _askChips.Count; i++)
+                    if (InChip(p, _askChips[i].Rect)) { _askHover = i; break; }
+        }
+
         float prevNotifT = _notifT, prevNotifDetail = _notifDetail;
         bool overNotif = false;
         if (_notif != null)
@@ -942,9 +1038,16 @@ internal sealed class NotchController
         PollClick(p);
         HandleTrayInteraction(p, down);
 
+        // While an answer is being typed the pill IS the foreground window, which is the one case the
+        // follow logic below must not act on: it would re-probe what is behind us and re-pick the primary
+        // widget on the strength of our own window.
+        //
+        // Cancelling on "foreground is not us" was tried and closed the field the instant it opened: the
+        // handover takes a frame or two, and one frame where fg is still the old window is normal. A click
+        // outside the banner is the honest end condition, and it is where it lives now.
         bool startExpand = _progress <= 0.02f && next > 0.02f;
         bool deskChanged = false;
-        if (fg != _lastFg || startExpand)
+        if (_askTyped == null && (fg != _lastFg || startExpand))
         {
             // the pill follows the session you're inside (skip while a notice/drop owns it)
             if (fg != _lastFg && _drop < 0f && !_agentNotices.IsOpen(now))
@@ -1019,11 +1122,23 @@ internal sealed class NotchController
             || refreshed || tick || _menu != prevMenu || _drop != prevDrop || _arrive != prevArrive
             || _rowOpen != prevRowOpen || forceAnim || mouseMoved || rescaled || _handle != prevHandle
             || _shrink != prevShrink || _stripT != prevStrip || _notifT != prevNotifT || _notifDetail != prevNotifDetail
-            || _offsetX != prevOffsetX || _holdT != prevHoldT || !ReferenceEquals(_notif, notifStart);
+            || _offsetX != prevOffsetX || _holdT != prevHoldT || !ReferenceEquals(_notif, notifStart)
+            || _askT != prevAskT || _askHover != prevAskHover || _askTyped != _drawnTyped;
         _progress = next;
         _widgetVersion = wv;
+        // against the last DRAWN text, not a copy taken earlier in this same frame. Keystrokes arrive
+        // between frames, from the keyboard hook, so a within-frame snapshot is always equal to itself and
+        // the field rendered its caret and then never updated again.
+        _drawnTyped = _askTyped;
         if (changed) Apply(_progress);
     }
+
+    // Chip rects come from AskBanner in banner-local logical pixels, so the hit-test is the same geometry
+    // the paint used. Measured once when the question changes rather than per frame: MeasureString on a
+    // screen DC is not something the render path should be doing sixty times a second.
+    private bool InChip(Win32.POINT p, RectangleF r)
+        => p.X >= NotifLeft() + r.X * S && p.X < NotifLeft() + r.Right * S
+        && p.Y >= _ct + r.Y * S && p.Y < _ct + r.Bottom * S;
 
     // hover region of the strip: the vertical app column + the open row's rightward fan
     private bool InMenu(Win32.POINT p)
@@ -1141,6 +1256,37 @@ internal sealed class NotchController
         bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
         if (_moving) { _lastMouseDown = down; return; } // dragging the pill — swallow clicks
         if (UpdatePinGesture(p, down)) { _lastMouseDown = down; return; }
+        // The chip click IS the answer, so it is handled before anything else can treat it as a click on
+        // the pill. A click anywhere else on this banner does NOTHING on purpose: dismissing a question by
+        // brushing past it would silently send it back to the terminal, and the 20s deadline already ends
+        // it without needing a gesture that can be made by accident.
+        if (down && !_lastMouseDown && !_resizing && _notif == null && _ask is { } ask && _askT > 0.5f)
+        {
+            bool hitRow = false;
+            for (int i = 0; i < _askChips.Count; i++)
+                if (InChip(p, _askChips[i].Rect))
+                {
+                    hitRow = true;
+                    // the write-your-own row opens a field instead of answering; every other row is its
+                    // own answer, which is the whole point of the banner
+                    if (AskBanner.IsOther(_askChips[i].Option)) BeginTyping();
+                    else
+                    {
+                        _asks.Answer(ask, _askChips[i].Option.Label);
+                        EndTyping();
+                        ClearDraft();
+                        _ask = null;
+                        _askHover = -1;
+                    }
+                    break;
+                }
+            // clicking away puts the field down. It cannot key off losing focus the way a normal text box
+            // would - the pill never had the focus to lose.
+            if (!hitRow && _askTyped != null && !InRect(p, NotifLeft(), _ct, Sc(_curW), Sc(_curH)))
+                EndTyping();
+            _lastMouseDown = down;
+            return;
+        }
         if (down && !_lastMouseDown && !_resizing && _notif != null)
         {
             // no close button by design: a click outside dismisses (softly); the grabber strip
@@ -1374,6 +1520,21 @@ internal sealed class NotchController
             tint = (int)Lerp(tint, EmptyCatchAlpha, SmoothStep(_shrink));
         float fade = Math.Clamp((t - 0.45f) / 0.55f, 0f, 1f);
         float mini = Math.Clamp(1f - t / 0.35f, 0f, 1f); // collapsed preview: full when collapsed, gone by t=0.35
+        // the answerable banner uses the same morph; a toast wins the slot, so this runs only when there
+        // is no toast and folds away on its own when the question is answered or expires
+        if (_notif == null && _ask != null && _askT > 0f)
+        {
+            float ea = EaseOutBack(_askT);
+            w = (int)Lerp(w, AskBanner.W, ea);
+            h = (int)Lerp(h, _askH, ea);
+            r = (int)Lerp(r, 26, ea);
+            tint = (int)Lerp(cT, glass ? TintAskApp : TintAskDesk, _askT);
+            fade = Math.Clamp((_askT - 0.45f) / 0.55f, 0f, 1f);
+            // the same melt the toast branch does. Without it the collapsed pill keeps drawing straight
+            // through the banner - reported as the agent's icon and "cogitating..." sitting on top of the
+            // question, which is exactly what it was.
+            mini *= Math.Clamp(1f - _askT / 0.35f, 0f, 1f);
+        }
         if (_notif != null && _notifT > 0f) // pill → banner morph rides on top of whatever size it had
         {
             float en = EaseOutBack(_notifT); // the soft overshoot IS the feel — keep it
@@ -1427,10 +1588,12 @@ internal sealed class NotchController
                 : (circleX, circleY, pillX, pillY); // swap: picked circle fuses into the pill
         }
         // no active widget → bare glass pill (still visible after boot, just a slim tab)
-        Action<Graphics, int, int, float> content = _notif is { } toast && _notifT > 0f
+        Action<Graphics, int, int, float> content = _notif == null && _ask is { } q && _askT > 0f
+            ? (g, cw, ch, f) => AskBanner.Draw(g, cw, ch, f, q, _askHover, tint, _askTyped)
+            : _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
             : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
-        bool pin = _notif == null; // the pin has no business on a notification banner
+        bool pin = _notif == null && _ask == null; // the pin has no business on either banner
         _curW = w;
         _curH = h;
         _notch.OffsetX = _offsetX; // where the pill is parked (drag-to-move)
@@ -1439,11 +1602,90 @@ internal sealed class NotchController
         // tint was, so when the last app closed (a VLC video ending, say) the "invisible" catch-strip kept
         // painting a blurred picture of the desktop behind it — a small grey rectangle that looked like it
         // was colour-matching the wallpaper because it *was* the wallpaper.
-        float glassFade = _empty && !Privacy.Active ? 1f - SmoothStep(_shrink) : 1f;
+        //
+        // A banner is exempt, and that exemption is the whole reason the ask banner looked like a black
+        // slab. _empty means the pill has no widget to show - which is the NORMAL state when a question
+        // arrives with no agent session on the strip - and it drives _shrink to 1, so glassFade was 0 and
+        // the backdrop was never composited: tint over nothing. Not a single trace of the app behind it
+        // came through, over any wallpaper, at any tint. The fade is for the invisible drop-catch strip,
+        // and a banner is the opposite of that - a full surface, with content on it, asking to be read.
+        bool banner = _notif != null || (_ask != null && _askT > 0f);
+        float glassFade = _empty && !Privacy.Active && !banner ? 1f - SmoothStep(_shrink) : 1f;
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
             _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed,
-            glassFade);
+            glassFade, banner ? BannerClarity : 0f);
+    }
+
+    private void BeginTyping()
+    {
+        if (_askTyped != null) return;
+        _askTyped = _askDraftNonce == _ask?.Nonce ? _askDraft : "";
+        _keys.Start();
+    }
+
+    // Closing the field is never the same as discarding what is in it. Escape, a toast stealing the pill,
+    // the question being re-served by the store - all of them land here, and only actually answering
+    // throws the words away.
+    private void EndTyping()
+    {
+        if (_askTyped == null && !_keys.Active) return;
+        if (_askTyped != null) { _askDraft = _askTyped; _askDraftNonce = _ask?.Nonce; }
+        _askTyped = null;
+        _keys.Stop();   // the hook is global; leaving it installed would keep eating the user's keystrokes
+    }
+
+    private void ClearDraft()
+    {
+        _askDraft = "";
+        _askDraftNonce = null;
+    }
+
+    // Both of these run on the low-level hook callback, which Windows kills the hook for if it takes too
+    // long - so they only touch state. The 8ms frame is what notices and redraws, which is a frame away
+    // and invisible; calling Apply here rendered the whole banner inside the callback.
+    private void TypedChar(char c)
+    {
+        if (_askTyped == null) return;
+        if (c < ' ' || c == 0x7F) return;
+        if (_askTyped.Length >= 400) return;   // a banner is not a text editor
+        _askTyped += c;
+    }
+
+    private void TypedKey(int vk)
+    {
+        if (_askTyped == null) return;
+        if (vk == Win32.VK_BACK)
+        {
+            if (_askTyped.Length > 0) _askTyped = _askTyped[..^1];
+        }
+        else if (vk == Win32.VK_ESCAPE) EndTyping();
+        else if (vk == Win32.VK_RETURN)
+        {
+            string answer = _askTyped.Trim();
+            // empty is a cancel, not an answer: sending "" would hand Claude a blank reason and look like
+            // a choice was made
+            if (answer.Length > 0 && _ask is { } ask)
+            {
+                _asks.Answer(ask, answer);
+                _ask = null;
+                _askHover = -1;
+                EndTyping();
+                ClearDraft();
+                return;
+            }
+            EndTyping();
+        }
+        else if (vk == Win32.VK_V)
+        {
+            // paste, because the answer people most want to type into a 470px field is one they copied
+            try
+            {
+                if (Clipboard.Text() is { Length: > 0 } t)
+                    _askTyped = (_askTyped + t.Replace('\r', ' ').Replace('\n', ' ')).Trim();
+            }
+            catch { }
+        }
     }
 
     // focusing a window that hosts a live agent's process/console makes that widget primary,

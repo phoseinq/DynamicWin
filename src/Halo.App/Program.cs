@@ -488,10 +488,15 @@ internal static class Program
     {
         var expires = DateTimeOffset.UtcNow.AddSeconds(20);
         var question = new Halo.ClaudeCode.PendingAsk(
-            "n1", 100, "sess", "AskUserQuestion", null, "Fix the cadence first, or the icon?",
+            "n1", 100, "sess", "AskUserQuestion", null,
+            // long enough to wrap: the title and the rows size themselves to their text, and a sample that
+            // always fits on one line proves nothing about the thing being verified
+            "Fix the frame cadence first, or the icon nobody can miss?",
             [new Halo.ClaudeCode.AskOption("Cadence", "the CPU one"),
              new Halo.ClaudeCode.AskOption("Icon", "the visible one"),
-             new Halo.ClaudeCode.AskOption("Measure more first", "no code yet")], expires);
+             new Halo.ClaudeCode.AskOption("Measure more first",
+                 "no code yet - sit on the profiler until the regression names itself, "
+                 + "which is the option that costs a day and saves three")], expires);
         // a long target on purpose: the command is the thing you are actually deciding about, and it is
         // the first thing that will be too long for the pill
         var permission = new Halo.ClaudeCode.PendingAsk(
@@ -500,24 +505,50 @@ internal static class Program
              new Halo.ClaudeCode.AskOption("deny", "skip it")], expires);
 
         int W = Halo.Widgets.AskBanner.W, pad = 24;
-        using var probe = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
-        int h1 = Halo.Widgets.AskBanner.Height(probe, question, W);
-        int h2 = Halo.Widgets.AskBanner.Height(probe, permission, W);
-        using var bmp = new System.Drawing.Bitmap(W + pad * 2, h1 + h2 + pad * 3);
+        int h1 = Halo.Widgets.AskBanner.Height(question, W);
+        int h2 = Halo.Widgets.AskBanner.Height(permission, W);
+        // The SAME question on both panels the shell can put behind it - the desktop's near-opaque one and
+        // the see-through one it gets over an app - because "do the rows read as glass?" is a question
+        // about what the pane has to contrast with, and the answer differs. Real constants, so this hook
+        // cannot answer for a tint the app has stopped shipping.
+        int[] tints =
+        [
+            Halo.Shell.NotchController.TintAskDesk,
+            Halo.Shell.NotchController.TintAskApp,
+        ];
+        int total = h1 * tints.Length + h2 + pad * (tints.Length + 2);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, total);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
+            // a colourful backdrop, not a flat one: over an opaque shape a translucent pane is
+            // indistinguishable from a flat one, so only something busy behind can answer the question
             using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
-                new System.Drawing.Rectangle(0, 0, W + pad * 2, h1 + h2 + pad * 3),
+                new System.Drawing.Rectangle(0, 0, W + pad * 2, total),
                 System.Drawing.Color.FromArgb(70, 150, 210), System.Drawing.Color.FromArgb(210, 110, 70), 35f))
-                g.FillRectangle(lg, 0, 0, W + pad * 2, h1 + h2 + pad * 3);
+                g.FillRectangle(lg, 0, 0, W + pad * 2, total);
+            // and both extremes as bands through every banner, because the panes have failed at each end in
+            // turn: a near-white title bar left them nothing to lighten against, and a near-black editor
+            // turned the dark version of them into holes. A pane has to read on both bands or it is wrong.
+            using (var wb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(238, 240, 244)))
+            using (var kb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(18, 18, 20)))
+                for (int i = 0; i < tints.Length + 1; i++)
+                {
+                    g.FillRectangle(wb, 0, pad + i * (h1 + pad) + 92, W + pad * 2, 74);
+                    g.FillRectangle(kb, 0, pad + i * (h1 + pad) + 176, W + pad * 2, 74);
+                }
 
             g.TranslateTransform(pad, pad);
-            new Halo.Shell.LayeredNotch().DrawShape(g, W, h1, 26, 245, glass: false);
-            Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1);   // second chip hovered
-
-            g.TranslateTransform(0, h1 + pad);
-            new Halo.Shell.LayeredNotch().DrawShape(g, W, h2, 26, 245, glass: false);
-            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1);
+            for (int i = 0; i < tints.Length; i++)
+            {
+                // the second one is caught mid-answer, because the write-your-own row has a state the
+                // list does not and it is the one that cannot be checked by clicking around
+                string? typed = i == 1 ? "neither - profile it first and" : null;
+                new Halo.Shell.LayeredNotch().DrawShape(g, W, h1, 26, tints[i], glass: false);
+                Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1, tints[i], typed);
+                g.TranslateTransform(0, h1 + pad);
+            }
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, h2, 26, tints[^1], glass: false);
+            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1, tints[^1]);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }

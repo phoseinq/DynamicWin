@@ -48,14 +48,31 @@ public sealed class AskGateTests
 
     // ---- ordinary tools ----
 
+    // v1 does not intercept permissions at all. "Not in permissions.allow" turned out to be a far wider
+    // net than "Claude would have prompted" - session approvals and permission modes are invisible to a
+    // hook - and on a real allow list that meant a 20s block on nearly every Read and Edit.
     [Fact]
-    public void ToolWithNoMatchingRuleIsAskable()
-        => Assert.True(AskGate.ShouldAsk("Bash", Input("""{"command":"rm -rf build"}"""), ["Bash(git status:*)"]));
+    public void OrdinaryToolsAreNotInterceptedInV1()
+        => Assert.False(AskGate.ShouldAsk("Bash", Input("""{"command":"rm -rf build"}"""), ["Bash(git status:*)"]));
 
     [Fact]
     public void ToolCoveredByAnAllowRuleStaysSilent()
         => Assert.False(AskGate.ShouldAsk("Bash", Input("""{"command":"git status --short"}"""),
             ["Bash(git status:*)"]));
+
+    // the opt-in path the matcher exists for: with permissions switched on, the rules decide again
+    [Fact]
+    public void WithPermissionsOnTheRulesDecideAgain()
+    {
+        AskGate.AnswerPermissions = true;
+        try
+        {
+            Assert.True(AskGate.ShouldAsk("Bash", Input("""{"command":"rm -rf build"}"""), ["Bash(git status:*)"]));
+            Assert.False(AskGate.ShouldAsk("Bash", Input("""{"command":"git status --short"}"""),
+                ["Bash(git status:*)"]));
+        }
+        finally { AskGate.AnswerPermissions = false; }
+    }
 
     [Fact]
     public void MissingToolNameFallsSilent()

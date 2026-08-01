@@ -25,11 +25,26 @@ internal static class AskGate
         if (toolName == "AskUserQuestion")
             return toolInput["questions"] is JsonArray q && q.Count == 1;
 
+        // v1 answers QUESTIONS only, and this is the reason.
+        //
+        // The design assumed `permissions.allow` tells us what Claude would have prompted about. It does
+        // not: session approvals, permission modes (acceptEdits, plan) and the tools allowed by default
+        // are all invisible to a hook, so "not in permissions.allow" is a far wider net than "would have
+        // prompted". Measured on the author's own machine, whose allow list is `Bash` and two `Skill`
+        // rules: that net catches every Read, Edit, Write, Grep and Glob, each one raising a banner and
+        // blocking its hook for up to twenty seconds. Unusable.
+        //
+        // The matcher below stays and stays tested, because it is what an explicit opt-in list will need
+        // the day permissions are added on purpose rather than by omission.
+        if (!AnswerPermissions) return false;
+
         string? target = TargetOf(toolName, toolInput);
         foreach (var rule in allowRules)
             if (AllowRuleMatches(rule, toolName, target)) return false;
         return true;
     }
+
+    internal static bool AnswerPermissions;
 
     // Which field of tool_input carries the thing a rule's pattern is written against. A tool that is not
     // listed has no target, so only a bare `Tool` rule can cover it — being coarse here costs a banner,

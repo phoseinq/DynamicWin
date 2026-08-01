@@ -259,9 +259,25 @@ internal static class Win32
     public const int VK_LBUTTON = 0x01;
     public const int VK_ESCAPE = 0x1B;
     public const int VK_CONTROL = 0x11;
+    public const int VK_BACK = 0x08;
+    public const int VK_RETURN = 0x0D;
+    public const int VK_V = 0x56;
 
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    // Typing into the pill. It is created WS_EX_NOACTIVATE so it can never steal focus by being clicked,
+    // which is right for every other interaction and impossible for a text field: no activation, no
+    // keyboard messages. The flag is dropped for exactly as long as an answer is being typed.
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_CHAR = 0x0102;
+    public const int GWL_EXSTYLE = -20;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
 
     // clipboard listener: Windows' screen-snip "copied" toast isn't delivered to UserNotificationListener,
     // so we detect Win+Shift+S ourselves — a new image on the clipboard → synthesize a pill notification
@@ -318,6 +334,45 @@ internal static class Win32
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
     public const uint KEYEVENTF_KEYUP = 0x0002;
+
+    // Typing into the pill without the pill ever taking focus. A background process cannot win the
+    // foreground from Windows, and this window is built never to want it, so keystrokes are read off a
+    // WH_KEYBOARD_LL hook instead and only the ones the field actually consumes are swallowed.
+    public const int WH_KEYBOARD_LL = 13;
+    public const int VK_SHIFT = 0x10, VK_MENU = 0x12, VK_CAPITAL = 0x14;
+    public const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+    public const uint WM_SYSKEYDOWN = 0x0104, WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode, scanCode, flags, time;
+        public UIntPtr dwExtraInfo;
+    }
+
+    public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookExW(int idHook, HookProc fn, IntPtr mod, uint threadId);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern short GetKeyState(int vKey);
+
+    // The output buffer is bytes, and bufLen counts CHARACTERS - half its length. Two heap corruptions
+    // (0xc0000374, no managed exception, nothing in halo-crash.log) were spent on this one call: first a
+    // StringBuilder marshalled as [Out] LPWStr, which is not a valid combination, then a char[] - and
+    // char[] is the subtle one, because DllImport defaults to CharSet.Ansi, so the marshaller hands the
+    // API an 8-byte ANSI scratch buffer and ToUnicodeEx writes 8 UTF-16 characters, 16 bytes, into it.
+    // byte[] is blittable, so it is pinned and passed straight through with nothing to get wrong.
+    [DllImport("user32.dll")]
+    public static extern int ToUnicodeEx(uint vk, uint scan, byte[] state,
+        [Out] byte[] buf, int bufLenChars, uint flags, IntPtr layout);
 
     // system-wide CPU times (idle/kernel/user as FILETIME) → busy% for the adaptive 60/120fps cadence
     [DllImport("kernel32.dll", SetLastError = true)]

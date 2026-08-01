@@ -1,0 +1,149 @@
+using System;
+using System.Collections.Generic;
+using Halo.ClaudeCode;
+using Halo.Widgets;
+
+namespace Halo.Tests;
+
+// The ask banner used to lay itself out from constants, so a description longer than one line was
+// ellipsised away while the banner had the whole screen above it to grow into. Rows now measure their own
+// text. Nothing here checks pixels; it checks the properties that go wrong when geometry is derived from
+// text: that a row grows for its content, that the rects Draw paints are the rects the hit-test clicks,
+// and that recomputing every frame stays cheap.
+public class AskBannerLayoutTests
+{
+    private static PendingAsk Ask(params AskOption[] options)
+        => new("n", 1, "s", "AskUserQuestion", null, "pick one", options,
+            DateTimeOffset.UtcNow.AddMinutes(10));
+
+    private static readonly string Long =
+        "no code yet - sit on the profiler until the regression names itself, which is the option "
+        + "that costs a day and saves three, and then some more words to force a third line";
+
+    [Fact]
+    public void A_row_with_a_long_description_is_taller_than_one_with_a_short_one()
+    {
+        var rows = AskBanner.Layout(Ask(
+            new AskOption("short", "the CPU one"),
+            new AskOption("long", Long)), AskBanner.W).Rows;
+
+        Assert.True(rows[1].Rect.Height > rows[0].Rect.Height,
+            $"long row {rows[1].Rect.Height} should exceed short row {rows[0].Rect.Height}");
+    }
+
+    [Fact]
+    public void A_description_gets_the_lines_the_row_grew_for()
+    {
+        var rows = AskBanner.Layout(Ask(new AskOption("long", Long)), AskBanner.W).Rows;
+
+        // the point of growing the row is that the text is drawn, not trimmed: one line's worth of height
+        // would mean the row grew for nothing
+        Assert.True(rows[0].Desc.Height > rows[0].Label.Height);
+        Assert.True(rows[0].Desc.Bottom <= rows[0].Rect.Bottom);
+    }
+
+    [Fact]
+    public void An_option_with_no_description_still_gets_a_clickable_row()
+    {
+        var rows = AskBanner.Layout(Ask(new AskOption("allow", "")), AskBanner.W).Rows;
+
+        Assert.Equal(0f, rows[0].Desc.Height);
+        Assert.True(rows[0].Rect.Height >= 40f);
+    }
+
+    [Fact]
+    public void Rows_stack_without_overlapping_and_stay_inside_the_banner()
+    {
+        var layout = AskBanner.Layout(Ask(
+            new AskOption("one", "short"),
+            new AskOption("two", Long),
+            new AskOption("three", "")), AskBanner.W);
+
+        Assert.True(layout.Rows[0].Rect.Top > layout.Title.Bottom);
+        for (int i = 1; i < layout.Rows.Count; i++)
+            Assert.True(layout.Rows[i].Rect.Top >= layout.Rows[i - 1].Rect.Bottom,
+                $"row {i} starts at {layout.Rows[i].Rect.Top}, above row {i - 1}'s bottom");
+        Assert.True(layout.Rows[^1].Rect.Bottom < layout.Height);
+    }
+
+    // the number sits outside its option's glass, and clicking it has to count as clicking the option -
+    // which only holds while the hit-test rect is the wider one
+    [Fact]
+    public void The_hit_test_rect_covers_the_number_as_well_as_the_body()
+    {
+        var ask = Ask(new AskOption("allow", "run it"));
+        var row = AskBanner.Layout(ask, AskBanner.W).Rows[0];
+
+        Assert.True(row.Rect.X < row.Body.X);
+        Assert.Equal(row.Rect.Right, row.Body.Right, precision: 3);
+        Assert.Equal(row.Rect.Height, row.Body.Height, precision: 3);
+    }
+
+    [Fact]
+    public void Chips_and_Height_agree_with_the_layout_they_are_read_from()
+    {
+        var ask = Ask(new AskOption("one", "short"), new AskOption("two", Long));
+        var layout = AskBanner.Layout(ask, AskBanner.W);
+        var chips = AskBanner.Chips(ask, AskBanner.W);
+
+        Assert.Equal(layout.Height, AskBanner.Height(ask, AskBanner.W));
+        Assert.Equal(layout.Rows.Count, chips.Count);
+        for (int i = 0; i < chips.Count; i++)
+        {
+            Assert.Equal(layout.Rows[i].Rect, chips[i].Rect);
+            Assert.Same(layout.Rows[i].Option, chips[i].Option);
+        }
+    }
+
+    // callers recompute layout every frame on purpose, rather than caching a height that can drift out of
+    // step with what Draw paints; the memo is what keeps that affordable
+    [Fact]
+    public void Layout_is_memoised_per_ask_and_width()
+    {
+        var ask = Ask(new AskOption("one", "short"));
+
+        Assert.Same(AskBanner.Layout(ask, AskBanner.W), AskBanner.Layout(ask, AskBanner.W));
+        Assert.NotSame(AskBanner.Layout(ask, AskBanner.W), AskBanner.Layout(ask, AskBanner.W - 40));
+    }
+
+    // Claude Code's own question UI always lets you ignore the options and write something. The banner
+    // appends that row itself rather than having the hook invent an option Claude never offered, so what
+    // pins it is that it is there for a question, absent for a permission, and always last.
+    [Fact]
+    public void A_question_gets_a_write_your_own_row_appended_last()
+    {
+        var rows = AskBanner.Layout(Ask(new AskOption("one", "a"), new AskOption("two", "b")),
+            AskBanner.W).Rows;
+
+        Assert.Equal(3, rows.Count);
+        Assert.True(AskBanner.IsOther(rows[^1].Option));
+        Assert.False(AskBanner.IsOther(rows[0].Option));
+    }
+
+    [Fact]
+    public void A_permission_ask_gets_no_write_your_own_row()
+    {
+        var permission = new PendingAsk("n", 1, "s", "Bash", "git push", null,
+            [new AskOption("allow", "run it"), new AskOption("deny", "skip it")],
+            DateTimeOffset.UtcNow.AddMinutes(10));
+
+        var rows = AskBanner.Layout(permission, AskBanner.W).Rows;
+
+        Assert.Equal(2, rows.Count);
+        Assert.DoesNotContain(rows, r => AskBanner.IsOther(r.Option));
+    }
+
+    [Fact]
+    public void A_permission_ask_reserves_a_line_for_its_target()
+    {
+        var opts = new List<AskOption> { new("allow", "run it"), new("deny", "skip it") };
+        var withTarget = new PendingAsk("n", 1, "s", "Bash", "git push --force-with-lease origin master",
+            null, opts, DateTimeOffset.UtcNow.AddMinutes(10));
+        var without = new PendingAsk("n", 1, "s", "Bash", null, null, opts,
+            DateTimeOffset.UtcNow.AddMinutes(10));
+
+        Assert.True(AskBanner.Layout(withTarget, AskBanner.W).Target.Height > 0f);
+        Assert.Equal(0f, AskBanner.Layout(without, AskBanner.W).Target.Height);
+        Assert.True(AskBanner.Height(withTarget, AskBanner.W) > AskBanner.Height(without, AskBanner.W));
+    }
+}
