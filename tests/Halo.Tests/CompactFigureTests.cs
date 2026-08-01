@@ -4,13 +4,41 @@ using Xunit;
 
 namespace Halo.Tests;
 
-// The figure beside a running compact. Two wrong answers came before this one: elapsed against the
-// previous compact's duration (a progress bar for something that reports no progress) and then the
-// context fill (real, but a different question). What is read now is the summary's streamed tokens off
-// the agent's own terminal - the same counter the spinner is showing - so these pin the parsing and the
-// one honest weak point, which is what that count is divided by.
+// The figure beside a running compact. Three wrong answers came before this one: elapsed against the
+// previous compact's duration (a progress bar for something assumed to report no progress), the context
+// fill (real, but a different question), and the streamed token count (real during an ordinary turn,
+// absent during a compact). Claude Code does publish the true figure - as a forty-cell bar of filled and
+// empty parallelograms, with no number anywhere on the line - and that is what is read now.
 public class CompactFigureTests
 {
+    // Built rather than pasted: source files here stay ASCII, and an editor that resolves an escape puts
+    // the real glyph back the moment the line is written.
+    private static string Bar(int filled, int total)
+        => new string((char)0x25B0, filled) + new string((char)0x25B1, total - filled);
+
+    // Captured off a live compact: the frames went 0/40, 1/40, 2/40 ... 16/40, which is the 40% the bar in
+    // the terminal had reached when it was cancelled.
+    [Theory]
+    [InlineData(0, 40, 0)]
+    [InlineData(1, 40, 2)]
+    [InlineData(16, 40, 40)]
+    [InlineData(40, 40, 100)]
+    [InlineData(5, 10, 50)]
+    public void TheBarIsReadAsAShareOfItself(int filled, int total, int expected)
+        => Assert.Equal(expected, CompactProgress.BarShare("  " + Bar(filled, total)));
+
+    // a stray glyph or two in ordinary output must not read as a progress bar, and a line with no bar on
+    // it at all must not answer with a number
+    [Fact]
+    public void OnlySomethingBarLengthCounts()
+    {
+        Assert.Null(CompactProgress.BarShare("see " + Bar(1, 2) + " here"));
+        Assert.Null(CompactProgress.BarShare("* Compacting conversation..."));
+        Assert.Null(CompactProgress.BarShare(""));
+    }
+
+    // The fallback, for a build that shows the streamed count instead of a bar. Kept because it is what an
+    // ordinary turn's spinner carries, so a future compact UI may well carry it too.
     [Theory]
     [InlineData("* Compacting conversation... (esc to interrupt - 12s - 1.2k tokens)", 1200)]
     [InlineData("* Infusing... (4m 10s - 13.1k tokens)", 13100)]
@@ -30,11 +58,9 @@ public class CompactFigureTests
         Assert.Equal(1200, CompactProgress.Streamed("1.2k tokens"));
     }
 
-    // Claude Code shows no percentage of its own - its spinner carries the elapsed clock and the streamed
-    // count, nothing else - so the share is Halo's arithmetic over a measured expectation. Four real
-    // compactions in this project's transcripts came to 5.0k / 5.3k / 5.9k / 6.5k tokens, so a summary
-    // running to about its expectation must read as nearly done, and one that overruns must not reach 100
-    // (only compact_end ends it).
+    // Only the token fallback needs a denominator, and it is measured rather than guessed: four real
+    // compactions in this project's transcripts came to 5.0k / 5.3k / 5.9k / 6.5k tokens. A summary that
+    // overruns its expectation must not reach 100 - only compact_end ends it.
     [Theory]
     [InlineData(0, 5700, -1)]
     [InlineData(570, 5700, 10)]
@@ -44,8 +70,6 @@ public class CompactFigureTests
     public void TheShareIsTheReadingOverWhatASummaryComesTo(int tokens, int expect, int share)
         => Assert.Equal(share, CompactProgress.Share(tokens, expect));
 
-    // No previous compact to measure against means no percentage - the reading itself is shown, because
-    // it is real and it moves, and a percentage over an invented total would not be.
     [Theory]
     [InlineData(-1, 1200, "1.2k tok")]
     [InlineData(-1, 832, "832 tok")]

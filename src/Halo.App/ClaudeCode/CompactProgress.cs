@@ -14,9 +14,19 @@ namespace Halo.ClaudeCode;
 // where it is published, so the terminal is where it is read - Halo has no console of its own, which is
 // exactly what makes AttachConsole to the agent's possible.
 //
-// What is read is real and live: the tokens of the summary written so far, the same number the user is
-// looking at one window over. The denominator is the honest weak point - nothing announces how long the
-// summary will be - and it is measured rather than invented (see TypicalSummary).
+// And it turns out to publish a real percentage after all - just not as a number. While a compact runs the
+// spinner draws a FORTY-CELL BAR of filled and empty parallelograms (U+25B0 / U+25B1):
+//
+//     * Compacting conversation...
+//       [][][][][][][][]......................
+//
+// so the progress is exact: filled / 40. Found by capturing the terminal once a second through a real
+// compact and looking, after two rounds of assuming the spinner carried the token count it shows during
+// an ordinary turn. It does not - during a compact there is no number on screen at all, which is why the
+// pill kept showing nothing while the bar in the terminal climbed to 40%.
+//
+// The token reading below is kept as the fallback for a build that shows one instead, and only that path
+// needs a denominator to guess at.
 internal static class CompactProgress
 {
     // -1 = nothing known. Volatile: written on the pool, read on the render thread.
@@ -85,22 +95,33 @@ internal static class CompactProgress
 
     private static void Sample(int pid)
     {
-        var rows = Interop.ConsoleRead.Tail(pid, 8);
-        int? tokens = null;
+        // 14 rows and two past the cursor: the spinner sits above the prompt, and a TUI parks the cursor
+        // in whatever it wants typed into, which is not always the bottom of what it is drawing.
+        var rows = Interop.ConsoleRead.Tail(pid, 14, below: 2);
+        int? bar = null, tokens = null;
         if (rows is not null)
             foreach (var row in rows)
-                if (Streamed(row) is { } n) tokens = n;   // the spinner is the last such line on screen
+            {
+                if (BarShare(row) is { } b) bar = b;              // the bar wins: it is the real figure
+                else if (Streamed(row) is { } n) tokens = n;      // the spinner is the last such line
+            }
         // Traced because there is no other way to see this fail: the terminal it reads is not ours, the
         // pill cannot be screenshotted, and "no percentage appeared" has three different causes.
-        Trace(pid, rows, tokens);
-        if (rows is null || tokens is not { } t) return;
+        Trace(pid, rows, bar, tokens);
+        if (rows is null) return;
 
-        if (t > _peak) _peak = t;
-        Tokens = t;
-        // Never backwards, and never 100 until it is actually over: a summary that runs longer than the
-        // last one would otherwise sit at 99 having appeared to finish, which is a worse lie than a bar
-        // that slows down. compact_end is what takes it off the pill.
-        int now = Share(t);
+        int now;
+        if (bar is { } pct) { Tokens = -1; now = pct; }
+        else if (tokens is { } t)
+        {
+            if (t > _peak) _peak = t;
+            Tokens = t;
+            now = Share(t);
+        }
+        else return;
+
+        // never backwards: a bar that is redrawn mid-frame can read short for one sample, and a figure
+        // that steps back looks like the work is being undone
         Percent = Percent < 0 ? now : Math.Max(Percent, now);
         Interlocked.Increment(ref Version);
     }
@@ -110,6 +131,26 @@ internal static class CompactProgress
     {
         int total = expect > 0 ? expect : _expect;
         return total <= 0 || tokens <= 0 ? -1 : (int)Math.Clamp(100L * tokens / total, 1, 99);
+    }
+
+    // The bar Claude Code actually draws, as a percentage of itself. Nothing else on screen is made of
+    // these two glyphs, so their presence IS the recognition - no wording, no spinner glyph and no cell
+    // count is part of the contract, and a build that draws a bar of a different length still measures.
+    // by code point, not by glyph: source files here stay ASCII, and an editor that resolves an escape
+    // puts the real character back the moment the line is written
+    private const char Filled = (char)0x25B0, Empty = (char)0x25B1;
+
+    internal static int? BarShare(string? line)
+    {
+        if (string.IsNullOrEmpty(line)) return null;
+        int filled = 0, empty = 0;
+        foreach (var c in line)
+        {
+            if (c == Filled) filled++;
+            else if (c == Empty) empty++;
+        }
+        int total = filled + empty;
+        return total < 8 ? null : (int)Math.Clamp(100L * filled / total, 0, 100);
     }
 
     // "(esc to interrupt - 12s - 1.2k tokens)" -> 1200. Pure, and the whole of what is parsed: the arrow,
@@ -137,18 +178,22 @@ internal static class CompactProgress
 
     public static string Caption() => Caption(Percent, Tokens);
 
-    private static void Trace(int pid, string[]? rows, int? tokens)
+    private static void Trace(int pid, string[]? rows, int? bar, int? tokens)
     {
         try
         {
             string path = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo",
                 "compact-debug.txt");
-            string last = rows is { Length: > 0 } ? rows[^1] : "(none)";
-            if (last.Length > 90) last = last[..90];
-            File.AppendAllText(path,
-                $"{DateTime.Now:HH:mm:ss.fff} pid={pid} rows={rows?.Length.ToString() ?? "null"} " +
-                $"tokens={tokens?.ToString() ?? "-"} expect={_expect} last={last}" + Environment.NewLine);
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"{DateTime.Now:HH:mm:ss.fff} pid={pid} rows={rows?.Length.ToString() ?? "null"} ")
+              .Append($"bar={bar?.ToString() ?? "-"} tokens={tokens?.ToString() ?? "-"}").AppendLine();
+            // every row, but only when nothing parsed - that is the case that cannot be diagnosed from a
+            // summary line, and a working sample would fill the file with the same screen once a second
+            if (bar is null && tokens is null && rows is not null)
+                foreach (var row in rows)
+                    if (row.Length > 0) sb.Append("    | ").AppendLine(row.Length > 110 ? row[..110] : row);
+            File.AppendAllText(path, sb.ToString());
         }
         catch { }
     }
