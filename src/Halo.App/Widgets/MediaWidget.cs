@@ -1263,7 +1263,10 @@ internal sealed class MediaWidget : IWidget
         if (prog >= 0f) _lastProg = prog;
         _barIn = Ease(_barIn, prog >= 0f ? 1f : 0f, dt, 0.20f);
         if (_barIn > 0.01f && _lastProg >= 0f)
-            Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f, alive: playing);
+            // No breath on playback. The pulse means "something is working and you cannot see how far along it
+        // is" - which is a download's problem, not a track's. A track already shows its position by the
+        // bar moving, so a pulse on top of it is decoration competing with the one honest signal there is.
+        Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
