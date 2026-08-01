@@ -28,8 +28,18 @@ writes keys into it, then `FreeConsole`. No focus is taken — which is the whol
 `SetForegroundWindow` from a background process is a dead end this project has already measured twice.
 `SetConsoleCtrlHandler(0, true)` while attached, or the Ctrl+C meant for the agent would end Halo.
 
-**The compact figure again.** The context fill was real but was not progress, which is not what was
-asked for. Checked the shipped `claude.exe` directly: the only `compact_progress` events it raises are
+**Correction, later the same night: Claude Code DOES publish compaction progress.** Not as a number — as
+a forty-cell bar of U+25B0 / U+25B1 under "Compacting conversation…", with nothing numeric on the line.
+The token count the spinner carries belongs to an ordinary turn, so the pill showed nothing while the bar
+in the terminal climbed to 40%, which is exactly what the user reported twice. Found by capturing the
+agent's terminal once a second through a real compact and reading the frames: 0/40, 1/40, 2/40 … 16/40.
+`CompactProgress.BarShare` now reads `filled / total`, which is exact and needs no expectation at all; the
+token path below stays as the fallback. Recognition is the two glyphs themselves, so the wording, the
+spinner glyph and the cell count are all free to change. Three wrong answers preceded this one, and the
+lesson is the cheap one: the screen was readable the whole time and I inferred instead of looking.
+
+**The compact figure, first two attempts.** The context fill was real but was not progress, which is not
+what was asked for. Checked the shipped `claude.exe` directly: the only `compact_progress` events it raises are
 `compact_start` / `compact_end` / `hooks_start`, and the transcript gets nothing between them — but the
 spinner renders the summary's streamed tokens off a `response_length` accumulator. So the pill reads
 that line (`CompactProgress`, once a second, on the pool, only while a session is compacting). The
