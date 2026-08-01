@@ -179,6 +179,14 @@ Centre. And closing the field is never discarding it: Escape, a stolen pill, a r
 text as a draft against that question's nonce and restore it when the question comes back. Only actually
 answering throws the words away.
 
+**The first live answer was typed in Persian, and the field was LTR-only.** RTL text needs
+`DirectionRightToLeft` per the project's own rule, and the trap is that the flag is the *whole* fix:
+it already reverses what `StringAlignment.Near` and `Far` mean, so flipping the alignment as well put
+the run back against the left edge with the caret floating in open space beside it. Flag only, alignment
+untouched, caret at `Right - run` — the insertion point in RTL. `--render-ask` now types mixed
+Persian+English into the sample so this cannot regress. Two pre-existing raw Persian literals in
+`Program.cs`'s notification sample were escaped while here; that file is ASCII again.
+
 **Deployed, for the first time in this feature's life.** `settings.json` already pointed `PreToolUse` at
 `%LOCALAPPDATA%\Programs\Halo\Halo.Hooks.exe`; the binary there predated the ask feature entirely. Now
 published `-r win-x64 --self-contained` and the four `Halo.Hooks.*` files copied over it.

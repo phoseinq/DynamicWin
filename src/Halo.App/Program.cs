@@ -541,8 +541,10 @@ internal static class Program
             for (int i = 0; i < tints.Length; i++)
             {
                 // the second one is caught mid-answer, because the write-your-own row has a state the
-                // list does not and it is the one that cannot be checked by clicking around
-                string? typed = i == 1 ? "neither - profile it first and" : null;
+                // list does not and it is the one that cannot be checked by clicking around. Mixed
+                // Persian + English on purpose: the first live answer typed into this field was Persian,
+                // and RTL is where the caret and the run ordering go wrong. Reads "hello - profile first".
+                string? typed = i == 1 ? "\u0633\u0644\u0627\u0645 - profile first" : null;
                 new Halo.Shell.LayeredNotch().DrawShape(g, W, h1, 26, tints[i], glass: false);
                 Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1, tints[i], typed);
                 g.TranslateTransform(0, h1 + pad);
@@ -615,8 +617,8 @@ internal static class Program
             {
                 Icon = icon,
                 App = "Telegram",
-                Title = "سلام",
-                Body = "بزن بریم",
+                Title = "\u0633\u0644\u0627\u0645",
+                Body = "\u0628\u0632\u0646 \u0628\u0631\u06cc\u0645",
             }, 0f, false);
 
             // Third: the DETAIL state on a mixed-direction body — a Persian sentence followed by a block of

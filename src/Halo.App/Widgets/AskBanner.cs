@@ -263,11 +263,21 @@ internal static class AskBanner
             // The tail, not the head: the caret is where the attention is, so an answer longer than the row
             // scrolls under it rather than ellipsising the end the user is still writing.
             string shown = Tail(g, typed, lf, row.Label.Width - CaretW - 2f);
-            Ink(g, shown, lf, Slack(row.Label), sf, White, a, seeThrough);
-            float caretX = row.Label.X + (shown.Length == 0 ? 0f
-                : g.MeasureString(shown, lf, int.MaxValue, StringFormat.GenericTypographic).Width);
+            // The first live test of this field was answered in Persian, which the LTR path drew with the
+            // caret stranded on the wrong side. The direction flag is the whole fix and the alignment must
+            // be left alone: DirectionRightToLeft already reverses what Near and Far mean, so setting Far
+            // as well put the run back against the left edge with the caret floating away from it.
+            bool rtl = Fx.IsRtl(shown);
+            using var tsf = rtl ? Wrap(StringAlignment.Near) : null;
+            var fmt = tsf ?? sf;
+            if (rtl) fmt.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
+
+            Ink(g, shown, lf, Slack(row.Label), fmt, White, a, seeThrough);
+            float run = shown.Length == 0 ? 0f
+                : g.MeasureString(shown, lf, int.MaxValue, StringFormat.GenericTypographic).Width;
+            float caretX = rtl ? row.Label.Right - run - CaretW - 1f : row.Label.X + run + 1f;
             using (var cb = new SolidBrush(Mul(accent, a)))
-                g.FillRectangle(cb, caretX + 1f, row.Label.Y + 1f, CaretW, LabelLineH - 4f);
+                g.FillRectangle(cb, caretX, row.Label.Y + 1f, CaretW, LabelLineH - 4f);
             if (row.Desc.Height > 0f)
                 Ink(g, "enter to send   esc to go back", df, Slack(row.Desc), sf,
                     seeThrough ? DimClear : Dim, a, seeThrough);
