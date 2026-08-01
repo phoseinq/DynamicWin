@@ -143,8 +143,13 @@ internal sealed class AskStore
     {
         try
         {
+            // A question can only be answered from outside by DENYING the call and putting the answer in
+            // the reason, because a PreToolUse hook has no way to say "the user picked option two". Claude
+            // Code renders any denied call in red under "Error:", so the answer arrives looking like a
+            // failure. The word cannot be changed from here - it is the terminal's, not the pill's - so the
+            // reason says what it is instead, and the user's own words follow.
             string decision = ask.IsQuestion ? "deny" : label;
-            string reason = ask.IsQuestion ? label : $"{label} from the pill";
+            string reason = ask.IsQuestion ? $"answered on the pill: {label}" : $"{label} from the pill";
             var json = new JsonObject
             {
                 ["nonce"] = ask.Nonce,

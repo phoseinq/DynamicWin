@@ -56,6 +56,11 @@ internal static class Program
         // hovered. The pill cannot be screenshotted, and a surface whose entire job is to be clicked has to
         // be looked at before it can be believed.
         if (args.Length >= 2 && args[0] == "--render-ask") { RenderAsk(args[1]); return; }
+        // dev hook: `Halo.App --render-greeting <out.png>` — the install and login greetings as filmstrips,
+        // one row per moment. A write-on cannot be judged from its finished state: what has to be checked is
+        // that the pen is somewhere sensible at every point along the way, and that the pill it sits in is
+        // the right size at that moment.
+        if (args.Length >= 2 && args[0] == "--render-greeting") { RenderGreeting(args[1]); return; }
         // dev hook: `Halo.App --render-local <out.png>` — the banners Halo raises ITSELF, stacked. Every
         // other hook renders a mirrored toast, which always has a body; the body-less ones are our own.
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
@@ -484,6 +489,81 @@ internal static class Program
 
     // dev-only: the notification banner, drawn through the REAL shape path (LayeredNotch.DrawShape) on a
     // colourful backdrop, so any edge fringe and the Persian/English text rendering are visible.
+    private static void RenderGreeting(string outPath)
+    {
+        // The two greetings are different animations, not one with a flag: the install one owns an expanded
+        // pill and gets to use it, the login one has to say the same thing inside a collapsed pill that is
+        // about to go back to work. Both are laid out as filmstrips at the moments that can go wrong.
+        // sampled ON the crossfades, not between them: the moments that can go wrong are the ones where
+        // two words are both partly on the page
+        float[] install = [0.05f, 0.20f, 0.36f, 0.51f, 0.59f, 0.70f, 0.85f, 0.97f];
+        float[] login = [0.10f, 0.35f, 0.62f, 0.88f];
+
+        const int cellW = 620, pad = 18;
+        // summed, not guessed: the frames are different heights on purpose, and a formula that assumed one
+        // height cropped the whole second strip off the bottom of the image
+        float tall = 40f;
+        foreach (float t in install) tall += Halo.Shell.GreetingPlan.Install(t).PillH + pad;
+        foreach (float t in login) tall += Halo.Shell.GreetingPlan.Login(t).PillH + pad;
+        using var bmp = new System.Drawing.Bitmap(cellW + pad * 2, (int)tall + pad * 4);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                System.Drawing.Color.FromArgb(255, 22, 26, 34),
+                System.Drawing.Color.FromArgb(255, 46, 30, 40), 60f))
+                g.FillRectangle(lg, 0, 0, bmp.Width, bmp.Height);
+
+            using var cap = new System.Drawing.Font("Segoe UI", 12f, System.Drawing.GraphicsUnit.Pixel);
+            using var capBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(150, 255, 255, 255));
+            var notch = new Halo.Shell.LayeredNotch();
+            float y = pad;
+
+            g.DrawString("install - the pill opens, writes, clears, then says who it is", cap, capBrush, pad, y);
+            y += 20f;
+            foreach (float t in install)
+            {
+                var s = Halo.Shell.GreetingPlan.Install(t);
+                int w = (int)s.PillW, h = (int)s.PillH;
+                float x = pad + (cellW - w) / 2f;
+                var st = g.Save();
+                g.TranslateTransform(x, y);
+                notch.DrawShape(g, w, h, (int)s.Radius, 190, glass: false);
+                var box = Halo.Widgets.Greeting.InkBox(w, h);
+                Halo.Widgets.Greeting.DrawHello(g, box, s.Written, s.HelloAlpha,
+                    System.Drawing.Color.White, 9f);
+                if (s.LineAlpha > 0f)
+                    Halo.Widgets.Greeting.DrawLine(g, Halo.Widgets.Greeting.Lines[s.LineIndex], box,
+                        s.LineWritten, s.LineAlpha, System.Drawing.Color.White, 9f);
+                g.Restore(st);
+                g.DrawString($"t={t:0.00}", cap, capBrush, pad, y + h - 14f);
+                y += h + pad;
+            }
+
+            y += pad;
+            g.DrawString("login - the same hand, inside a pill that never opens", cap, capBrush, pad, y);
+            y += 20f;
+            foreach (float t in login)
+            {
+                var s = Halo.Shell.GreetingPlan.Login(t);
+                int w = (int)s.PillW, h = (int)s.PillH;
+                float x = pad + (cellW - w) / 2f;
+                var st = g.Save();
+                g.TranslateTransform(x, y);
+                notch.DrawShape(g, w, h, (int)s.Radius, 190, glass: false);
+                Halo.Widgets.Greeting.DrawHello(g, Halo.Widgets.Greeting.InkBox(w, h),
+                    s.Written, s.HelloAlpha, System.Drawing.Color.White, 11f);
+                g.Restore(st);
+                g.DrawString($"t={t:0.00}", cap, capBrush, pad, y + h - 4f);
+                y += h + pad;
+            }
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine($"wrote {outPath}");
+    }
+
     private static void RenderAsk(string outPath)
     {
         var expires = DateTimeOffset.UtcNow.AddSeconds(20);

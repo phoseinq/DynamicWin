@@ -248,6 +248,24 @@ internal sealed class NotchController
     private string? _drawnTyped;
     private string _askDraft = "";
     private string? _askDraftNonce;
+
+    // The greeting owns the pill outright while it runs, which is why it is decided once at startup and
+    // never re-checked: a greeting that could restart mid-play is a greeting that will.
+    private GreetingKind _greet;
+    private float _greetT;
+
+    // Drag-to-rank on the swap strip. _stripKinds is what Groups() last laid out, in view order, so the
+    // drag can talk about neighbours the user can actually see.
+    private readonly StripOrder _stripOrder = StripOrder.Load(StripOrderPath);
+    private List<string> _stripKinds = [];
+    private int _dragRow = -1;        // row being carried, or -1
+    private float _dragFromY;         // where the finger went down
+    private float _dragHeld;          // seconds the button has been down on a row
+    private float _carryDY;           // logical pixels the carried row is lifted from its slot (chased)
+    private float _carryWant;         // where the cursor says it should be
+    private float _drawnCarryDY;
+    private int _drawnDragRow = -1;
+    private float[] _rowShift = [];    // eased displacement per row while something is being carried
     private readonly Halo.Interop.KeyGrab _keys = new();
 
     private float _notifT;        // 0..1 pill → banner morph
@@ -320,6 +338,12 @@ internal sealed class NotchController
         _asks.Rescan();   // a question raised while Halo was starting is still worth answering
         _keys.OnChar = TypedChar;
         _keys.OnKey = TypedKey;
+
+        // Read and stamped in the same breath. If it were stamped when the animation ENDS, a launch that
+        // was closed or crashed halfway through would greet again on the next one, and the settings panel
+        // restarting Halo is exactly the workload that would find that.
+        _greet = GreetingGate.Read(GreetedPath);
+        if (_greet != GreetingKind.None) GreetingGate.Mark(GreetedPath);
         _codexStore = new CodexStatusStore();
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
@@ -887,7 +911,25 @@ internal sealed class NotchController
         // queue and popped the moment the field closed, which is the least useful time to be told about a
         // layout change made minutes ago. Nothing is lost that the user can't still see - a mirrored toast
         // is a copy, and the original is in Action Center.
-        if (_askTyped != null) { while (_notifSrc.Dequeue() is not null) { } }
+        // The greeting runs to the end or gets out of the way; it never shares the pill. A question is the
+        // one thing allowed to cut it short - that has a human waiting on it and 20 seconds to live, and
+        // "hello" can be missed without cost.
+        float prevGreetT = _greetT;
+        var prevGreet = _greet;
+        if (_greet != GreetingKind.None)
+        {
+            if (_asks.Pending != null) { _greet = GreetingKind.None; _greetT = 0f; }
+            else
+            {
+                float secs = _greet == GreetingKind.Install
+                    ? GreetingPlan.InstallSeconds : GreetingPlan.LoginSeconds;
+                _greetT += _dt / secs;
+                if (_greetT >= 1f) { _greetT = 0f; _greet = GreetingKind.None; }
+            }
+        }
+
+        if (_askTyped != null || _asks.Pending != null || _greet != GreetingKind.None)
+        { while (_notifSrc.Dequeue() is not null) { } }
         else if (_notif == null && !_notifClosing && _progress <= 0.02f && _drop < 0f
             && _notifSrc.Dequeue() is { } item)
         {
@@ -897,8 +939,15 @@ internal sealed class NotchController
             _notifDetailH = NotifBanner.DetailHeight(item);
             _notifDeadline = DateTime.UtcNow.AddSeconds(item.Duration); // 6s for real toasts; 1s for language flips
         }
-        // A pending question takes the pill only when no toast is using it: a toast expires on its own,
-        // a question waits for a human and can afford to come second.
+        // A question outranks a toast, which is the opposite of how this shipped. The old reasoning - a
+        // toast expires on its own, a question waits for a human and can afford to come second - is what
+        // starved it in practice: a question is only alive for 20s, and a run of language-flip toasts while
+        // the user typed an answer held the slot until the deadline had passed and the terminal had already
+        // taken it. Observed live, and the user's report was "the box appeared after I'd answered."
+        //
+        // So a toast on screen is cut short and the queue behind it is dropped. Nothing is lost that can't
+        // still be read: a mirrored toast is a copy, and the original is in Action Centre.
+        if (_notif != null && _asks.Pending != null && !_notifDetailOn) _notifClosing = true;
         float prevAskT = _askT;
         int prevAskHover = _askHover;
         var pendingAsk = _notif == null ? _asks.Pending : null;
@@ -1123,13 +1172,23 @@ internal sealed class NotchController
             || _rowOpen != prevRowOpen || forceAnim || mouseMoved || rescaled || _handle != prevHandle
             || _shrink != prevShrink || _stripT != prevStrip || _notifT != prevNotifT || _notifDetail != prevNotifDetail
             || _offsetX != prevOffsetX || _holdT != prevHoldT || !ReferenceEquals(_notif, notifStart)
-            || _askT != prevAskT || _askHover != prevAskHover || _askTyped != _drawnTyped;
+            || _askT != prevAskT || _askHover != prevAskHover || _askTyped != _drawnTyped
+            || _greetT != prevGreetT || _greet != prevGreet
+            // the carried row moves with the cursor and nothing else changes while it does - leaving it out
+            // of this test is what made the drag lag: the icon only caught up when some other part of the
+            // pill happened to redraw
+            || _carryDY != _drawnCarryDY || _dragRow != _drawnDragRow
+            // and unconditionally while something is carried: the slide-aside eases on its own after the
+            // cursor has stopped, and the cursor test above cannot see that
+            || _dragHeld >= DragHold;
         _progress = next;
         _widgetVersion = wv;
         // against the last DRAWN text, not a copy taken earlier in this same frame. Keystrokes arrive
         // between frames, from the keyboard hook, so a within-frame snapshot is always equal to itself and
         // the field rendered its caret and then never updated again.
         _drawnTyped = _askTyped;
+        _drawnCarryDY = _carryDY;
+        _drawnDragRow = _dragRow;
         if (changed) Apply(_progress);
     }
 
@@ -1220,7 +1279,9 @@ internal sealed class NotchController
             if (!byKind.TryGetValue(kind, out var list)) { list = new List<int>(); byKind[kind] = list; order.Add(kind); }
             list.Add(i);
         }
-        return order.ConvertAll(k => byKind[k].ToArray());
+        // registration order is still the default; this only re-ranks kinds the user has dragged
+        _stripKinds = _stripOrder.Apply(order);
+        return _stripKinds.ConvertAll(k => byKind[k].ToArray());
     }
 
     private int[] ActiveIndices()
@@ -1251,11 +1312,105 @@ internal sealed class NotchController
         return v;
     }
 
+    private const float DragHold = 0.26f;   // seconds before a press on a row becomes a carry
+
+    // Tap a row and the app jumps into the pill; hold it and drag up or down and it changes rank.
+    //
+    // The jump used to fire on the press edge, and it cannot any more: a press is the start of both
+    // gestures, so neither can be decided until it is over. This is the same trade the pushpin already
+    // makes, for the same reason. The cost is that the jump lands on release instead of press, which is
+    // tens of milliseconds later and reads as instant; the alternative was starting the drop animation and
+    // then taking it back once the press turned out to be a carry.
+    private bool UpdateStripGesture(Win32.POINT p, bool down)
+    {
+        bool live = _progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && _notif == null
+                    && _ask == null && _greet == GreetingKind.None;
+        int D = Sc(LayeredNotch.CircleD);
+
+        if (down && !_lastMouseDown)
+        {
+            if (!live || !InMenu(p)) return false;
+            _dragRow = Math.Clamp((p.Y - _ct) / D, 0, Math.Max(0, Groups().Count - 1));
+            _dragFromY = p.Y;
+            _dragHeld = 0f;
+            return true;
+        }
+        if (_dragRow < 0) return false;
+        if (!live) { _dragRow = -1; return false; }
+
+        if (down)
+        {
+            _dragHeld += _dt;
+            if (_dragHeld < DragHold) { _carryDY = 0f; return true; }
+
+            // The lift is continuous and the rank is discrete. Only the rank was here at first, so nothing
+            // moved until the cursor had crossed a whole row and the icon never felt picked up.
+            //
+            // Chased rather than snapped. Raw cursor delta was the first version and it stepped, because
+            // the mouse is polled once a frame and its position arrives in jumps of several pixels; easing
+            // toward it turns each of those into a run of smaller ones. The constant is short enough - 45ms
+            // - that it reads as the icon having a little weight rather than as lag.
+            _carryWant = (p.Y - _dragFromY) / S;
+            _carryDY = Lerp(_carryDY, _carryWant, Math.Clamp(_dt / 0.045f, 0f, 1f));
+
+            // Re-anchored after every step rather than measured from the original press, so carrying a row
+            // three places takes three row-heights of travel instead of the cursor having to outrun an
+            // ever-growing offset.
+            int steps = (int)((p.Y - _dragFromY) / D);
+            if (steps != 0 && _dragRow < _stripKinds.Count)
+            {
+                string kind = _stripKinds[_dragRow];
+                if (_stripOrder.Move(_stripKinds, kind, steps))
+                {
+                    _stripOrder.Save(StripOrderPath);
+                    _dragRow = Math.Clamp(_dragRow + steps, 0, _stripKinds.Count - 1);
+                    _dragFromY += steps * D;
+                    // the slot moved under it, so the lift starts over - but the DRAWN offset is carried
+                    // across, or the icon would teleport by a row at the moment the ranks swap
+                    _carryWant = (p.Y - _dragFromY) / S;
+                    _carryDY -= steps * LayeredNotch.CircleD;
+                }
+            }
+            return true;
+        }
+
+        // released
+        bool wasTap = _dragHeld < DragHold && Math.Abs(p.Y - _dragFromY) < D / 2;
+        int row = _dragRow;
+        _dragRow = -1;
+        _dragHeld = 0f;
+        _carryDY = 0f;   // dropped: it settles into the slot it earned
+        if (wasTap && InMenu(p)) JumpToRow(p, row, D);
+        return true;
+    }
+
+    private void JumpToRow(Win32.POINT p, int row, int D)
+    {
+        var rows = Groups();
+        if (rows.Count == 0) return;
+        row = Math.Clamp(row, 0, rows.Count - 1);
+        int mx = _cl + Sc(CollapsedW + LayeredNotch.CircleGap + LayeredNotch.PrivacyPad);
+        var grp = rows[row];
+        int rel = (p.X - mx) / D; // 0 = the app row's own circle, 1.. = a fanned session
+        int pick = rel <= 0 || grp.Length == 1 ? 0 : Math.Clamp(rel - 1, 0, grp.Length - 1);
+        _pending = grp[pick];
+        _dropIcon = _widgets[_pending].Icon;
+        _dropImage = _widgets[_pending].IconImage;
+        int DL = LayeredNotch.CircleD; // drop coords feed the (logical) render space
+        _dropCX = rel <= 0 ? DL / 2f : (rel + 0.5f) * DL; // fly from the circle actually clicked
+        _dropCY = (row + 0.5f) * DL;
+        _drop = 0f;
+        _menu = 0f;
+        _rowOpen = 0f;
+        _row = -1;
+    }
+
     private void PollClick(Win32.POINT p)
     {
         bool down = (Win32.GetAsyncKeyState(Win32.VK_LBUTTON) & 0x8000) != 0;
         if (_moving) { _lastMouseDown = down; return; } // dragging the pill — swallow clicks
         if (UpdatePinGesture(p, down)) { _lastMouseDown = down; return; }
+        if (UpdateStripGesture(p, down)) { _lastMouseDown = down; return; }
         // The chip click IS the answer, so it is handled before anything else can treat it as a click on
         // the pill. A click anywhere else on this banner does NOTHING on purpose: dismissing a question by
         // brushing past it would silently send it back to the terminal, and the 20s deadline already ends
@@ -1337,26 +1492,7 @@ internal sealed class NotchController
                 }
             }
             else if (_progress < 0.1f && TryCollapsedButton(p)) { }
-            else if (_progress < 0.1f && ActiveIndices().Length >= 2 && _drop < 0f && InMenu(p))
-            {
-                var rows = Groups();
-                int D = Sc(LayeredNotch.CircleD);
-                int mx = _cl + Sc(CollapsedW + LayeredNotch.CircleGap + LayeredNotch.PrivacyPad);
-                int row = Math.Clamp((p.Y - _ct) / D, 0, rows.Count - 1);
-                var grp = rows[row];
-                int rel = (p.X - mx) / D; // 0 = the app row's own circle, 1.. = a fanned session
-                int pick = rel <= 0 || grp.Length == 1 ? 0 : Math.Clamp(rel - 1, 0, grp.Length - 1);
-                _pending = grp[pick];
-                _dropIcon = _widgets[_pending].Icon;
-                _dropImage = _widgets[_pending].IconImage;
-                int DL = LayeredNotch.CircleD; // drop coords feed the (logical) render space
-                _dropCX = rel <= 0 ? DL / 2f : (rel + 0.5f) * DL; // fly from the circle actually clicked
-                _dropCY = (row + 0.5f) * DL;
-                _drop = 0f;
-                _menu = 0f;
-                _rowOpen = 0f;
-                _row = -1;
-            }
+            // strip rows are not decided here any more - see UpdateStripGesture, which runs first
         }
         _lastMouseDown = down;
     }
@@ -1550,9 +1686,28 @@ internal sealed class NotchController
         mini *= arrive;
 
         var groups = _empty ? new List<int[]>() : Groups();
+        // A row slides aside when the carried one has come over it, and slides back when it leaves. Eased
+        // toward the target every frame rather than set to it: the displacement IS the feedback, and a row
+        // that teleports out of the way tells the user nothing about what is about to happen.
+        if (_rowShift.Length != groups.Count) _rowShift = new float[groups.Count];
+        bool carrying = _dragHeld >= DragHold && _dragRow >= 0 && _dragRow < groups.Count;
+        float at = carrying ? _dragRow + _carryDY / LayeredNotch.CircleD : 0f;
+        for (int i = 0; i < _rowShift.Length; i++)
+        {
+            float target = 0f;
+            if (carrying && i != _dragRow)
+            {
+                if (_dragRow < i && at >= i) target = -LayeredNotch.CircleD;
+                else if (_dragRow > i && at <= i) target = LayeredNotch.CircleD;
+            }
+            _rowShift[i] = Lerp(_rowShift[i], target, Math.Clamp(_dt / 0.11f, 0f, 1f));
+        }
         var frame = new MenuFrame
         {
-            Show = groups.Count >= 1 || _stripT > 0.01f, // keep drawing through the ease-out
+            CarryRow = _dragHeld >= DragHold ? _dragRow : -1,
+            CarryDY = _carryDY,
+            RowShift = _rowShift,
+            Show = _greet == GreetingKind.None && (groups.Count >= 1 || _stripT > 0.01f), // through the ease-out
             Appear = SmoothStep(_stripT),
             // an app with several sessions shows its plain mark on the row; the fan carries the badges
             RowIcons = groups.ConvertAll(gr => _widgets[gr[0]].Icon).ToArray(),
@@ -1587,13 +1742,35 @@ internal sealed class NotchController
                 ? (pillX, pillY, circleX, circleY)  // arrival: blob detaches from the pill into the circle
                 : (circleX, circleY, pillX, pillY); // swap: picked circle fuses into the pill
         }
+        // The greeting is drawn LAST in this chain and sized first above, because it is the one surface
+        // that is not showing you anything - there is nothing behind it to fall back to and nothing it can
+        // usefully share the pill with.
+        if (_greet != GreetingKind.None)
+        {
+            var gf = _greet == GreetingKind.Install
+                ? GreetingPlan.Install(_greetT) : GreetingPlan.Login(_greetT);
+            w = (int)gf.PillW;
+            h = (int)gf.PillH;
+            r = (int)gf.Radius;
+            fade = 1f;
+            mini = 0f;   // the collapsed widget preview would draw straight through the writing
+            // and nothing else may be on screen either. Startup picks a primary widget and plays the
+            // arrival bloom for it, and the swap strip appears the moment a second app is live - so an icon
+            // came flying in beside the greeting on launch, which is the "one of the icons jumps onto the
+            // screen at the start" bug. The greeting is the only thing the pill is saying at that moment.
+            _drop = -1f;
+            _arrive = -1f;
+            _stripT = 0f;
+        }
         // no active widget → bare glass pill (still visible after boot, just a slim tab)
-        Action<Graphics, int, int, float> content = _notif == null && _ask is { } q && _askT > 0f
+        Action<Graphics, int, int, float> content = _greet != GreetingKind.None
+            ? (g, cw, ch, f) => DrawGreeting(g, cw, ch)
+            : _notif == null && _ask is { } q && _askT > 0f
             ? (g, cw, ch, f) => AskBanner.Draw(g, cw, ch, f, q, _askHover, tint, _askTyped)
             : _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
             : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
-        bool pin = _notif == null && _ask == null; // the pin has no business on either banner
+        bool pin = _notif == null && _ask == null && _greet == GreetingKind.None; // no chrome on a banner
         _curW = w;
         _curH = h;
         _notch.OffsetX = _offsetX; // where the pill is parked (drag-to-move)
@@ -1615,6 +1792,22 @@ internal sealed class NotchController
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
             _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawCollapsed,
             glassFade, banner ? BannerClarity : 0f);
+    }
+
+    // The ink is white at whatever alpha the plan says, over the pill's own glass - it is never tinted to
+    // an accent. This is the one moment the pill has no state to report, and a colour would imply one.
+    private void DrawGreeting(Graphics g, int w, int h)
+    {
+        var f = _greet == GreetingKind.Install
+            ? GreetingPlan.Install(_greetT) : GreetingPlan.Login(_greetT);
+        var box = Greeting.InkBox(w, h);
+        // the login hand sits in a 40px pill, so its pen has to be proportionally heavier or it comes out
+        // as a hairline scribble
+        Greeting.DrawHello(g, box, f.Written, f.HelloAlpha, Color.White,
+            _greet == GreetingKind.Install ? 9f : 11f);
+        if (f.LineAlpha > 0.004f)
+            Greeting.DrawLine(g, Greeting.Lines[f.LineIndex], box, f.LineWritten, f.LineAlpha, Color.White,
+                _greet == GreetingKind.Install ? 9f : 11f);
     }
 
     private void BeginTyping()
@@ -2224,6 +2417,8 @@ internal sealed class NotchController
     private static readonly string HaloDir = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo");
     private static readonly string OffsetPath = System.IO.Path.Combine(HaloDir, "offset");
+    private static readonly string GreetedPath = System.IO.Path.Combine(HaloDir, "greeted");
+    private static readonly string StripOrderPath = System.IO.Path.Combine(HaloDir, "strip-order.txt");
     private static readonly string PinPath = System.IO.Path.Combine(HaloDir, "pinned");
 
     private void LoadOffset()

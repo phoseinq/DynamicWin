@@ -133,6 +133,73 @@ investigated (bug 1) — that is fixed, but it is why the first three screenshot
 
 **Not committed, not pushed; installed build untouched.**
 
+### Next: stop answering, start mirroring (decided, not built)
+
+Two complaints turned out to be one thing. A question answered from the pill arrives in the terminal as
+red `Error: ...`, and the terminal never shows its own question box at all. Both follow from the same
+cause: a `PreToolUse` hook cannot say "the user picked option two", so the only way to answer from outside
+is to **deny** the call and put the answer in the reason — and a denied call is rendered in red, and a
+denied call never runs, so Claude Code has nothing to draw. Wording the reason more clearly (done, it now
+reads `answered on the pill: <choice>`) does not touch either, because the red word belongs to the
+terminal.
+
+The fix for both is to stop deciding. `AskFlow` returns nothing for a question, the tool actually runs,
+Claude Code draws its own box, and the pill shows the same question beside it. The result is then an
+ordinary tool result: no deny, no red. The pill keeps its purpose by becoming a remote control - clicking
+row N sends the digit N to the asking agent's window, because that UI selects by number and the option
+order is the one the hook forwarded.
+
+Constraints agreed before building:
+- Focus the target window first, and if it cannot be found, send nothing. A guessed keystroke is worse
+  than no keystroke, and silent no-ops on a failed probe are the rule everywhere else here.
+- The write-your-own row stays out of this path. Typing a whole string into a TUI is far more fragile than
+  a single digit; free text can be answered in the terminal.
+- The 20s deadline and the ack handshake go away with the blocking, which also removes the starvation
+  window that the toast-priority fix was working around.
+
+### The pill says hello
+
+**Release 0/0, 512 tests pass (was 499).** A greeting, from an SVG of Apple's Macintosh "hello" the user
+supplied. It converts to GDI+ with nothing bought in: 21 cubic beziers in one continuous stroke, and the
+write-on is a `Pen.DashPattern` whose "on" length grows — the same trick the SVG played with
+`stroke-dasharray` over `pathLength`. The gap in that pattern has to be at least the whole remaining path,
+because the pattern repeats and a second copy of the stroke began drawing further along, which showed up
+as a stray dot floating past the end of the word.
+
+Two greetings, not one with a flag. **Install** opens the pill to 460×150, writes the signature, then
+crossfades through `i'm halo` and `welcome`. **Login** — the first launch after Windows comes up — draws
+the same hand inside the collapsed 220×40 pill and never opens it. English per `docs/decisions.md`, which
+locks UI strings, and lowercase per the register the rest of the pill speaks in.
+
+**The constraint that shaped it:** the settings panel Codex is building restarts Halo on apply, and a
+greeting on every applied setting would be intolerable. So the question is not "has Halo ever run" but
+"has Halo run since this Windows session began" — `GreetingGate` compares a stored boot stamp against
+`DateTime.UtcNow - TickCount64`. Verified live: marker deleted → full install greeting played on the real
+pill; killed and relaunched → straight to the normal collapsed pill, derived gap 0.02s against a 120s
+slack. The known wrinkle is that the tick count does not advance while suspended, so a long sleep can
+spend one extra greeting on resume — the right side to be wrong on, and nowhere near the case that must
+never misfire.
+
+Three arrivals were built for the second and third lines before the right one. A clip sweeping across cut
+glyphs down the middle, so `i'm` spent a beat reading as `i'n` — a rendering fault, not handwriting.
+Fading glyph by glyph fixed that but still read as a machine dealing out letters; it also exposed that
+`MeasureString` under `GenericTypographic` returns zero for a space, which laid the line out as `i'mhalo`.
+The plain crossfade the user asked for has none of those failure modes. The signature is centred on its
+**measured** ink, not on the origin: the path runs x -145.7..138.3, so its middle is 3.7 units left of
+zero, and the round cap puts half a pen width beyond the path on every side — together they hung the word
+off-centre and ran its entry stroke off the left edge.
+
+`GreetingPlan` and `GreetingGate` are pure and unit-tested the way `NotchVisibility` was — the pen never
+goes backwards, never overshoots the one end a signature has, the pill is never smaller than collapsed,
+the first line never comes back after the second, and a same-session restart is silent. `--render-greeting`
+lays both out as filmstrips sampled **on** the crossfades, since the moments that can go wrong are the ones
+where two words are both partly on the page.
+
+Not yet observed live: the login greeting, which needs an actual reboot. It is covered by the render hook
+and by the gate's tests only.
+
+**Note for shipping:** the lettering is Apple's. Raised with the user, who chose to use it as-is.
+
 ### Pill half, part 4: write-your-own answers, and the hooks actually deployed
 
 **Release 0/0, 499 tests pass (was 497).** Claude Code's own question UI always lets you ignore the

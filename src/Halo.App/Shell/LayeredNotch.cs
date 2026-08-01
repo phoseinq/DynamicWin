@@ -31,6 +31,9 @@ internal struct MenuFrame
     public Bitmap? DropImage;
     public float Drop;              // 0..1
     public float FromX, FromY, ToX, ToY;
+    public int CarryRow;            // row being dragged to a new rank (-1 none)
+    public float CarryDY;           // how far it has been lifted from its slot, in logical pixels
+    public float[] RowShift;        // per row, how far it has slid aside to make room (logical px, eased)
 }
 
 internal sealed class LayeredNotch
@@ -833,10 +836,25 @@ internal sealed class LayeredNotch
                 }
             }
 
+            // A carried row follows the cursor instead of sitting in its slot, and the row it is passing
+            // slides into the slot it left. Without this the strip only changed when a drag crossed a whole
+            // row height, so the gesture had no feedback at all until it was already done - reported as not
+            // feeling like the icon was in your hand, which it was not.
+            int carry = menu.CarryRow;
+            bool carrying = carry >= 0 && carry < rows && menu.Drop <= 0f;
             for (int i = 0; i < rows; i++)
-                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D,
+            {
+                if (carrying && i == carry) continue;   // drawn last, so it rides over its neighbours
+                // eased by the controller, not snapped here: a row that jumped aside the instant the
+                // carried one crossed it is the thing that felt hard rather than soft
+                float slide = menu.RowShift is { } sh && i < sh.Length ? sh[i] : 0f;
+                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D + slide * ss,
                     Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i], menu.RowProgress[i],
                     menu.RowImageOffsets[i]);
+            }
+            if (carrying)
+                Cell(menu.RowIcons[carry], menu.RowImages[carry], 0, (carry * CircleD + menu.CarryDY) * ss,
+                    1f, menu.RowRings[carry], menu.RowProgress[carry], menu.RowImageOffsets[carry]);
             if (extf > 0.5f)
                 for (int j = 0; j < menu.RowCounts[or_]; j++)
                     Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,
