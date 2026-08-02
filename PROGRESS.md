@@ -1,5 +1,37 @@
 # Halo — progress
 
+## 2026-08-02 (latest): the morph drew nothing for a tenth of its length
+
+**Release 0/0, 630 tests pass. Deployed (hot-swapped `Halo.App.dll`), not pushed.**
+
+**Reported as a dark flash while the pill grows or shrinks - brief, hard to catch, but wrong.** It was
+not the glass, which was the standing hypothesis and would have cost a day. `Apply()` faded the
+collapsed preview out by `t=0.35` and did not begin the expanded content until `t=0.45`, so a tenth of
+the morph drew neither and the pill was an empty tinted rectangle. Worst possible framing, too: the
+geometry rides `EaseOutBack` and so is already near full size while the hole is open, so the emptiness
+is at its largest exactly when there is nothing in it.
+
+Closing the gap to zero was not enough - the two fades still summed to ~0.12 where they met, which is a
+dimming rather than a flash but the same fault. Widened into a real crossfade (`ContentIn = 0.20`,
+`MiniOut = 0.50`), so the faintest moment of the morph now carries 0.375 of full ink instead of none.
+The banner and ask morphs carried identical numbers and now share the same two functions.
+`MorphHasContent` sweeps 1001 samples rather than spot-checking, because a ten-percent hole is exactly
+what a handful of samples steps over.
+
+Also in this build: **a frame-rate ceiling** (`appearance.fps`, Auto/120/60/30) applied after both the
+measured tier and the morph's 120, so it wins everywhere - whether this machine should be pushed to 120
+is a judgement about the hardware that a CPU sample cannot make. Auto stays the default. And
+**`EasedBar`**, which carries what a bar shows: each step is clamped to the distance remaining, so the
+fill converges and can never lead the real value. The written percentage still comes straight from the
+source - a bar may lag by a fraction of a second, a number may not. Wired into the download pill and
+both agent pills.
+
+Open: the user has not yet confirmed the flash is gone on this build. Raised but not scoped - drawing
+on the GPU. Worth noting the measurement already in this file: the open panel's glass costs ~58% CPU at
+120fps, so the timer rate is not the bottleneck, the per-frame cost is. Direct2D/D3D would be a
+rewrite of the whole render path, against a "no new packages" rule and a Composition attempt already
+abandoned at P2. Measure before committing to that.
+
 ## 2026-08-02 (latest): the ask banner had one row standing in for two, and it typed into the wrong one
 
 **Release 0/0, 614 tests pass (8 new). Not deployed, not pushed.** Source-only in
