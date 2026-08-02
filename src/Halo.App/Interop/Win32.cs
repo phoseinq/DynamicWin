@@ -625,6 +625,17 @@ internal static class Win32
     [DllImport("shell32.dll")]
     public static extern void ILFree(IntPtr pidl);
 
+    // Windows' timer resolution is 15.6ms unless a process raises it, and a DispatcherQueueTimer cannot
+    // beat it - so asking for a 3.571ms period landed on a 15.6ms tick, and when the frame overran that
+    // tick it slipped to the next one. Measured on the deployed build before this was added: a morph that
+    // had asked for 280fps came back at 36. Raised only while the pill is moving; 1ms resolution held all
+    // day by a tray app is a battery cost paid for nothing.
+    [DllImport("winmm.dll")]
+    public static extern uint timeBeginPeriod(uint ms);
+
+    [DllImport("winmm.dll")]
+    public static extern uint timeEndPeriod(uint ms);
+
     [ComImport, Guid("b63ea76d-1f85-456f-a19c-48159efa858b"),
      InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IShellItemArray

@@ -616,6 +616,22 @@ internal sealed partial class NotchController
         RateReport.Write(_morphRate.Measured, _displayHz);
     }
 
+    // Paired with the cadence, because a shorter interval on its own buys nothing: the platform timer is
+    // the floor, and until it is raised every request below 15.6ms is the same request. Held only for the
+    // ~300ms a morph lasts - the same trade the ceiling itself makes - and released even if the morph ends
+    // in a way nobody predicted, because an unbalanced timeBeginPeriod outlives the process that made it.
+    private bool _timerRaised;
+    private void RaiseTimer(bool want)
+    {
+        if (want == _timerRaised) return;
+        try
+        {
+            if (want) Win32.timeBeginPeriod(1); else Win32.timeEndPeriod(1);
+            _timerRaised = want;
+        }
+        catch { }
+    }
+
     private int _cadence = MaxFps;   // matches what the constructor arms the timer with
     private void ApplyCadence()
     {
@@ -1662,7 +1678,7 @@ internal sealed partial class NotchController
         // every size that is still easing counts, not just the hover morph: the banner and the ask panel
         // grow through the same Apply(), and the tuck-away shrink is the slowest of the lot
         bool morphing = next != _progress || _notifT != prevNotifT || _askT != prevAskT || _shrink != prevShrink;
-        if (morphing != _morphing) { _morphing = morphing; ApplyCadence(); }
+        if (morphing != _morphing) { _morphing = morphing; RaiseTimer(morphing); ApplyCadence(); }
         // measured on the way out of a morph, which is the only stretch that genuinely asks for the
         // ceiling — a settled pill running at its 60 tier would report 60 and read as a broken setting
         if (_morphRate.Step(morphing, _dt)) RateReport.Write(_morphRate.Measured, _displayHz);

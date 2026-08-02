@@ -55,6 +55,23 @@ single resting state. Confirmed on the strip: art 26.0 → 36.6 → 47.2 → 59.
 because `Render`'s surface *is* `w × h` — without that it showed controls floating outside a half-grown
 pill and invented a bug the real path cannot have.
 
+**And the measurement immediately earned its keep.** The first morph on the deployed build reported
+**36 fps against the 280 it had asked for**. Cause: Windows' timer resolution is 15.6ms unless a process
+raises it, and `DispatcherQueueTimer` cannot beat it — so every request below 15.6ms was the same
+request, and a frame that overran its tick slipped to the next one. Nothing in the source had ever called
+`timeBeginPeriod`. Now raised to 1ms *while the pill is moving only* (the same ~300ms trade the ceiling
+itself makes; 1ms resolution held all day by a tray app is battery spent on nothing).
+
+**That took it to 41 fps, which is the more interesting number.** With the timer out of the way the loop
+is bounded by what a frame costs, not by what it asks for: ~24ms per frame through the morph. So the
+frame-rate ceiling is now honestly plumbed end to end and the pill still moves at ~40fps, because
+`LayeredNotch.Render` — glass capture plus a supersampled GDI+ composite, at a size that changes every
+frame so nothing caches — is the wall. This is the measured version of the user's original complaint
+("its frame rate is low, like 90, it should go to 120"): the real figure is ~40, and no setting will
+move it. Next step is to instrument `Render` and find where the 24ms goes before deciding anything about
+the GPU; the earlier note in this file guessed the per-frame cost was the bottleneck, and it now has a
+number.
+
 Open: `Halo.Tests` does not reference `Halo.Settings`, so the panel's own `Live.Describe` wording is
 unpinned. Worth fixing as part of the settings-truth pass (unit C), not before it. The measured-rate row
 reads "Not measured yet" until the pill has been hovered once.
