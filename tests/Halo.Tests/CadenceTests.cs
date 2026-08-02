@@ -84,10 +84,59 @@ public class CadenceTests
         => Assert.Equal(30, NotchController.Capped(30, 60));
 
     [Fact]
-    public void Auto_is_no_ceiling_at_all()
+    public void An_unknown_ceiling_caps_nothing()
     {
         Assert.Equal(120, NotchController.Capped(120, 0));
         Assert.Equal(NotchController.MaxFps, NotchController.Capped(NotchController.CadenceFps(true, 30), 0));
+    }
+
+    // Auto used to be MaxFps flat: 180 frames a second a 60Hz panel could not show, and 40 fewer than a
+    // 280Hz one could.
+    [Theory]
+    [InlineData(280, 280)]
+    [InlineData(165, 165)]
+    [InlineData(60, 60)]
+    [InlineData(24, 24)]
+    public void Auto_is_whatever_the_display_refreshes_at(int hz, int expected)
+        => Assert.Equal(expected, NotchController.AutoCeiling(hz));
+
+    // 0 is "could not read it" and 1 is what some drivers report for "hardware default". Believing either
+    // would pin the loop to a number nobody chose, which is the invented-value fault in another costume.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(23)]
+    [InlineData(1001)]
+    public void A_refresh_rate_that_cannot_be_true_falls_back(int hz)
+        => Assert.Equal(NotchController.MaxFps, NotchController.AutoCeiling(hz));
+
+    // The point of the whole ladder, and it was the wrong way round: watching was checked FIRST, so an
+    // open panel held 60 even at 95% CPU - exactly the moment a game wants its cores back.
+    [Fact]
+    public void A_slammed_machine_wins_over_an_open_panel()
+        => Assert.Equal(30, NotchController.Tier(0.95f, watching: true, current: NotchController.MaxFps));
+
+    [Fact]
+    public void An_open_panel_still_pins_sixty_when_there_is_room()
+        => Assert.Equal(60, NotchController.Tier(0.20f, watching: true, current: NotchController.MaxFps));
+
+    [Fact]
+    public void A_busy_machine_holds_sixty()
+        => Assert.Equal(60, NotchController.Tier(0.60f, watching: false, current: NotchController.MaxFps));
+
+    [Fact]
+    public void Headroom_reaches_for_the_ceiling()
+        => Assert.Equal(NotchController.MaxFps, NotchController.Tier(0.20f, watching: false, current: 60));
+
+    // The dead band is the reason the tier does not flap once a second on a machine sitting at half load.
+    [Theory]
+    [InlineData(0.45f)]
+    [InlineData(0.50f)]
+    [InlineData(0.55f)]
+    public void Half_load_holds_whatever_it_already_had(float busy)
+    {
+        Assert.Equal(144, NotchController.Tier(busy, watching: false, current: 144));
+        Assert.Equal(30, NotchController.Tier(busy, watching: false, current: 30));
     }
 
     // Auto means MaxFps now, so a user who wants the old behaviour has to be able to ask for it.

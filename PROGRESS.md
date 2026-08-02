@@ -1,6 +1,65 @@
 # Halo — progress
 
-## 2026-08-02 (latest): the morph drew nothing for a tenth of its length
+## 2026-08-02 (latest): the pill stopped guessing what monitor it is on
+
+**Release 0/0, 671 tests pass (32 new). Deployed (hot-swapped `Halo.App.dll` + `Halo.Settings.*`), not
+pushed at time of writing.**
+
+Four things the pill had been assuming rather than reading, and all four assumptions were wrong in the
+same direction — it behaved as though every machine were the one it was written on.
+
+**Auto frame rate is now the display's own refresh rate.** `FpsCeiling`'s Auto branch returned a flat
+`MaxFps` = 240: on a 60Hz panel that is 180 frames a second nobody can see, and on this machine's 280Hz
+one it was forty short of what the panel can show. `Interop/Display.cs` reads
+`MonitorFromWindow` → `GetMonitorInfoEx` → `EnumDisplaySettings(ENUM_CURRENT_SETTINGS)` and
+`AutoCeiling` takes `dmDisplayFrequency` when it is believable. 0 and 1 are what drivers report for
+"hardware default", so both fall back rather than being believed — a made-up refresh rate is the
+invented-number fault wearing a different hat. Verified with the new `--probe-display` hook:
+`refresh 280 Hz · auto fps 280 · period 3.571 ms`, matching what WMI says about the panel. A DEVMODE
+whose layout is one field out does not fail, it returns something plausible, which is exactly why the
+number gets read out loud once.
+
+**A slammed CPU now beats an open panel.** The tier ladder checked `watching` *first*, so the pill held
+a solid 60 at 95% CPU — the one moment a game wants its cores back was the one moment Halo refused to
+yield. Lifted out of `AdaptFrameRate` into `Tier(busy, watching, current)` so the ordering, which is the
+entire content of it, can be pinned by a test. The 0.45–0.55 dead band is kept and now stated: it is
+why a machine sitting at half load does not flap between tiers once a second.
+
+**The settings row reports what was measured, not what was asked for.** `DispatcherQueueTimer` cannot
+promise 280fps, so "Frame rate: 280" was reading the user's own choice back at them. `MorphRate` counts
+frames and seconds across each morph — the one stretch that genuinely runs flat out; a settled pill
+would report its 60 tier and read as a broken setting — and writes `measured hz` to
+`%LOCALAPPDATA%\Halo\fps`. `Halo.Settings` is a separate exe sharing no code, so the loose file is the
+seam, the same one `offset`/`pin`/`tray` use. New Status row under APPEARANCE: "231 fps on a 280 Hz
+display", or "Not measured yet" — never a number nobody measured.
+
+**The pill is sized for the monitor's DPI.** Everything is laid out in pixels and the manifest is
+PerMonitorV2, so Windows correctly did *not* stretch it — which is exactly why nothing compensated, and
+why on a 4K panel at 150% the pill came out two-thirds of its intended physical size. `LayeredNotch`
+gains `Dpi` beside `Scale`; `Zoom` is the product and is what geometry and hit-testing read, so the
+settings row and the corner drag keep meaning the user's own number on any monitor. The corner drag now
+divides its pixel delta by `Dpi` too, or the same hand movement would mean half as much scale at 200%.
+A stored scale from before this change has the display baked into it, so the file gained a `v2` marker
+and an unmarked one is un-baked once. No visible change on this machine (96 dpi, `Zoom` = `Scale`); it
+matters on everyone else's.
+
+**Album art scales as one image instead of switching.** `DrawCollapsed` sized its art off `h` alone, so
+while the pill grew its copy raced past the panel's 132px all the way to 170 and sat 17px to the left of
+where `DrawContent` was drawing a second copy at the fixed panel rect — two squares of different size and
+place, crossfading. Both draws now take `ArtRect(h)`, lerped between the two resting rects, with the
+corner radius opening out on the same `t`. New `--render-morph` hook renders the expand as a filmstrip,
+one row per point along it, at the fades each moment really carries; both bugs this surface has had (the
+tenth of the morph that drew nothing, and this one) live *between* the two ends and are invisible in any
+single resting state. Confirmed on the strip: art 26.0 → 36.6 → 47.2 → 59.6 → 73.7 → 87.2 → 102.0 →
+116.7 → 132.0 px at 9,7 → 26,26, and `ink` never below 0.41. The hook clips each cell to `w × h`
+because `Render`'s surface *is* `w × h` — without that it showed controls floating outside a half-grown
+pill and invented a bug the real path cannot have.
+
+Open: `Halo.Tests` does not reference `Halo.Settings`, so the panel's own `Live.Describe` wording is
+unpinned. Worth fixing as part of the settings-truth pass (unit C), not before it. The measured-rate row
+reads "Not measured yet" until the pill has been hovered once.
+
+## 2026-08-02: the morph drew nothing for a tenth of its length
 
 **Release 0/0, 630 tests pass. Deployed (hot-swapped `Halo.App.dll`), not pushed.**
 

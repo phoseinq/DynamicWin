@@ -63,8 +63,12 @@ internal static class Catalog
                     "Balanced", "Light", "Balanced", "Strong"),
                 Choice("appearance.motion", "Motion", "How quickly the pill settles after it moves",
                     "Soft", "Reduced", "Soft", "Standard"),
-                Choice("appearance.fps", "Frame rate", "What Halo reaches for while the pill is moving. It still drops below this when the machine is busy.",
+                Choice("appearance.fps", "Frame rate", "What Halo reaches for while the pill is moving. Auto follows this display's refresh rate, and every setting still drops below itself when the machine is busy.",
                     "Auto", "Auto", "280", "240", "144", "120", "60", "30"),
+                // A rate the pill ASKS for is not one it gets - the timer cannot promise 280 - so the row
+                // above would otherwise be reading the user's own choice back to them.
+                new("appearance.fpsMeasured", "Measured rate", "What the last movement actually reached, beside what this display can show",
+                    RowKind.Status, "", []),
             ]),
             new("STARTUP", "\uE7E8", [
                 Toggle("general.startup", "Start with Windows", "Launch Halo after you sign in"),

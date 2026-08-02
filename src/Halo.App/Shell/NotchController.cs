@@ -175,8 +175,8 @@ internal sealed partial class NotchController
     private readonly AgentNoticeCoordinator _agentNotices;
     private readonly DispatcherQueueTimer _timer;
 
-    // geometry derived per-use: work area and Scale both change at runtime
-    private float S => _notch.Scale;
+    // geometry derived per-use: work area, Scale and the display's own Dpi all change at runtime
+    private float S => _notch.Zoom;
     private int Sc(int v) => (int)MathF.Round(v * S);
     private int _cl => _notch.WorkLeft + (_notch.WorkWidth - Sc(CollapsedW)) / 2 + (int)_offsetX;
     private int _el => _notch.WorkLeft + (_notch.WorkWidth - Sc(ExpandedW)) / 2 + (int)_offsetX;
@@ -478,14 +478,7 @@ internal sealed partial class NotchController
         if (_cpuBusyBase != 0 && total > _cpuBusyBase)
         {
             float busy = 1f - (float)(idle - _cpuIdle) / (total - _cpuBusyBase);
-            // watching (panel open) → hold a solid 60. The open panel's glass blur is ~4x the collapsed
-            // cost (measured ~58% CPU at 120fps vs ~15% collapsed), so chasing 120 leaves no headroom and
-            // stutters the moment a download loads the machine. 60 halves Halo's load and stays smooth.
-            // Collapsed: 60 is the floor for normal load; only truly slammed drops to 30.
-            if (watching) target = 60;
-            else if (busy > 0.90f) target = 30;       // only truly slammed drops to 30
-            else if (busy > 0.55f) target = 60;       // busy: hold a smooth 60
-            else if (busy < 0.45f) target = MaxFps;   // headroom: as fast as the timer will go
+            target = Tier(busy, watching, target);
 
             // "heavy" backs off glass capture AND drops our priority — but NOT while watching, or the
             // panel itself stutters (lower priority = our render thread gets preempted mid-frame).
@@ -565,6 +558,30 @@ internal sealed partial class NotchController
     // below it still apply: capping at 60 must not stop a slammed machine dropping to 30.
     internal static int Capped(int fps, int ceiling) => ceiling > 0 && fps > ceiling ? ceiling : fps;
 
+    // The measured ladder, lifted out of AdaptFrameRate so the ordering can be pinned by a test - the
+    // ordering is the whole content of it. "watching" (panel open, or a banner up) used to be checked
+    // FIRST and so held a solid 60 even at 95% CPU: exactly the moment a game wants its cores back, Halo
+    // was the one thing refusing to yield. Slammed now wins over watching. The open panel's glass blur is
+    // ~4x the collapsed cost (measured ~58% CPU at 120fps against ~15% collapsed), which is still why
+    // watching otherwise pins 60 rather than chasing the ceiling.
+    // 0.45..0.55 is a deliberate dead band: it returns the current tier, so a machine hovering at half
+    // load does not flap between 60 and the ceiling once a second.
+    internal static int Tier(float busy, bool watching, int current)
+    {
+        if (busy > 0.90f) return 30;      // slammed: give the machine back, panel open or not
+        if (watching) return 60;
+        if (busy > 0.55f) return 60;      // busy: hold a smooth 60
+        if (busy < 0.45f) return MaxFps;  // headroom: as fast as the timer will go
+        return current;
+    }
+
+    // Auto used to mean MaxFps flat, which on a 60Hz panel was 180 frames a second the display could not
+    // show and on a 280Hz one was 40 fewer than it could. The display's own refresh is the only number
+    // that is right on both. Nonsense readings - 0 and 1 are what a driver reports for "hardware default"
+    // - fall back rather than being believed, since a made-up refresh rate would pin the loop to a number
+    // nobody chose.
+    internal static int AutoCeiling(int displayHz) => displayHz is >= 24 and <= 1000 ? displayHz : MaxFps;
+
     private int FpsCeiling => _settings.Current.Text(Halo.Settings.SettingsKeys.FrameRate, "Auto") switch
     {
         "280" => 280,
@@ -573,10 +590,32 @@ internal sealed partial class NotchController
         "120" => 120,
         "60" => 60,
         "30" => 30,
-        _ => 0,   // Auto: no ceiling, which now means MaxFps
+        _ => AutoCeiling(_displayHz),   // Auto: whatever this monitor actually refreshes at
     };
 
     private bool _morphing;
+    private int _displayHz;
+    private long _displayAt;
+    private MorphRate _morphRate;
+
+    // Polled rather than driven off WM_DPICHANGED / WM_DISPLAYCHANGE: the pill is a popup we position
+    // ourselves and drag between monitors, so the message would only tell us about half the ways the
+    // answer changes. Two cheap user32 reads every five seconds.
+    private void PollDisplay()
+    {
+        long now = Environment.TickCount64;
+        if (_displayAt != 0 && now - _displayAt < 5000) return;
+        _displayAt = now;
+        var info = Halo.Interop.Display.Probe(_notch.Hwnd);
+        if (info.Dpi > 0f) _notch.SetDpi(info.Dpi);
+        if (info.Hz != _displayHz)
+        {
+            _displayHz = info.Hz;
+            ApplyCadence();
+        }
+        RateReport.Write(_morphRate.Measured, _displayHz);
+    }
+
     private int _cadence = MaxFps;   // matches what the constructor arms the timer with
     private void ApplyCadence()
     {
@@ -1181,6 +1220,7 @@ internal sealed partial class NotchController
         long frameNow = Environment.TickCount64;
         _dt = _lastFrameAt == 0 ? 0.008f : Math.Clamp((frameNow - _lastFrameAt) / 1000f, 0.001f, 0.05f);
         _lastFrameAt = frameNow;
+        PollDisplay();
         AdaptFrameRate();
         EaseRings();
         CheckAlerts();
@@ -1439,8 +1479,10 @@ internal sealed partial class NotchController
         {
             if (down)
             {
+                // divided by Dpi as well: the drag delta arrives in physical pixels, and without it the
+                // same hand movement means half as much scale on a 200% display as on a 100% one
                 float ns = Math.Clamp(_scale0
-                    + ((p.X - _resizeFrom.X) + (p.Y - _resizeFrom.Y)) / (float)(ExpandedW + ExpandedH),
+                    + ((p.X - _resizeFrom.X) + (p.Y - _resizeFrom.Y)) / ((ExpandedW + ExpandedH) * _notch.Dpi),
                     0.7f, 1.6f);
                 rescaled = ns != _notch.Scale;
                 _notch.Scale = ns;
@@ -1621,6 +1663,9 @@ internal sealed partial class NotchController
         // grow through the same Apply(), and the tuck-away shrink is the slowest of the lot
         bool morphing = next != _progress || _notifT != prevNotifT || _askT != prevAskT || _shrink != prevShrink;
         if (morphing != _morphing) { _morphing = morphing; ApplyCadence(); }
+        // measured on the way out of a morph, which is the only stretch that genuinely asks for the
+        // ceiling — a settled pill running at its 60 tier would report 60 and read as a broken setting
+        if (_morphRate.Step(morphing, _dt)) RateReport.Write(_morphRate.Measured, _displayHz);
         _progress = next;
         _widgetVersion = wv;
         // against the last DRAWN text, not a copy taken earlier in this same frame. Keystrokes arrive

@@ -16,6 +16,7 @@ internal static class Live
         // window is a full one in every screen recording of a settings window
         "api.token" => Token,
         "about.version" => Version,
+        "appearance.fpsMeasured" => Rate,
         "access.startup" => StartupTask ? "On" : "Missing",
         "access.notifications" => "Managed by Windows",
         _ => row.Fallback,
@@ -49,6 +50,37 @@ internal static class Live
             try { return typeof(Live).Assembly.GetName().Version?.ToString(3) ?? "unknown"; }
             catch { return "unknown"; }
         }
+    }
+
+    // The panel cannot time the pill's frames - it is a different process - so the pill writes down what
+    // it measured across its last morph and this reads the file back. Two integers and no sentence, so
+    // the wording stays here. A missing or half-written file says so rather than filling in a number,
+    // which is the same rule the pill keeps about invented percentages.
+    private static string Rate
+    {
+        get
+        {
+            try
+            {
+                string path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "fps");
+                var parts = File.ReadAllText(path).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                int measured = parts.Length > 0 && int.TryParse(parts[0], out var m) ? m : 0;
+                int hz = parts.Length > 1 && int.TryParse(parts[1], out var h) ? h : 0;
+                return Describe(measured, hz);
+            }
+            catch { return NotMeasured; }
+        }
+    }
+
+    internal const string NotMeasured = "Not measured yet";
+
+    internal static string Describe(int measured, int hz)
+    {
+        if (measured > 0 && hz > 0) return $"{measured} fps on a {hz} Hz display";
+        if (measured > 0) return $"{measured} fps";
+        if (hz > 0) return $"{hz} Hz display";
+        return NotMeasured;
     }
 
     // Reading the machine rather than the setting is the point of a Status row - it reports what Windows

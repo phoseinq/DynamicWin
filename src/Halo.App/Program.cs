@@ -28,6 +28,16 @@ internal static class Program
         // other hook renders an expanded panel, but the status ring and the voice both live on the 220x40
         // pill, and how they read TOGETHER as a session tightens is the whole point of both.
         if (args.Length >= 2 && args[0] == "--render-pill") { RenderPill(args[1]); return; }
+        // dev hook: `Halo.App --render-morph <out.png>` — the expand as a filmstrip, one row per point along
+        // it, with the collapsed preview and the panel drawn at the fades they really carry at that moment.
+        // Every other hook renders a resting state, and the two bugs this surface has had (a tenth of the
+        // morph drawing nothing, and the album art switching size instead of scaling) were both invisible in
+        // one: they live between the two ends.
+        if (args.Length >= 2 && args[0] == "--render-morph") { RenderMorph(args[1]); return; }
+        // dev hook: `Halo.App --probe-display` — what the monitor under the pill says about itself. A
+        // DEVMODE whose layout is one field out does not fail, it returns a plausible-looking number, and
+        // that number now decides the frame rate and the pill's size. So it gets read out loud once.
+        if (args.Length >= 1 && args[0] == "--probe-display") { ProbeDisplay(); return; }
         // dev hook: `Halo.App --probe-almanac` — the hourly banner's second line, for real: which city the
         // timezone resolves to, what Open-Meteo answered, and the assembled line. The unit tests pin the
         // shape from known parts; this is the only thing that exercises the two live fetches.
@@ -539,6 +549,111 @@ internal static class Program
 
     // dev-only: the notification banner, drawn through the REAL shape path (LayeredNotch.DrawShape) on a
     // colourful backdrop, so any edge fringe and the Persian/English text rendering are visible.
+    private static void ProbeDisplay()
+    {
+        var th = new System.Threading.Thread(() =>
+        {
+            var notch = new Halo.Shell.LayeredNotch();
+            var info = Halo.Interop.Display.Probe(notch.Hwnd);
+            Console.WriteLine($"hwnd     {notch.Hwnd}");
+            Console.WriteLine($"refresh  {(info.Hz > 0 ? info.Hz + " Hz" : "(unreadable)")}");
+            Console.WriteLine($"dpi      {(info.Dpi > 0f ? $"{info.Dpi:0.00}x ({info.Dpi * 96f:0} dpi)" : "(unreadable)")}");
+            Console.WriteLine($"auto fps {Halo.Shell.NotchController.AutoCeiling(info.Hz)}"
+                + (Halo.Shell.NotchController.AutoCeiling(info.Hz) == Halo.Shell.NotchController.MaxFps
+                    && info.Hz != Halo.Shell.NotchController.MaxFps ? "  (fallback - the reading was not usable)" : ""));
+            Console.WriteLine($"period   {Halo.Shell.NotchController.IntervalMs(Halo.Shell.NotchController.AutoCeiling(info.Hz)):0.000} ms");
+        });
+        th.SetApartmentState(System.Threading.ApartmentState.STA);
+        th.Start();
+        th.Join();
+    }
+
+    // A synthetic cover rather than whatever happens to be playing: a ring around a centre dot makes a
+    // wrong crop or a squashed aspect obvious at a glance, which a photograph of a band does not.
+    private static byte[] SampleCover()
+    {
+        using var art = new System.Drawing.Bitmap(320, 320);
+        using (var ag = System.Drawing.Graphics.FromImage(art))
+        {
+            using var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, 320, 320),
+                System.Drawing.Color.FromArgb(255, 236, 84, 60),
+                System.Drawing.Color.FromArgb(255, 42, 30, 120), 35f);
+            ag.FillRectangle(lg, 0, 0, 320, 320);
+            ag.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var ring = new System.Drawing.Pen(System.Drawing.Color.FromArgb(210, 255, 236, 180), 16f);
+            ag.DrawEllipse(ring, 70, 70, 180, 180);
+            using var dot = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(255, 20, 18, 26));
+            ag.FillEllipse(dot, 145, 145, 30, 30);
+        }
+        using var ms = new System.IO.MemoryStream();
+        art.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+        return ms.ToArray();
+    }
+
+    private static void RenderMorph(string outPath)
+    {
+        var th = new System.Threading.Thread(() =>
+        {
+            // sampled where the two fades overlap, not at the ends: the ends were never the problem
+            float[] steps = [0f, 0.10f, 0.20f, 0.32f, 0.45f, 0.58f, 0.72f, 0.86f, 1f];
+            const int pad = 16, cellW = 560, capH = 18;
+            var widget = new Halo.Widgets.MediaWidget(new Halo.Widgets.MediaSessions(), 0);
+            widget.Seed("Bohemian Rhapsody", "Queen", SampleCover(), 0.42);
+
+            float tall = pad;
+            foreach (float t in steps) tall += 40 + (220 - 40) * t + capH + pad;
+            using var bmp = new System.Drawing.Bitmap(cellW + pad * 2, (int)tall + pad);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                    new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                    System.Drawing.Color.FromArgb(255, 24, 26, 33),
+                    System.Drawing.Color.FromArgb(255, 48, 32, 44), 60f))
+                    g.FillRectangle(lg, 0, 0, bmp.Width, bmp.Height);
+
+                using var cap = new System.Drawing.Font("Consolas", 12f, System.Drawing.GraphicsUnit.Pixel);
+                using var capBrush = new System.Drawing.SolidBrush(
+                    System.Drawing.Color.FromArgb(160, 255, 255, 255));
+                var notch = new Halo.Shell.LayeredNotch();
+                float y = pad;
+                foreach (float t in steps)
+                {
+                    // linear in t rather than through EaseOutBack: the easing decides WHEN each size is
+                    // reached, and what a frame looks like at a given size is the question here
+                    int w = (int)(220 + (560 - 220) * t);
+                    int h = (int)(40 + (220 - 40) * t);
+                    int r = (int)(20 + (30 - 20) * t);
+                    float mini = Halo.Shell.NotchController.MiniFade(t);
+                    float content = Halo.Shell.NotchController.ContentFade(t);
+                    var st = g.Save();
+                    g.TranslateTransform(pad + (cellW - w) / 2f, y);
+                    // Render's own surface IS w by h, so anything a widget draws outside it never exists.
+                    // Without this the filmstrip showed controls laid out for the final panel floating
+                    // outside a half-grown pill and invented a bug that the real path cannot have.
+                    g.SetClip(new System.Drawing.RectangleF(0, 0, w, h));
+                    notch.DrawShape(g, w, h, r, 190, glass: false);
+                    if (mini > 0.01f) widget.DrawCollapsed(g, w, h, mini);
+                    widget.DrawContent(g, w, h, content);
+                    g.Restore(st);
+                    var art = Halo.Widgets.MediaWidget.ArtRect(h);
+                    g.DrawString(
+                        $"t={t:0.00}  h={h,3}  preview={mini:0.00}  panel={content:0.00}  ink={mini + content:0.00}"
+                        + $"  art={art.Width:0.0}px @ {art.X:0.0},{art.Y:0.0}",
+                        cap, capBrush, pad, y + h + 3);
+                    y += h + capH + pad;
+                }
+            }
+            bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+            Console.WriteLine($"wrote {outPath}");
+        });
+        th.SetApartmentState(System.Threading.ApartmentState.STA);
+        th.Start();
+        th.Join();
+    }
+
     private static void RenderGreeting(string outPath)
     {
         // The two greetings are different animations, not one with a flag: the install one owns an expanded

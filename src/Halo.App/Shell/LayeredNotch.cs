@@ -71,23 +71,56 @@ internal sealed class LayeredNotch
     private static readonly string ScalePath = System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Halo", "scale");
 
+    // What the DISPLAY needs, kept apart from what the user asked for. Everything here is laid out in
+    // pixels, so on a 4K panel at 150% the pill came out two-thirds of its intended physical size — the
+    // manifest is PerMonitorV2, so Windows correctly did NOT stretch it, which is exactly why nothing
+    // compensated for it. Zoom is the product and is what geometry and hit-testing read; Scale stays the
+    // user's own number, so the settings row and the corner drag mean the same thing on every monitor.
+    public float Dpi { get; private set; } = 1f;
+    public float Zoom => Scale * Dpi;
+    private bool _legacyScale;   // stored before Dpi existed, so the number has the display baked into it
+
+    public void SetDpi(float dpi)
+    {
+        if (dpi is < 0.5f or > 8f) return;   // probe failed: keep what we have rather than snapping to 1
+        bool migrate = _legacyScale;
+        _legacyScale = false;
+        if (Math.Abs(dpi - Dpi) < 0.001f && !migrate) return;
+        // someone who dragged the pill up to 1.3 to fight a 150% panel would otherwise get 1.3 * 1.5 and
+        // a pill half off the screen. Their stored number already contains the display; take it back out
+        // once, and from then on the two are independent.
+        if (migrate && Math.Abs(dpi - 1f) > 0.001f)
+        {
+            Scale = Math.Clamp(Scale / dpi, 0.7f, 1.6f);
+            SaveScale();
+        }
+        Dpi = dpi;
+    }
+
     public void LoadScale()
     {
         try
         {
-            if (float.TryParse(System.IO.File.ReadAllText(ScalePath),
-                    System.Globalization.CultureInfo.InvariantCulture, out var s))
-                Scale = Math.Clamp(s, 0.7f, 1.6f);
+            // "1.05 v2" — the marker says the number is a user scale with no display in it. A bare number
+            // is a file from before Dpi existed and has to be un-baked once (see SetDpi).
+            string[] parts = System.IO.File.ReadAllText(ScalePath).Split(' ',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length == 0) return;
+            if (!float.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out var s)) return;
+            Scale = Math.Clamp(s, 0.7f, 1.6f);
+            _legacyScale = parts.Length < 2 || parts[1] != ScaleMark;
         }
         catch { }
     }
+
+    private const string ScaleMark = "v2";
 
     public void SaveScale()
     {
         try
         {
             System.IO.File.WriteAllText(ScalePath,
-                Scale.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Scale.ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + ScaleMark);
         }
         catch { }
     }
@@ -491,7 +524,7 @@ internal sealed class LayeredNotch
 
         // resize: everything is laid out in logical units, one ScaleTransform blows it all up
         // together — icons, text, clips and the strip stay in lockstep at any size
-        float S = Scale;
+        float S = Zoom;
         int pw = (int)MathF.Ceiling(totalW * S), ph = (int)MathF.Ceiling(totalH * S);
 
         var bmi = new Win32.BITMAPINFOHEADER

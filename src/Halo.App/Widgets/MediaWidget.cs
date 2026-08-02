@@ -64,6 +64,27 @@ internal sealed class MediaWidget : IWidget
         Resync();
     }
 
+    // dev-hook seam (--render-morph): the filmstrip has to be the same picture every time it is rendered,
+    // and the only other way to get a track in here is to be playing one. Nothing in a shipping path calls
+    // this; with no live session PollTimeline finds nothing to poll and the seeded state stands.
+    internal void Seed(string title, string artist, byte[]? thumb, double through)
+    {
+        lock (_lock)
+        {
+            _title = title;
+            _artist = artist;
+            _trackKey = title + "|" + artist;
+            _thumb = thumb;
+            _thumbWide = false;
+            _playing = true;
+            _start = TimeSpan.Zero;
+            _end = TimeSpan.FromMinutes(4);
+            _pos = TimeSpan.FromMinutes(4 * through);
+            _posAt = DateTime.UtcNow;
+            _version++;
+        }
+    }
+
     // the process name of the app this slot mirrors (e.g. "spotify", "chrome") — for the focus-hide rule
     public string App => _sessions.SlotApp(_slot);
 
@@ -860,12 +881,15 @@ internal sealed class MediaWidget : IWidget
         EnsureArt();
         float dt = Dt();   // once per frame: every ease below is a real time constant, not a per-frame step
 
-        const float artX = 26, artY = 26, artSize = 132;
+        // not the fixed panel rect: mid-morph this is wherever the collapsed art has grown to, so the two
+        // draws land on top of each other and the crossfade reads as one image
+        var art = ArtRect(h);
+        float artX = art.X, artY = art.Y, artSize = art.Width;
         // Radii deliberately larger than the panel: the glow is clipped to the pill anyway, and sizing it to
         // fit meant its falloff ended INSIDE the panel, leaving the far side unlit and a visible boundary
         // where it stopped. Overshooting puts the vanishing point outside the glass entirely.
         Fx.Glow(g, w, h, fade, artX + artSize / 2f, artY + artSize / 2f, w * 1.35f, h * 1.9f, 38, _accent);
-        DrawArt(g, artX, artY, artSize, fade);
+        DrawArt(g, artX, artY, artSize, fade, ArtRadius(h));
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
         bool rateOk0; lock (_lock) rateOk0 = _rateEnabled;
@@ -1172,6 +1196,36 @@ internal sealed class MediaWidget : IWidget
         g.FillPath(br, path);
     }
 
+    // The album art is ONE image growing, not two crossfading. DrawCollapsed sized itself off h alone, so
+    // while the pill grew its art raced past the panel's 132 all the way to 170 and sat 17px to the left
+    // of it, while DrawContent drew a second copy at the fixed panel rect - two squares of different size
+    // and place in the same frame, which is what read as a sudden switch rather than a scale. Both ends of
+    // the morph are known here, so both draws take the same lerped rect and the crossfade then happens
+    // between rectangles that agree, which is the whole trick.
+    private const float MorphFromH = 40f, MorphToH = 220f;
+    private const float MiniArtX = 9f, MiniArtY = 7f, MiniArtSize = MorphFromH - 14f;
+    private const float PanelArtX = 26f, PanelArtY = 26f, PanelArtSize = 132f;
+
+    internal static float MorphT(float h) => Math.Clamp((h - MorphFromH) / (MorphToH - MorphFromH), 0f, 1f);
+
+    internal static RectangleF ArtRect(float h)
+    {
+        float t = MorphT(h);
+        float size = MiniArtSize + (PanelArtSize - MiniArtSize) * t;
+        return new RectangleF(
+            MiniArtX + (PanelArtX - MiniArtX) * t,
+            MiniArtY + (PanelArtY - MiniArtY) * t,
+            size, size);
+    }
+
+    // The pill's art is nearly a squircle, the panel's is a soft-cornered square. Lerped on the same t, so
+    // the corners open out as it grows instead of snapping at the handover.
+    internal static float ArtRadius(float h)
+    {
+        const float miniR = MiniArtSize * 0.28f;
+        return miniR + (14f - miniR) * MorphT(h);
+    }
+
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
     {
         using var path = Rounded(new RectangleF(x, y, size, size), radius);
@@ -1312,7 +1366,8 @@ internal sealed class MediaWidget : IWidget
         lock (_lock) { title = _title; playing = _playing; }
         if (title == null) return;
         EnsureArt();
-        float sz = h - 14f, x = 9, y = (h - sz) / 2f;
+        var art = ArtRect(h);
+        float sz = art.Width, x = art.X, y = art.Y;
         float dt = PillDt();
         // -1 is also what a switched-off timeline looks like from here, which is the point: every
         // downstream branch already knows how to draw a pill with no bar, because a live stream has
@@ -1344,7 +1399,7 @@ internal sealed class MediaWidget : IWidget
         // bar moving, so a pulse on top of it is decoration competing with the one honest signal there is.
         Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
-        DrawArt(g, x, y, sz, fade, sz * 0.28f);
+        DrawArt(g, x, y, sz, fade, ArtRadius(h));
 
         // No ring around the art. The pill's own background already carries this exact number, and a second
         // reading of it two pixels away is decoration, not information.
