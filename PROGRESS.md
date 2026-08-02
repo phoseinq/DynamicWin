@@ -1,5 +1,57 @@
 # Halo — progress
 
+## 2026-08-03: five media/download reports fixed in one pass (queue items 1, 2, 3+8, 9, 10)
+
+**Release 0/0, 680 tests pass (9 new). Deployed (hot-swapped `Halo.App.dll`, pid verified alive, no
+crash log), not pushed at time of writing.**
+
+**1 — Spotify art retries were being silently dropped.** Two real defects in `ChaseArt`:
+(a) one chain per widget via `_chasing`, and the chain *returned* on an epoch mismatch — but the new
+track's `ChaseArt` call had already bounced off `_chasing` while the old chain slept in `Task.Delay`,
+so any track started during another track's chase (skipping, mostly — Spotify leaves the thumbnail
+empty at the start of nearly every track) got zero retries and wore the app logo to the end. The chain
+now REBINDS: on a track change it re-reads session/epoch and restarts the schedule (`ArtChase.Restart`,
+pure `Decide` helper, pinned by `MediaArtChaseTests`). (b) `_artStale` was set outside the commit lock
+and after `_version++`, and `EnsureArt` checked it outside its own snapshot lock — the flag could be
+consumed by a decode of the OLD thumb and the cover that had just landed was never decoded. Flag now
+set inside the commit lock before the version bump; read+cleared under the snapshot lock.
+
+**2 — "two bars" on the media pill.** Not `PillBar` (its glows were already Intersect-clipped): the art
+backlight in `DrawCollapsed` was `Fx.Glow(..., rx: w*0.7)` drawn AFTER the bar — an accent wash to ~80%
+across the pill, sticking out past the wavefront as a paler copy of it. Extracted as
+`MediaWidget.ArtGlow` hugging the art (`rx = artW*2.1`), and added to the `--render-bar` filmstrip —
+the hook missing this glow is exactly how the regression shipped unseen. Verified: filmstrip at
+frac=0.3 with the Spotify green shows one bar, nothing ahead of the wavefront.
+
+**3 + 8 — choppy collapsed animation (bar movement, download pulse).** Two causes, both fixed:
+(a) `NotchController`'s collapsed-anim gate was "every 4th frame" — ~30fps only at the 120 tier it was
+sized for; at the 60 tier (busy machine, 60Hz ceiling) it was 15fps. Now milliseconds (16ms → ~60fps at
+any tier that can supply it), the same frames→ms lesson the glass capture cadence learned.
+(b) `DownloadWidget.Animating` was `Spinning` only — an ordinary percent-bearing download (the state
+whose PillBar breathes `alive:!paused`) was NOT animating, so its pulse only got a frame when a network
+read bumped Version: a handful of irregular fps. Now animating whenever an un-paused download shows.
+The "wants more colours" half of the report is expected to be this same artifact (a 2.4s breath at
+15fps steps ~3 alpha levels per frame); re-check with the user before inventing a palette.
+
+**9 — long titles now scroll on their own.** `DrawScrollingLine` scrolled only under the pointer, by
+design ("permanent crawl is tiring") — user overruled for the playing case. Playing + overflow now
+self-scrolls (costs nothing: a playing pill is animating anyway) with a longer rest between laps
+(`MarqueeRest` 1.6s vs hover's 0.35s hold); paused keeps the old parked-ellipsis-until-hover contract,
+because paused is the one state where an idle marquee would buy frames purely for decoration.
+
+**10 — cover card-flip on track change.** `FlipPose` = horizontal squeeze `|cos(pi t)|` with the face
+swap at the zero crossing (old cover narrows away, the next opens from behind it), 460ms, drawn in
+`DrawArt` with a world transform so path+texture squeeze together. Outgoing face snapshotted before
+`DisposeFrames`; no outgoing face (first track, chased cover replacing the app icon) starts at the
+halfway point so only the entrance half plays. Timestamp clock, not an eased field — DrawCollapsed and
+DrawContent run in the same frame mid-morph on different dt clocks and a shared stepped field would
+flip double-speed exactly then. `Animating` includes `Flipping` so a paused skip still animates.
+Geometry pinned by `MediaFlipTests`; `--render-widget media` confirmed the panel renders with real art
+after the refactor. Not yet eyeballed live — flip and marquee need a human glance.
+
+Items still open from the queue below: 4 (Telegram timeline — user will test on a real track),
+5 (bug report delivery — design pass to redo), 6 (release), 7 (greeting late after boot).
+
 ## Next up — reported 2026-08-02, not started
 
 Queued by the user at the end of the session, in their order. Nothing below has been investigated yet;
@@ -40,6 +92,33 @@ these are the reports, not diagnoses.
    `phoseinq/Halo`; `Directory.Build.props` still says `3.2.0`, so a release needs a version bump first.
    Note `phoseinq/Halo` `main` is a *stripped* mirror with no shared history — comment-bearing `master`
    must never be pushed there directly; it goes through `tools/strip`.
+
+Added 2026-08-03, same status (reports, not diagnoses):
+
+7. **The greeting text is missing or very late after boot.** "hello" either never appears or shows up
+   long after login, still reproducible on a fresh boot. The path is `GreetingGate.Decide` (marker file
+   under `%LOCALAPPDATA%\Halo\`) → `NotchController`'s greeting ownership → `GreetingPlan.Login`. Boot
+   is the suspect axis: at Startup-folder launch the pill starts seconds after explorer, so anything
+   the greeting waits on (first frame, display probe, marker IO on a cold disk) can push it out or
+   race it. Find where the clock actually starts vs. when the pill first becomes visible.
+
+8. **The download pulse runs at a visibly low frame rate, and wants more colours.** Two asks in one:
+   the pulse animation stutters (check whether `DownloadWidget` reports `Animating` and what
+   `AdaptFrameRate` tier a download alone lands in — a pulse at the idle fps tier would look exactly
+   like this), and the palette should have more colour steps than it has now.
+
+9. **Long titles in the media pill must scroll on their own, not only under the mouse.** Today
+   `DrawScrollingLine` only starts the marquee when the pointer is on the title row (`onTitle`) — by
+   design, see the comment at `MediaWidget.cs:901`. The user wants it self-scrolling when the text
+   overflows, no hover needed. Mind why the hover gate exists: an always-running marquee forces
+   `Animating = true` constantly (`_marqueeScrolling`), which costs frames for every long-titled
+   paused track — so the change needs a story for that, not just removing the gate.
+
+10. **Track change wants a cover flip.** The user's words: the old art spins away and the next one
+    comes in from behind it — "a simple animation". The art draw path is `DrawArt` (collapsed and
+    panel share it); a horizontal-scale flip (scale X 1→0 with the old frame, 0→1 with the new) is the
+    cheap honest version of "spins and the next comes from behind". Hook it off `_artKey` changing in
+    `EnsureArt`, which is exactly the moment the new cover replaces the old.
 
 Still open from before this list: instrumenting `LayeredNotch.Render` to find where the ~24ms per morph
 frame goes (see the entry below — the measured rate is 41fps and no setting moves it), and units C, E

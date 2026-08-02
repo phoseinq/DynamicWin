@@ -47,4 +47,16 @@ public class MediaMarqueeTests
     [Fact]
     public void A_zero_span_cannot_divide_by_itself_into_a_runaway_offset()
         => Assert.Equal((0f, 0f), MediaWidget.MarqueeStep(500f, 9f, 0.5f, 0f));
+
+    // the unattended (playing, no hover) marquee rests longer between laps than the hovered one: a hold
+    // that would already be over under the mouse is still parked when the pass is self-driven
+    [Fact]
+    public void The_self_driven_pass_rests_longer_than_a_hovered_one()
+    {
+        var (offset, _) = MediaWidget.MarqueeStep(0f, MediaWidget.MarqueeHold + 0.1f, 0.2f, 300f,
+            MediaWidget.MarqueeRest);
+        Assert.Equal(0f, offset);   // hovered would be moving by now; the rest keeps it parked
+        (offset, _) = MediaWidget.MarqueeStep(0f, MediaWidget.MarqueeRest, 0.2f, 300f, MediaWidget.MarqueeRest);
+        Assert.True(offset > 0f);
+    }
 }

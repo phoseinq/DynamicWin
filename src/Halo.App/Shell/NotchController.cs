@@ -295,7 +295,7 @@ internal sealed partial class NotchController
     private long _langFgSince;  // when _langFg became foreground — swallow the OS's lazy per-app layout apply
     private IntPtr _behind = IntPtr.Zero;
     private long _lastCaptureAt;   // wall clock of the last glass grab; 0 = grab on the next frame
-    private int _animTick;
+    private long _animDrewAt;
     private int _lastCaptureVer;
     // edge-triggered system alerts (throttled to ~1/s in CheckAlerts); each flag fires once per episode
     private long _alertAt;
@@ -1633,7 +1633,12 @@ internal sealed partial class NotchController
         bool forceAnim = false;
         bool animating = _widgets[_primary].Animating;
         if (animating && _progress >= 0.5f) forceAnim = true;                               // open: every frame
-        else if (animating && ++_animTick >= 4) { _animTick = 0; forceAnim = true; }         // collapsed: ~30fps
+        // Milliseconds, not frames — same lesson the glass capture cadence learned at line ~157. "every
+        // 4th frame" was ~30fps only at the 120 tier it was sized for; at the 60 tier (any busy machine,
+        // or a 60Hz ceiling) it was 15fps, which is where "the download pulse is choppy" and "the bar
+        // isn't smooth" were actually coming from. 16ms holds the collapsed animation at ~60fps at every
+        // tier that can supply it, and a slammed machine's 30 tier still degrades it honestly to 30.
+        else if (animating && _lastFrameAt - _animDrewAt >= 16) { _animDrewAt = _lastFrameAt; forceAnim = true; }
 
         // cursor in logical panel coords for widget hover effects; redraw as it moves over the open panel
         // (while a banner is up, coords are banner-local instead so its grabber can react to hover)

@@ -51,7 +51,11 @@ internal sealed class DownloadWidget : IWidget
     // arc freezes — bump Version every frame and flag Animating for all three.
     private static bool Spinning => Downloads.Installing || Downloads.Waiting || (Downloads.NoPct && !Downloads.Paused);
     public int Version => Downloads.Version + (Spinning ? (int)(Environment.TickCount64 / 60) : 0);
-    public bool Animating => Spinning;
+    // Not just Spinning: the ordinary percent-bearing download breathes too (PillBar alive:!paused), and
+    // with Animating false its pulse only got a frame when a network read bumped Version - a handful of
+    // irregular fps, which is what "the download pulse is choppy" looked like from the couch. A paused
+    // download is a still picture and stays out, so it costs nothing.
+    public bool Animating => Spinning || (Downloads.Name != null && !Downloads.Paused);
     public Color? Ring => Downloads.Name == null ? null : Accent();
 
     private static Color Accent()

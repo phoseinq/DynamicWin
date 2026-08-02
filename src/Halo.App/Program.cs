@@ -931,6 +931,10 @@ internal static class Program
                 // eyeballed here was a weaker bar than the one that ships - the whole point of the hook is that
                 // it renders the real code path with the real numbers.
                 Halo.Widgets.Fx.PillBar(pg, W, H, 1f, frac, accent, 0.5f, alive: !paused);
+                // the art backlight the real pill draws on top of the bar. Its absence here is how the
+                // "two bars" regression shipped: the filmstrip showed a clean single bar while the live
+                // pill wore the old w*0.7 wash past the wavefront.
+                Halo.Widgets.MediaWidget.ArtGlow(pg, W, H, 1f, accent);
             }
             g.DrawImage(pill, new System.Drawing.Rectangle(150, Pad + r * (H * Zoom + Pad), W * Zoom, H * Zoom));
             if (!paused) System.Threading.Thread.Sleep(430);   // walk through one full breath

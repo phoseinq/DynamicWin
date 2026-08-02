@@ -128,13 +128,30 @@ internal sealed class MediaWidget : IWidget
     // also derive the accent colour (Apple-style tint from the art) for the equalizer.
     private void EnsureArt()
     {
-        byte[]? thumb; string? key;
-        lock (_lock) { thumb = _thumb; key = _trackKey; }
+        byte[]? thumb; string? key; bool stale;
         // _artStale is how late-arriving art gets in: the key has not changed - it is the same track - so
         // without it the decode below would be skipped and the cover that finally turned up ignored.
-        if (key != _artKey || _artStale)
+        // the flag is read and cleared under the same lock as the thumb snapshot: checked outside it, a
+        // chase committing between the snapshot and the check had its flag consumed by a decode of the
+        // OLD thumb, and with the flag gone the cover that had just landed was never decoded at all.
+        lock (_lock)
         {
-            _artStale = false;
+            thumb = _thumb; key = _trackKey;
+            stale = _artStale;
+            if (key != _artKey || stale) _artStale = false;
+        }
+        if (key != _artKey || stale)
+        {
+            // card flip on a cover change (Task: the old art turns away and the next one comes in from
+            // behind it). The outgoing face has to be snapshotted BEFORE DisposeFrames kills it; with no
+            // outgoing face (first track, or a chased cover replacing the app icon) the clock starts at
+            // the halfway point, so all that plays is the incoming half - an entrance, not a flip of
+            // nothing. Clock is a timestamp, not an eased field: DrawCollapsed and DrawContent run in the
+            // same frame mid-morph on two different dt clocks, and a shared field stepped by both would
+            // flip twice as fast exactly then.
+            _prevArt?.Dispose();
+            _prevArt = _art != null ? (Bitmap)_art.Clone() : null;
+            _flipAt = Environment.TickCount64 - (_prevArt == null ? FlipMs / 2 : 0);
             DisposeFrames();
             (_frames, _delays) = DecodeFrames(thumb);
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
@@ -243,26 +260,35 @@ internal sealed class MediaWidget : IWidget
     }
 
     // Ask again for a cover that was not ready the first time, on a widening delay. Stops the instant art
-    // lands, the track moves on, or the session goes - so a track that genuinely has no artwork costs six
-    // cheap property reads spread over fifteen seconds and then nothing.
+    // lands or the session goes - so a track that genuinely has no artwork costs six cheap property reads
+    // spread over fifteen seconds and then nothing. A track CHANGE restarts the schedule instead of
+    // stopping it (see ChaseArt).
     //
-    // The epoch is the cancellation: _trackEpoch bumps on every track change, so a chase started for the
-    // song before last cannot come back and staple its cover onto whatever is playing now.
+    // The epoch still guards the commit: a fetch started for the song before last cannot come back and
+    // staple its cover onto whatever is playing now.
     private static readonly int[] ArtRetries = [350, 700, 1400, 2600, 4500, 6000];
 
     private async void ChaseArt(GlobalSystemMediaTransportControlsSession s, int epoch)
     {
-        if (_chasing) return;   // one chain per widget; a new track's chain starts when this one gives up
+        // one chain per widget - but the chain REBINDS on a track change instead of dying. The old code
+        // returned on an epoch mismatch, and that was the hole: the new track's ChaseArt call had already
+        // bounced off _chasing while this chain slept in its delay, so a track started during another
+        // track's chase (skipping, mostly - spotify leaves the thumbnail empty at the start of nearly
+        // every track) got no retries at all and wore the app logo to the end.
+        if (_chasing) return;
         _chasing = true;
         try
         {
-            foreach (int wait in ArtRetries)
+            for (int i = 0; i < ArtRetries.Length; i++)
             {
-                await System.Threading.Tasks.Task.Delay(wait);
-                lock (_lock)
+                await System.Threading.Tasks.Task.Delay(ArtRetries[i]);
+                switch (ChaseStep(s, epoch))
                 {
-                    if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
-                    if (_thumb is { Length: > 0 }) return;
+                    case ArtChase.Done: return;
+                    case ArtChase.Restart:
+                        lock (_lock) { s = _session!; epoch = _trackEpoch; }
+                        i = -1;   // new track, fresh schedule
+                        continue;
                 }
                 try
                 {
@@ -272,12 +298,12 @@ internal sealed class MediaWidget : IWidget
                     bool wide = ThumbIsWide(thumb);
                     lock (_lock)
                     {
-                        if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
+                        if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) continue;
                         _thumb = thumb;
                         _thumbWide = wide;
-                        _version++;
+                        _artStale = true;   // the decode is the UI thread's job, in EnsureArt; set before
+                        _version++;         // the version bump so no redraw can consume the bump stale-less
                     }
-                    _artStale = true;   // the decode is the UI thread's job, in EnsureArt
                     return;
                 }
                 catch { }
@@ -285,6 +311,26 @@ internal sealed class MediaWidget : IWidget
         }
         catch { }
         finally { _chasing = false; }
+    }
+
+    internal enum ArtChase { Done, Restart, Fetch }
+
+    // pure step decision so the rebind behaviour is a test: the one that matters is track-moved-on with
+    // no art yet -> Restart, never give up (giving up there is exactly the dropped-retry bug above).
+    internal static ArtChase Decide(bool sessionAlive, bool trackMoved, bool hasArt) =>
+        !sessionAlive ? ArtChase.Done
+        : hasArt ? ArtChase.Done
+        : trackMoved ? ArtChase.Restart
+        : ArtChase.Fetch;
+
+    private ArtChase ChaseStep(GlobalSystemMediaTransportControlsSession s, int epoch)
+    {
+        lock (_lock)
+        {
+            return Decide(_session != null,
+                          !ReferenceEquals(_session, s) || _trackEpoch != epoch,
+                          _thumb is { Length: > 0 });
+        }
     }
 
     private volatile bool _chasing;
@@ -1208,6 +1254,19 @@ internal sealed class MediaWidget : IWidget
 
     internal static float MorphT(float h) => Math.Clamp((h - MorphFromH) / (MorphToH - MorphFromH), 0f, 1f);
 
+    // backlight behind the cover. This was rx = w*0.7 drawn straight onto the pill AFTER PillBar - an
+    // accent wash reaching ~80% of the way across, which on a playing track stuck out past the bar's
+    // wavefront as a paler copy of it: the reported "two bars, a strong one behind and a faint one
+    // ahead". Same disease the Intersect fix cured inside PillBar, but this glow is drawn on top of the
+    // bar so no clip in PillBar could touch it. It hugs the art now; a halo around the cover reads as
+    // backlight, not as a second bar. Shared with --render-bar so the filmstrip shows the same pill the
+    // user sees (the hook missing this glow is exactly how "two bars" shipped unseen).
+    internal static void ArtGlow(Graphics g, int w, int h, float fade, Color accent)
+    {
+        var a = ArtRect(h);
+        Fx.Glow(g, w, h, fade, a.X + a.Width / 2f, h / 2f, a.Width * 2.1f, h * 1.7f, 34, accent);
+    }
+
     internal static RectangleF ArtRect(float h)
     {
         float t = MorphT(h);
@@ -1226,7 +1285,46 @@ internal sealed class MediaWidget : IWidget
         return miniR + (14f - miniR) * MorphT(h);
     }
 
+    internal const int FlipMs = 460;
+    private Bitmap? _prevArt;      // the outgoing cover, alive only for the flip
+    private long _flipAt = long.MinValue;
+    private bool Flipping => Environment.TickCount64 - _flipAt < FlipMs;
+
+    // the card's pose at clock t in 0..1: horizontal squeeze |cos(pi t)| (1 -> 0 -> 1) and which face is
+    // showing. The floor keeps GDI+ from a degenerate zero-width transform at the crossing.
+    internal static (float sx, bool front) FlipPose(float t)
+        => (Math.Max(MathF.Abs(MathF.Cos(t * MathF.PI)), 0.001f), t < 0.5f);
+
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
+    {
+        long el = Environment.TickCount64 - _flipAt;
+        if (el < FlipMs)
+        {
+            // a card turning on its vertical axis, faked with a horizontal squeeze: |cos| runs 1 -> 0 -> 1
+            // and the face swaps at the zero crossing, so the new cover really does come in "from behind"
+            // the old one. The transform scales path AND texture together (TextureBrush lives in world
+            // coordinates), which is what keeps the squeezed cover looking turned rather than cropped.
+            var (sx, front) = FlipPose(el / (float)FlipMs);
+            var st = g.Save();
+            g.TranslateTransform(x + size / 2f, 0f);
+            g.ScaleTransform(sx, 1f);
+            g.TranslateTransform(-(x + size / 2f), 0f);
+            if (front)
+            {
+                if (_prevArt != null)
+                {
+                    using var path = Rounded(new RectangleF(x, y, size, size), radius);
+                    CoverFill(g, _prevArt, x, y, size, path, fade);
+                }
+            }
+            else DrawArtFace(g, x, y, size, fade, radius);
+            g.Restore(st);
+            return;
+        }
+        DrawArtFace(g, x, y, size, fade, radius);
+    }
+
+    private void DrawArtFace(Graphics g, float x, float y, float size, float fade, float radius)
     {
         using var path = Rounded(new RectangleF(x, y, size, size), radius);
         // album art if the track has any; otherwise the source app's icon (podcasts, some videos and
@@ -1280,7 +1378,10 @@ internal sealed class MediaWidget : IWidget
 
     public bool Animating
     {
-        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling); } }
+        // Flipping too: a track change on a PAUSED session (skip while paused, or a chased cover landing
+        // after a pause) still has to play its half-second of card flip, and without this it froze on
+        // whatever squeezed frame the last incidental redraw happened to catch.
+        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling || Flipping); } }
     }
 
     // ring around the collapsed album-art circle = playback position (like the download %). Only when a
@@ -1398,7 +1499,7 @@ internal sealed class MediaWidget : IWidget
         // is" - which is a download's problem, not a track's. A track already shows its position by the
         // bar moving, so a pulse on top of it is decoration competing with the one honest signal there is.
         Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f);
-        Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
+        ArtGlow(g, w, h, fade, _accent);
         DrawArt(g, x, y, sz, fade, ArtRadius(h));
 
         // No ring around the art. The pill's own background already carries this exact number, and a second
@@ -1521,32 +1622,40 @@ internal sealed class MediaWidget : IWidget
     // Hold was 1.1s, which read as the title being slow to react rather than as a beat to start reading —
     // long enough that a hover felt broken. A third of a second is enough to register the name's start.
     internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 0.35f;   // px, px/s, seconds
+    // the self-scrolling pass parks much longer between laps than a hovered one: hover means "show me the
+    // rest, now"; unattended it only has to stay readable without turning into a permanent crawl
+    internal const float MarqueeRest = 1.6f;
 
     // One step of the title scroll, kept pure so the motion is a test rather than an eyeball: it holds
     // still for MarqueeHold at the start of each pass (so you can begin reading), then travels at a fixed
     // px/sec — a rate, not a per-frame amount, or the speed would change with the pill's fps tier — and
     // wraps by exactly one span so the second copy lands seamlessly where the first left.
-    internal static (float offset, float hold) MarqueeStep(float offset, float hold, float dt, float span)
+    internal static (float offset, float hold) MarqueeStep(float offset, float hold, float dt, float span,
+        float holdFor = MarqueeHold)
     {
         if (span <= 0f) return (0f, 0f);
-        if (hold < MarqueeHold) return (offset, hold + dt);
+        if (hold < holdFor) return (offset, hold + dt);
         offset += MarqueeSpeed * dt;
         return offset >= span ? (offset - span, 0f) : (offset, hold);
     }
 
-    // A title too long to fit is normally just clipped with an ellipsis, which is the right resting state --
-    // a permanently crawling title is the kind of thing that makes a status pill tiring to have on screen.
-    // While the pointer is on the panel it scrolls one full pass and loops, so the rest of the name is
-    // readable on demand. Gapped by a wide separator so the wrap point is obvious, and it holds still for a
-    // moment at each pass so you can start reading from the beginning.
+    // A title too long to fit used to be an ellipsis unless the pointer was on it - "a permanently
+    // crawling title is tiring" was the reasoning - and the user's verdict on that was that a film name
+    // you cannot read without reaching for the mouse is not a title at all. So: while the track PLAYS an
+    // overflowing title scrolls on its own (the playing pill is animating anyway, so this costs no extra
+    // frames), resting a long beat between laps so it is glanceable rather than a crawl; hover still
+    // means "now", with the short hold. A PAUSED track keeps the old contract - parked ellipsis, scroll
+    // on hover only - because paused is the one state where an idle marquee would be buying frames
+    // (_marqueeScrolling) purely for decoration.
     private void DrawScrollingLine(Graphics g, string text, Font f, Brush b, float x, float y, float w,
         bool hovered, float dt)
     {
+        bool playing; lock (_lock) playing = _playing;
         float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
-        if (textW <= w || !hovered)
+        if (textW <= w || !(hovered || playing))
         {
-            // parked: reset so the next hover starts from the beginning rather than mid-word
-            if (!hovered) { _marquee = 0f; _marqueeHold = 0f; }
+            // parked: reset so the next pass starts from the beginning rather than mid-word
+            _marquee = 0f; _marqueeHold = 0f;
             _marqueeScrolling = false;
             DrawLine(g, text, f, b, x, y, w);
             return;
@@ -1554,7 +1663,8 @@ internal sealed class MediaWidget : IWidget
         _marqueeScrolling = true;   // keep asking for frames even if the track is paused
 
         float span = textW + MarqueeGap;
-        (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span);
+        (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span,
+            hovered ? MarqueeHold : MarqueeRest);
 
         var state = g.Save();
         g.SetClip(new RectangleF(x, y, w, f.Height + 4));   // hard clip is fine: the edges are axis-aligned
