@@ -76,6 +76,9 @@ internal sealed class ClaudeCodeWidget : IWidget
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(Shown(status), ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
+    // Shown(), not raw State, so a stalled "working" the widget already displays as idle ranks as idle too
+    public long ActivityRank => Live is { } st
+        ? AgentActivity.Rank(Shown(st), ParseTime(st.StartedAt), DateTimeOffset.UtcNow) : 0;
     public IEnumerable<int> OwnerPids => Live is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
     // text-emerge animation + the compacting pulse both need frames while collapsed. The flag's ripple needs
     // them too, but only while the pointer is actually on the panel: pinned open with the mouse elsewhere,

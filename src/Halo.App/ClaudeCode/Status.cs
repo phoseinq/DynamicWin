@@ -41,6 +41,7 @@ internal sealed class CcStatus
     public CcSession? Session { get; set; }
     public CcUsage? Usage { get; set; }
     public string? UpdatedAt { get; set; }
+    public bool Background { get; set; } // daemon-hosted headless session (fork/agent) — no terminal
 }
 
 internal sealed class StatusStore
@@ -252,10 +253,18 @@ internal sealed class StatusStore
 
     internal Action? AfterLoad;
 
+    // A daemon-hosted background session (fork/agent the claude daemon respawns headless) never ends
+    // and has no terminal to return to — left visible it parks a zombie in the pill forever, and
+    // killing it doesn't help (verified live: the daemon respawned the same session, new pid, within
+    // two minutes). Shown only while it is actually doing something; waiting_input stays visible
+    // because the pill's ask flow is exactly how a headless session CAN be answered.
+    internal static bool BackgroundHidden(CcStatus st) =>
+        st.Background && st.State is not ("working" or "compacting" or "waiting_input");
+
     // live files, deduped by agent pid (a session migrating from legacy status.json to
     // status-{pid}.json briefly exists as both — keep the freshest)
     private IEnumerable<KeyValuePair<string, CcStatus>> LiveFiles(DateTimeOffset now) =>
-        _files.Where(kv => IsLiveStatus(kv.Value, _processStartedAt, now))
+        _files.Where(kv => IsLiveStatus(kv.Value, _processStartedAt, now) && !BackgroundHidden(kv.Value))
             .GroupBy(kv => kv.Value.Pid > 0 ? kv.Value.Pid.ToString() : kv.Key)
             .Select(g => g.OrderByDescending(kv => kv.Value.UpdatedAt, StringComparer.Ordinal).First());
 

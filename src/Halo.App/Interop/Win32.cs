@@ -38,6 +38,16 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT lpEventTrack);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
+    // the input desktop is only openable while the interactive desktop has it — under the lock/secure
+    // desktop this fails, which is exactly the "can the user see the screen" question the greeting asks
+    [DllImport("user32.dll")]
+    public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll")]
+    public static extern bool CloseDesktop(IntPtr hDesktop);
+
     public delegate IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

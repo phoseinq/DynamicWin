@@ -142,6 +142,18 @@ internal sealed class MediaWidget : IWidget
         }
         if (key != _artKey || stale)
         {
+            // Same bytes as the cover already decoded -> nothing to do but adopt the key. Without this,
+            // every chase retry that re-committed the art already on screen (the chase commits whatever
+            // it reads, it cannot see the decoded state) played a full flip with IDENTICAL faces -
+            // "the flip animation comes but the art doesn't change", at whatever odd moment the retry
+            // schedule landed on. Also covers the next track of the same album: a card that turns to
+            // reveal the same face reads as a glitch, not a transition.
+            long hash = ThumbHash(thumb);
+            if (hash == _artHash)
+            {
+                _artKey = key;
+                return;
+            }
             // card flip on a cover change (Task: the old art turns away and the next one comes in from
             // behind it). The outgoing face has to be snapshotted BEFORE DisposeFrames kills it; with no
             // outgoing face (first track, or a chased cover replacing the app icon) the clock starts at
@@ -152,6 +164,7 @@ internal sealed class MediaWidget : IWidget
             _prevArt?.Dispose();
             _prevArt = _art != null ? (Bitmap)_art.Clone() : null;
             _flipAt = Environment.TickCount64 - (_prevArt == null ? FlipMs / 2 : 0);
+            _artHash = hash;
             DisposeFrames();
             (_frames, _delays) = DecodeFrames(thumb);
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
@@ -951,7 +964,7 @@ internal sealed class MediaWidget : IWidget
         titleRow.Inflate(6f, 6f);
         bool onTitle = WidgetInput.Over && titleRow.Contains(WidgetInput.Mouse);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            DrawScrollingLine(g, title, titleF, tb, tx, 34, tw, onTitle, dt);
+            _marquee.Draw(g, title, titleF, tb, tx, 34, tw, onTitle, dt);
         // Second line: whatever else is actually known about this thing - the artist or uploader if the app
         // gave one, otherwise the release group off the end of the filename, plus the quality tokens the name
         // carries and the file size when the player will say where the file is. A single "·" when none of
@@ -1287,6 +1300,22 @@ internal sealed class MediaWidget : IWidget
 
     internal const int FlipMs = 560;
     private Bitmap? _prevArt;      // the outgoing cover, alive only for the flip
+    private long _artHash;         // ThumbHash of the bytes behind _art; 0 = no art decoded
+
+    // FNV-1a over the thumb bytes, 0 reserved for "no art" - identity of the cover as bytes, which is
+    // the only identity the commit side has too. never returns 0 for real content, so a real cover can
+    // always be told from the empty state.
+    internal static long ThumbHash(byte[]? b)
+    {
+        if (b is not { Length: > 0 }) return 0;
+        unchecked
+        {
+            long h = -3750763034362895579L; // FNV offset basis
+            foreach (var x in b) { h ^= x; h *= 1099511628211L; }
+            return h == 0 ? 1 : h;
+        }
+    }
+
     private long _flipAt = long.MinValue;
     private bool Flipping => Environment.TickCount64 - _flipAt < FlipMs;
 
@@ -1377,17 +1406,15 @@ internal sealed class MediaWidget : IWidget
     // by EnsureArt and only read here, so a volatile bool is the whole synchronisation it needs.
     private volatile bool _animatedArt;
 
-    // _marqueeScrolling is set while the title is actually travelling, so a PAUSED track with a long name
-    // still gets frames while the pointer is on it — otherwise the scroll would only move on whatever else
-    // happened to trigger a repaint.
-    private volatile bool _marqueeScrolling;
+    // the title marquee, shared with the vlc panel (see Marquee.cs for the scroll contract)
+    private readonly Marquee _marquee = new();
 
     public bool Animating
     {
         // Flipping too: a track change on a PAUSED session (skip while paused, or a chased cover landing
         // after a pause) still has to play its half-second of card flip, and without this it froze on
         // whatever squeezed frame the last incidental redraw happened to catch.
-        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling || Flipping); } }
+        get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marquee.Scrolling || Flipping); } }
     }
 
     // the flip is the one moment on this widget the eye tracks a moving edge, same as the shell's morph -
@@ -1478,7 +1505,7 @@ internal sealed class MediaWidget : IWidget
         if (title == null) return;
         // the marquee lives on the open panel's title row; a panel closed mid-scroll must not leave the
         // flag latched, or a paused long-titled track keeps requesting frames with nothing moving
-        _marqueeScrolling = false;
+        _marquee.Park();
         EnsureArt();
         var art = ArtRect(h);
         float sz = art.Width, x = art.X, y = art.Y;
@@ -1627,72 +1654,6 @@ internal sealed class MediaWidget : IWidget
         using var sf = new StringFormat(StringFormatFlags.NoWrap) { Trimming = StringTrimming.EllipsisCharacter };
         if (IsRtl(text)) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft; // Near => right edge, ellipsis on the left
         g.DrawString(text, f, b, new RectangleF(x, y, w, f.Height + 4), sf);
-    }
-
-    private float _marquee;          // scroll offset in px, 0 while parked
-    private float _marqueeHold;      // seconds paused at the start of each pass
-
-    // Hold was 1.1s, which read as the title being slow to react rather than as a beat to start reading —
-    // long enough that a hover felt broken. A third of a second is enough to register the name's start.
-    internal const float MarqueeGap = 48f, MarqueeSpeed = 42f, MarqueeHold = 0.35f;   // px, px/s, seconds
-    // the self-scrolling pass parks much longer between laps than a hovered one: hover means "show me the
-    // rest, now"; unattended it only has to stay readable without turning into a permanent crawl
-    internal const float MarqueeRest = 1.6f;
-
-    // One step of the title scroll, kept pure so the motion is a test rather than an eyeball: it holds
-    // still for MarqueeHold at the start of each pass (so you can begin reading), then travels at a fixed
-    // px/sec — a rate, not a per-frame amount, or the speed would change with the pill's fps tier — and
-    // wraps by exactly one span so the second copy lands seamlessly where the first left.
-    internal static (float offset, float hold) MarqueeStep(float offset, float hold, float dt, float span,
-        float holdFor = MarqueeHold)
-    {
-        if (span <= 0f) return (0f, 0f);
-        if (hold < holdFor) return (offset, hold + dt);
-        offset += MarqueeSpeed * dt;
-        return offset >= span ? (offset - span, 0f) : (offset, hold);
-    }
-
-    // A title too long to fit used to be an ellipsis unless the pointer was on it - "a permanently
-    // crawling title is tiring" was the reasoning - and the user's verdict on that was that a film name
-    // you cannot read without reaching for the mouse is not a title at all. The first fix gated the
-    // self-scroll on _playing and came straight back as "still doesn't work": the pill this was reported
-    // against is a video player sitting PAUSED with the panel open. So: an overflowing title on an open
-    // panel scrolls, full stop - resting a long beat between laps so it is glanceable rather than a
-    // crawl, hover shortening the rest to "now". The frames this buys while paused only exist while the
-    // panel is open (DrawCollapsed clears _marqueeScrolling), and an open panel is already the state
-    // AdaptFrameRate holds at the watching tier for.
-    private void DrawScrollingLine(Graphics g, string text, Font f, Brush b, float x, float y, float w,
-        bool hovered, float dt)
-    {
-        float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
-        if (textW <= w)
-        {
-            // parked: reset so the next pass starts from the beginning rather than mid-word
-            _marquee = 0f; _marqueeHold = 0f;
-            _marqueeScrolling = false;
-            DrawLine(g, text, f, b, x, y, w);
-            return;
-        }
-        _marqueeScrolling = true;   // keep asking for frames even if the track is paused
-
-        float span = textW + MarqueeGap;
-        (_marquee, _marqueeHold) = MarqueeStep(_marquee, _marqueeHold, dt, span,
-            hovered ? MarqueeHold : MarqueeRest);
-
-        var state = g.Save();
-        g.SetClip(new RectangleF(x, y, w, f.Height + 4));   // hard clip is fine: the edges are axis-aligned
-        bool rtl = IsRtl(text);
-        using var sf = new StringFormat(StringFormatFlags.NoWrap);
-        if (rtl) sf.FormatFlags |= StringFormatFlags.DirectionRightToLeft;
-        float h2 = f.Height + 4;
-        for (int pass = 0; pass < 2; pass++)                 // second copy trails in so the loop is seamless
-        {
-            // LTR slides left off its start; RTL is the mirror, anchored on the rect's right edge
-            float ox = rtl ? x + w - textW + (_marquee - pass * span)
-                           : x - (_marquee - pass * span);
-            g.DrawString(text, f, b, new RectangleF(ox, y, textW + 2, h2), sf);
-        }
-        g.Restore(state);
     }
 
     private static bool IsRtl(string s)

@@ -266,6 +266,8 @@ internal sealed partial class NotchController
     // never re-checked: a greeting that could restart mid-play is a greeting that will.
     private GreetingKind _greet;
     private float _greetT;
+    private bool _greetArmed;          // false until the screen is watchable (GreetingArm)
+    private float _greetHeld, _greetWaited;
 
     // Drag-to-rank on the swap strip. _stripKinds is what Groups() last laid out, in view order, so the
     // drag can talk about neighbours the user can actually see.
@@ -400,7 +402,7 @@ internal sealed partial class NotchController
         _notch.SetCapturable(_recordable);
         _empty = active.Length == 0;
         _shrink = _empty ? 1f : 0f; // boot straight into the right size, no opening animation
-        if (!_empty) _primary = active[0];
+        if (!_empty) _primary = PreferredPrimary(active);
         _prevActive = new bool[_widgets.Length];
         for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = Live(i);
         Apply(0f); // empty or not, the pill shows from the first frame (boot = blank pill)
@@ -1223,6 +1225,23 @@ internal sealed partial class NotchController
         if (gap < WakeGap || _greet != GreetingKind.None || _notif != null || _ask != null) return;
         _greet = GreetingKind.Login;
         _greetT = 0f;
+        // the first frames after a resume run under the lock screen - re-arm so the hand waits for it
+        _greetArmed = false; _greetHeld = 0f; _greetWaited = 0f;
+    }
+
+    // taskbar up + input desktop openable = someone can actually see the pill. probed only while a
+    // greeting sits unarmed, so the per-frame cost exists for a few seconds around boot/wake.
+    private static bool ScreenWatchable()
+    {
+        try
+        {
+            if (Win32.FindWindow("Shell_TrayWnd", null) == IntPtr.Zero) return false;
+            var d = Win32.OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS
+            if (d == IntPtr.Zero) return false;               // lock/secure desktop owns the input
+            Win32.CloseDesktop(d);
+            return true;
+        }
+        catch { return false; }
     }
 
     // real per-frame delta (seconds), so animations run at the same wall-clock speed whether the
@@ -1266,7 +1285,7 @@ internal sealed partial class NotchController
         {
             if (active.Length > 0 && Array.IndexOf(active, _primary) < 0)
             {
-                _primary = active[0];
+                _primary = PreferredPrimary(active);
                 _agentNotices.SetPrimary(_primary);
             }
             _notch.SetVisible(true); // empty no longer hides the window (it's an invisible drop-catcher) — only fullscreen did
@@ -1279,10 +1298,10 @@ internal sealed partial class NotchController
 
         bool wasEmpty = _empty;
         _empty = active.Length == 0;
-        // primary must be an active widget; fall back to the first active one if it went inactive
+        // primary must be an active widget; fall back to the user's top-ranked kind if it went inactive
         if (!_empty && _drop < 0f && Array.IndexOf(active, _primary) < 0)
         {
-            _primary = active[0];
+            _primary = PreferredPrimary(active);
             _agentNotices.SetPrimary(_primary);
         }
 
@@ -1299,7 +1318,7 @@ internal sealed partial class NotchController
             _primary = _agentNotices.Primary;
         if (!_empty && Array.IndexOf(active, _primary) < 0)
         {
-            _primary = active[0];
+            _primary = PreferredPrimary(active);
             _agentNotices.SetPrimary(_primary);
         }
 
@@ -1308,14 +1327,24 @@ internal sealed partial class NotchController
         // user rule: a Claude session that's actively coding outranks passive widgets (media) for the
         // pill — if it settled on a non-working widget but a working Claude is active, prefer Claude.
         // Manual pick wins; Claude-hide below still applies when you're focused IN that Claude terminal.
+        // between several working sessions the highest ActivityRank wins, not the lowest slot - the
+        // slot order is arrival order and says nothing about which session the user is waiting on
         if (_drop < 0f && !_empty && _userPicked < 0 && _widgets[_primary].AgentNotice.State != "working")
+        {
+            int best = -1; long bestRank = 0;
             foreach (var i in active)
-                if (_widgets[i] is ClaudeCodeWidget && _widgets[i].AgentNotice.State == "working")
+                if (_widgets[i] is ClaudeCodeWidget && _widgets[i].AgentNotice.State == "working"
+                    && (best < 0 || _widgets[i].ActivityRank > bestRank))
                 {
-                    _primary = i;
-                    _agentNotices.SetPrimary(i);
-                    break;
+                    best = i;
+                    bestRank = _widgets[i].ActivityRank;
                 }
+            if (best >= 0)
+            {
+                _primary = best;
+                _agentNotices.SetPrimary(best);
+            }
+        }
 
         // user rule: when the Claude session's OWN terminal is focused, don't mirror it in the pill —
         // you're already looking at it. Surface another active widget instead; keep it only if it's the
@@ -1401,6 +1430,10 @@ internal sealed partial class NotchController
         if (_greet != GreetingKind.None)
         {
             if (_asks.Pending != null) { _greet = GreetingKind.None; _greetT = 0f; }
+            else if (!_greetArmed)
+                // at boot the logon task beats explorer to the desktop; hold the hand until there is one
+                (_greetHeld, _greetWaited, _greetArmed) =
+                    GreetingArm.Step(ScreenWatchable(), _greetHeld, _greetWaited, _dt);
             else
             {
                 float secs = _greet == GreetingKind.Install
@@ -1776,23 +1809,52 @@ internal sealed partial class NotchController
         var order = new List<string>();
         foreach (var i in AltIndices())
         {
-            string kind = _widgets[i] switch
-            {
-                MediaWidget => "media",
-                VlcWidget => "vlc",
-                DownloadWidget => "download",
-                FileTray => "filetray",
-                ClaudeCodeWidget => "claude",
-                CodexWidget => "codex",
-                GenericAgentWidget ga => "g:" + ga.GroupKey,
-                _ => "other",
-            };
+            string kind = KindOf(_widgets[i]);
             if (!byKind.TryGetValue(kind, out var list)) { list = new List<int>(); byKind[kind] = list; order.Add(kind); }
             list.Add(i);
         }
         // registration order is still the default; this only re-ranks kinds the user has dragged
         _stripKinds = _stripOrder.Apply(order);
-        return _stripKinds.ConvertAll(k => byKind[k].ToArray());
+        // inside a group, busiest session first (user: with many sessions the one actually working
+        // should be the reachable one). OrderByDescending is stable, so idle members - all rank 0 -
+        // keep their slot order, and the drag-rank above is between KINDS and untouched by this.
+        return _stripKinds.ConvertAll(k => byKind[k].OrderByDescending(i => _widgets[i].ActivityRank).ToArray());
+    }
+
+    private static string KindOf(IWidget w) => w switch
+    {
+        MediaWidget => "media",
+        VlcWidget => "vlc",
+        DownloadWidget => "download",
+        FileTray => "filetray",
+        ClaudeCodeWidget => "claude",
+        CodexWidget => "codex",
+        GenericAgentWidget ga => "g:" + ga.GroupKey,
+        _ => "other",
+    };
+
+    // The fallback pill, when nothing stronger has claimed it (working agent, download, an explicit
+    // pick): the drag-rank the user set on the strip is a statement of priority, so the kind they put
+    // nearest the icon is the one shown, not whichever widget happened to register first. Inside a
+    // kind the busiest session goes first, the same order the strip itself lays them out in.
+    private int PreferredPrimary(int[] active)
+    {
+        if (active.Length == 0) return _primary;
+        var kinds = new List<string>(active.Length);
+        foreach (var i in active)
+        {
+            var k = KindOf(_widgets[i]);
+            if (!kinds.Contains(k)) kinds.Add(k);
+        }
+        string first = _stripOrder.Apply(kinds)[0];
+        int best = -1; long bestRank = 0;
+        foreach (var i in active)
+            if (KindOf(_widgets[i]) == first)
+            {
+                long r = _widgets[i].ActivityRank;
+                if (best < 0 || r > bestRank) { best = i; bestRank = r; }
+            }
+        return best >= 0 ? best : active[0];
     }
 
     private readonly Halo.Settings.SettingsStore _settings;

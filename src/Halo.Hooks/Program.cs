@@ -91,14 +91,20 @@ internal static class Program
             // claude splits by surface: each CLI session gets status-{agentPid}.json (multi-session),
             // the desktop app gets app.json; pid unknown → legacy status.json
             uint agentPid = 0;
+            bool background = false;
             var path = codex ? CodexStatusPath(surface!.Value)
-                : IsClaudeApp() ? Path.Combine(ClaudeDir, "app.json") : ClaudeSessionPath(out agentPid);
+                : IsClaudeApp() ? Path.Combine(ClaudeDir, "app.json") : ClaudeSessionPath(out agentPid, out background);
             Directory.CreateDirectory(dir);
             var input = ReadInput();
             var status = LoadOrNew(path);
             // the file is keyed by this pid — stamp it on every event, or a session file born from
-            // a mid-turn event stays pidless and evades the store's per-pid dedupe
-            if (agentPid != 0) status["pid"] = (int)agentPid;
+            // a mid-turn event stays pidless and evades the store's per-pid dedupe. background rides
+            // along for the same reason: any event may be the one that creates the file.
+            if (agentPid != 0)
+            {
+                status["pid"] = (int)agentPid;
+                if (background) status["background"] = true;
+            }
 
             if (cmd == "session-end" && !codex && path != ClaudeStatusPath)
             {
@@ -283,10 +289,18 @@ internal static class Program
     }
 
     // per-session file keyed by the claude process pid — stable across compact//clear, unique per terminal
-    private static string ClaudeSessionPath(out uint pid)
+    private static string ClaudeSessionPath(out uint pid, out bool background)
     {
-        pid = Ancestor(ProcessMap(), (uint)Environment.ProcessId,
+        var map = ProcessMap();
+        pid = Ancestor(map, (uint)Environment.ProcessId,
             n => n.Contains("claude") || n == "node.exe");
+        // the CLI daemon hosts background/fork sessions through a pty-host claude.exe, so a session
+        // whose claude process is itself parented by claude never has a terminal the user is sitting
+        // in - it is daemon-owned, headless, and (verified live) respawned minutes after being killed.
+        // a normal session's parent is the shell that launched it.
+        background = pid != 0 && map.TryGetValue(pid, out var e)
+            && map.TryGetValue(e.parent, out var par)
+            && (par.name.ToLowerInvariant().Contains("claude") || par.name.ToLowerInvariant() == "node.exe");
         return pid == 0 ? ClaudeStatusPath : Path.Combine(ClaudeDir, $"status-{pid}.json");
     }
 

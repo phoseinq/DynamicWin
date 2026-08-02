@@ -84,6 +84,9 @@ internal sealed class CodexWidget : IWidget
     public AgentNotice AgentNotice => Current is { } status
         ? new AgentNotice(status.State, status.CompactedAt, status.Message)
         : AgentNotice.None;
+    // Shown(), not raw State, so a stalled "working" the widget already displays as idle ranks as idle too
+    public long ActivityRank => Current is { } st
+        ? AgentActivity.Rank(Shown(st), st.StartedAt, DateTimeOffset.UtcNow) : 0;
     public IEnumerable<int> OwnerPids => Current is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
     // text-emerge animation + the compacting pulse both need frames while collapsed. RingsSettling
     // keeps them coming after the pointer leaves the panel, or the lift would freeze half-raised and

@@ -1,5 +1,96 @@
 # Halo — progress
 
+## 2026-08-03 (later still 4): identical-face flips killed + the drag-rank now picks the pill
+
+**Release 0/0, 702 tests pass (3 new). Deployed (hot-swapped `Halo.App.dll`, pid 17820 alive, no
+crash log), not pushed.**
+
+**"The flip animation comes but the art doesn't change, at random moments."** The flip fires in
+`EnsureArt` on `key != _artKey || stale` — and the art chase commits whatever bytes it reads on every
+retry (it cannot see the decoded state), setting `_artStale` each time. So a retry that re-fetched the
+cover ALREADY on screen played a full 560ms flip with identical faces, at whatever odd moment the
+retry schedule landed on: both halves of the report in one mechanism. Fix: `MediaWidget.ThumbHash`
+(FNV-1a over the thumb bytes, 0 reserved for "no art", pinned by `MediaArtHashTests`) — a commit whose
+bytes hash to what is already decoded adopts the track key and does nothing else. Also covers the next
+track of the same album: a card that turns to reveal the same face reads as a glitch. The honest
+flips stay: cover → app-icon when a track lands with an empty thumb, and the entrance half when the
+chased cover finally arrives.
+
+**Mid-turn follow-up: the strip's drag-rank should decide what the pill shows.** `PreferredPrimary`
+replaces the four `active[0]` fallbacks (ctor + the three in `Frame`): when nothing stronger claims
+the pill (working agent, download, BT, tray, an explicit pick), the widget shown is from the kind the
+user dragged nearest the icon (`StripOrder.Apply` over the active kinds), and inside that kind the
+busiest session (`ActivityRank`), which is the same order the strip lays out. `KindOf` extracted from
+`Groups()` so both use one kind table.
+
+**Release 0/0, 699 tests pass (12 new). Deployed (hooks four-file set from `dotnet publish`
+self-contained + hot-swapped `Halo.App.dll`, pid 29924 alive, no crash log), not pushed.**
+
+**Zombie sessions, part 2 — killing them is whack-a-mole.** The daemon respawned the SAME session
+(330f79ad) with a new pid within two minutes of the kill. So the real fix from the previous entry's
+task: `Halo.Hooks` now stamps `"background": true` when the session's claude process is parented by
+another claude/node (a pty-host — a terminal-launched session is parented by a shell), stamped on
+every event alongside the pid for the same file-born-mid-turn reason. `CcStatus.Background` +
+`StatusStore.BackgroundHidden` (pinned by `BackgroundSessionTests`): a background session is hidden
+unless working/compacting/waiting_input — waiting_input stays visible because the pill's ask flow is
+exactly how a headless session gets answered. **Verified end-to-end live:** killed the zombie, daemon
+respawned it as pid 23096, new hook stamped `background: true`, store hides it. Hooks deploy done from
+publish output (bin/Release hooks die silently — see memory).
+
+**Queue item 7 — "hello never appears, or long after login."** Root cause: the greeting clock started
+with the process, and the logon scheduled task wins the race it was built to win — at a fresh boot
+Halo is up BEFORE explorer has a taskbar, so the 2.6s hand played to a screen nobody was watching.
+Waking has the twin bug: the first frames after resume run under the lock screen. New `GreetingArm`
+(pure, `GreetingArmTests`): the greeting arms rather than plays — waits until the screen is watchable
+(`Shell_TrayWnd` exists AND `OpenInputDesktop` succeeds, i.e. not the lock/secure desktop; new
+P/Invokes in `Win32.cs`), holds a 1.2s settle, and gives up waiting at 45s so a kiosk/custom shell
+cannot let the greeting block the strip/pin forever. `CheckWake` re-arms so the wake hand waits out
+the lock screen too. Watchability is probed only while a greeting sits unarmed. Needs one real boot
+to confirm the feel; the arming logic itself is unit-pinned.
+
+**Release 0/0, 687 tests pass (7 new). Deployed (hot-swapped `Halo.App.dll`, pid 31880 verified
+alive, no crash log), not pushed at time of writing.**
+
+**"Two bugged sessions won't close" — not Halo's bug, but now a known trap.** The Claude Code CLI's
+new daemon (`claude daemon run`, spawned at CLI startup) resurrects persisted background/fork
+sessions as headless children (`--bg-pty-host` → `--session-id ... --fork-session` / `--agent`): no
+console, no window, idle forever, process alive. `StatusStore.IsLiveStatus` keeps a session while its
+pid is alive (with the pid-reuse start-time guard), which is CORRECT — the processes really were
+running. Killed both trees (session + pty host, daemon left alone since live sessions depend on it)
+and deleted their status files. Prevention is queued as a task: teach `Halo.Hooks` to tag
+daemon-ancestry sessions `background: true` and let the store hide them while idle. Note for future
+diagnosis: `consolePid` in the status files is unreliable (this very session's console pid was dead
+while the session ran fine) — never use it for liveness.
+
+**Sessions now order by how hard they're working.** User: with many Claude sessions the strip should
+put the actually-working one first, and the pill should auto-pick it. New `AgentActivity.Rank` (pure,
+in `IWidget.cs`, pinned by `AgentActivityTests`): state bucket first (working > compacting >
+waiting_input > waiting > unknown > idle), elapsed turn seconds as tie-break inside a bucket only —
+never displayed, so no invented numbers. New `IWidget.ActivityRank` default member; Claude/Codex rank
+via their `Shown()` state (a stalled "working" already displayed as idle ranks idle too), generic
+agents via raw state. `Groups()` sorts members inside each strip group by rank (stable, so idle
+members keep slot order; the user's drag-rank is between kinds and untouched). The controller's
+"working Claude outranks passive primary" rule now picks the highest-ranked working session instead
+of the lowest slot. Deliberately NOT re-picking while the current primary is itself working — rank
+flapping would swap the pill mid-glance. `_userPicked` still wins everything, unchanged.
+
+**Release 0/0, 680 tests pass. Deployed (hot-swapped `Halo.App.dll`, pid 34864 verified alive, no
+crash log), not pushed at time of writing.**
+
+**Item 9, third report: "still doesn't work in this player, VLC."** Both earlier fixes were correct
+and both were to the wrong widget: the player in the report is classic VLC 3.x, which publishes no
+SMTC session and therefore never reaches `MediaWidget` — it renders through `VlcWidget`, whose title
+was a plain ellipsized `DrawString`. The marquee (state + `DrawScrollingLine` + the pure `MarqueeStep`)
+was private to `MediaWidget`, so the fix was extraction, not another copy: new `Widgets/Marquee.cs`
+holds the whole contract (unconditional scroll on overflow, 1.6s rest / 0.35s hovered, park-and-reset
+when text fits, volatile `Scrolling` for `Animating`), both widgets now own a `Marquee` instance.
+`VlcWidget` wires the same three hooks `MediaWidget` uses: title-row-bounded hover, `Animating |=
+Scrolling` (a PAUSED movie with a long filename still scrolls while the panel is open), and
+`Park()` in `DrawCollapsed` so a closed panel can't latch frame requests. `MediaMarqueeTests` repinned
+from `MediaWidget.Marquee*` to `Marquee.*`, motion unchanged — no behaviour delta on the media panel,
+which is why the count stays 680. No `--render-*` shows motion; the scroll path is byte-for-byte the
+one already eyeballed live on the media panel, now shared.
+
 ## 2026-08-03 (later): flip smoothness + marquee, both re-reported and re-fixed
 
 **Release 0/0, 680 tests pass. Deployed (hot-swap, pid verified), not pushed at time of writing.**

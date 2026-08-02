@@ -74,6 +74,7 @@ internal sealed class VlcWidget : IWidget
 
     private readonly MediaSessions _sessions;
     private readonly float[] _hover = new float[NBtn];
+    private readonly Marquee _marquee = new();
 
     // VLC's http status is polled about once a second, so a bar drawn straight off it would step rather than
     // move. Remember when each new reading arrived and add the elapsed time while it is playing.
@@ -138,8 +139,9 @@ internal sealed class VlcWidget : IWidget
     public int Version => VlcMonitor.Version + (VlcHttp.Online
         ? (int)(VlcHttp.Rate * 100) + (VlcHttp.Playing ? 1 : 0) + (VlcHttp.SubsOn ? 2 : 0) : 0);
     public Color? Ring => IsActive ? Orange : null;
-    // the wavefront breath needs frames of its own: nothing else about a playing VLC changes per frame
-    public bool Animating => IsActive && VlcHttp.Online && VlcHttp.Playing;
+    // the wavefront breath needs frames of its own: nothing else about a playing VLC changes per frame.
+    // the marquee too - a PAUSED movie with a long filename still has a title to scroll (Marquee.cs)
+    public bool Animating => IsActive && ((VlcHttp.Online && VlcHttp.Playing) || _marquee.Scrolling);
     // same as the media widget: the ring around the icon is how far through the file you are
     public float RingProgress => IsActive ? Progress() : -1f;
 
@@ -204,12 +206,16 @@ internal sealed class VlcWidget : IWidget
         }
 
         float tx = artX + artSize + 22, tw = w - tx - 26;
+        float dt = Dt();
         using var titleF = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
         using var bodyF = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
+        // same hover contract as the media panel: bound to the title row, so hover's shorter rest only
+        // applies with the pointer actually on the name
+        var titleRow = new RectangleF(tx, 40, tw, titleF.Height + 4);
+        titleRow.Inflate(6f, 6f);
+        bool onTitle = WidgetInput.Over && titleRow.Contains(WidgetInput.Mouse);
         using (var tb = new SolidBrush(Mul(White, fade)))
-        using (var sf = new StringFormat(StringFormat.GenericTypographic)
-        { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap | (Fx.IsRtl(name) ? StringFormatFlags.DirectionRightToLeft : 0) })
-            g.DrawString(name, titleF, tb, new RectangleF(tx, 40, tw, 30), sf);
+            _marquee.Draw(g, name, titleF, tb, tx, 40, tw, onTitle, dt);
         // "VLC media player" said nothing the cone in the tile does not already say. VLC, unlike SMTC, hands
         // over the REAL stream resolution, so that is preferred over whatever the filename claims; the rest
         // (publisher, source, size) comes from the same parsers the media panel uses.
@@ -221,7 +227,6 @@ internal sealed class VlcWidget : IWidget
 
         // ── seek bar: same behaviour as the media panel's, including the press-and-drag that follows the
         // cursor and commits once on release. VLC had no bar at all before, only ±10s buttons.
-        float dt = Dt();
         var seek = SeekRect(w);
         float frac = Progress();
         if (frac >= 0f)
@@ -303,6 +308,8 @@ internal sealed class VlcWidget : IWidget
     {
         string? name = VlcMonitor.Name;
         if (name == null) return;
+        // panel closed mid-scroll must not leave the marquee latched (see MediaWidget's DrawCollapsed)
+        _marquee.Park();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float prog = Progress();
         if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.5f);   // playback does not breathe either

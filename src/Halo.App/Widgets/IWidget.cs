@@ -9,6 +9,31 @@ internal readonly record struct AgentNotice(string? State, DateTimeOffset? Compa
     internal static AgentNotice None => new(null, null, null);
 }
 
+// How hard an agent session is working right now, as one comparable number - the strip sorts a group's
+// members by it and the controller uses it to pick WHICH working session takes the pill. Pure so the
+// ordering is a test rather than an eyeball. State outranks everything; inside a state, the turn that
+// has been running longer wins - between two busy sessions the one deeper into its task is the one the
+// user asked to see first. The number is never displayed, only compared, so the elapsed-seconds
+// tie-break does not collide with the no-invented-numbers rule.
+internal static class AgentActivity
+{
+    internal static long Rank(string? state, DateTimeOffset? startedAt, DateTimeOffset now)
+    {
+        int bucket = state switch
+        {
+            "working" => 5,
+            "compacting" => 4,
+            "waiting_input" => 3,   // asking beats merely waiting: it needs the user
+            "waiting" => 2,
+            null or "" or "idle" => 0,
+            _ => 1,                 // unknown state still beats a session doing nothing
+        };
+        if (bucket == 0) return 0;
+        long secs = startedAt is { } t ? (long)Math.Clamp((now - t).TotalSeconds, 0, 999_999) : 0;
+        return bucket * 1_000_000L + secs;
+    }
+}
+
 internal interface IWidget
 {
     string Icon { get; }                     // glyph fallback for the circle / dropdown
@@ -41,6 +66,10 @@ internal interface IWidget
 
     // Agent lifecycle events can temporarily expand the pill without coupling the controller to an agent type.
     AgentNotice AgentNotice => AgentNotice.None;
+
+    // AgentActivity.Rank for this widget's session; 0 for everything that is not an agent. Orders a
+    // group's members in the strip (busiest first) and breaks the tie when two sessions are working.
+    long ActivityRank => 0;
 
     // pids that mean "the user is inside this session" (agent process + hosting console) —
     // focusing a window with one of these makes the widget primary. Empty = never followed.

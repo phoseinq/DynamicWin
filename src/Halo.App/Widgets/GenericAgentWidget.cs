@@ -40,6 +40,9 @@ internal sealed class GenericAgentWidget : IWidget
     public IEnumerable<int> OwnerPids => Live is { } st ? new[] { st.Pid, st.ConsolePid } : Array.Empty<int>();
     public int Version => _store.Version;
     public string GroupKey => Live?.Name?.ToLowerInvariant() ?? "agent";
+    public long ActivityRank => Live is { } st
+        ? AgentActivity.Rank(st.State, DateTimeOffset.TryParse(st.StartedAt, null,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var t) ? t : null, DateTimeOffset.UtcNow) : 0;
     public Color? Ring => Live is { } st ? RingColor(st) : null;
 
     private static Color RingColor(CcStatus st) => st.State switch
