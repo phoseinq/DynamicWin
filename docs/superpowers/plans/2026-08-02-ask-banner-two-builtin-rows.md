@@ -384,7 +384,7 @@ git commit -m "test: pin the typing field to the free-text row"
 - Consumes: `AskBanner.FreeText` / `AskBanner.Chat` from Task 1; `PendingAsk.Options`.
 - Produces: `internal enum AskDelivery { Option, FreeText, Chat }` in `Halo.ClaudeCode`;
   `AskStore.Answer(PendingAsk ask, string label, AskDelivery delivery = AskDelivery.Option)`;
-  `AskStore.WalkSteps(int optionCount, AskDelivery delivery)` as `internal static int` - the pure
+  `AskStore.RowNumber(int optionCount, AskDelivery delivery)` as `internal static int` - the pure
   part, which is what gets tested.
 
 This is the task that fixes the reported defect. `Write` currently walks `ask.Options.Count` steps,
@@ -396,23 +396,29 @@ further.
 Add to `tests/Halo.Tests/AskQueueTests.cs`:
 
 ```csharp
-    // The banner reaches the rows past the options by walking Down off the end of the list. With four
-    // options the box highlights row 1, so four steps land on row 5 and five land on row 6. Which row
-    // those ARE depends on whether the box is showing a free-text row: without it, the chat row moves up
-    // one and a walk sized for the other layout activates the wrong thing. Getting this off by one is a
-    // banner that answers a question it did not ask.
+    // Every row past the options carries a number and is fired by typing it: the free-text row sits in
+    // the list at N+1, and the chat row prints its own "N+2." below the list. Four options therefore put
+    // them at 5 and 6, which is what the reported screenshot showed.
     [Theory]
-    [InlineData(4, AskDelivery.FreeText, true, 4)]
-    [InlineData(4, AskDelivery.Chat, true, 5)]
-    [InlineData(4, AskDelivery.Chat, false, 4)]   // no free-text row: chat is the first row past the options
-    [InlineData(1, AskDelivery.FreeText, true, 1)]
-    [InlineData(1, AskDelivery.Chat, false, 1)]
-    public void The_walk_reaches_the_row_it_names(int options, AskDelivery delivery, bool hasFreeText, int steps)
-        => Assert.Equal(steps, AskStore.WalkSteps(options, delivery, hasFreeText));
+    [InlineData(4, AskDelivery.FreeText, 5)]
+    [InlineData(4, AskDelivery.Chat, 6)]
+    [InlineData(1, AskDelivery.FreeText, 2)]
+    [InlineData(1, AskDelivery.Chat, 3)]
+    public void Each_built_in_row_is_reached_by_its_own_number(int options, AskDelivery delivery, int number)
+        => Assert.Equal(number, AskStore.RowNumber(options, delivery));
 
     [Fact]
-    public void A_numbered_option_is_not_walked_to_at_all()
-        => Assert.Equal(0, AskStore.WalkSteps(4, AskDelivery.Option, true));
+    public void A_numbered_option_does_not_go_through_the_built_in_path()
+        => Assert.Equal(0, AskStore.RowNumber(4, AskDelivery.Option));
+
+    // One keystroke is one digit. Eight options push the chat row to 10, which cannot be typed - and
+    // sending "1" would answer with the first option, so this must refuse rather than approximate.
+    [Fact]
+    public void Past_nine_rows_there_is_no_digit_to_send()
+    {
+        Assert.Equal(10, AskStore.RowNumber(8, AskDelivery.Chat));
+        Assert.True(AskStore.RowNumber(8, AskDelivery.Chat) > 9);
+    }
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -421,9 +427,9 @@ Add to `tests/Halo.Tests/AskQueueTests.cs`:
 dotnet test tests\Halo.Tests\Halo.Tests.csproj --filter "FullyQualifiedName~AskQueueTests"
 ```
 
-Expected: FAIL - `AskDelivery` and `AskStore.WalkSteps` do not exist.
+Expected: FAIL - `AskDelivery` and `AskStore.RowNumber` do not exist.
 
-- [ ] **Step 3: Add the delivery kind and the pure walk**
+- [ ] **Step 3: Add the delivery kind and the pure row number**
 
 In `src/Halo.App/ClaudeCode/AskStore.cs`, above `internal sealed class AskStore`:
 
@@ -437,20 +443,25 @@ internal enum AskDelivery { Option, FreeText, Chat }
 Inside the class, next to `Write`:
 
 ```csharp
-    // The box highlights row 1, so N steps land on row N+1: with N options that is the first row past
-    // them. Which row that is depends on what the box is showing - the chat row is one further only when
-    // a free-text row is above it, and assuming it always is was the bug.
-    internal static int WalkSteps(int optionCount, AskDelivery delivery, bool hasFreeText) => delivery switch
+    // Every row the box shows carries a number, and typing it selects that row outright - including the
+    // two past the options: __other__ sits in the list at N+1, and the chat row prints its own "N+2." and
+    // is fired by that digit (verified in Claude Code's bundle, see the plan's Findings).
+    //
+    // This replaces walking down the list with counted arrow presses. The walk had no safe failure mode:
+    // the list wraps, so a count one too large did not land past the end, it came back around onto a real
+    // option and answered the question with it. A digit is either right or it does nothing.
+    internal static int RowNumber(int optionCount, AskDelivery delivery) => delivery switch
     {
-        AskDelivery.FreeText => optionCount,
-        AskDelivery.Chat => optionCount + (hasFreeText ? 1 : 0),
+        AskDelivery.FreeText => optionCount + 1,
+        AskDelivery.Chat => optionCount + 2,
         _ => 0,
     };
 ```
 
-`hasFreeText` comes from `AskBanner.BuiltInsFor(ask).Any(AskBanner.IsFreeText)` at the call site in
-`Write`, so the drawn rows and the walk are computed from one source and cannot disagree - the same
-reason `Layout` is separate from painting.
+Note the consequence for `Press`: the existing `index < 9` guard applies to these rows too, since a
+two-digit row number cannot be sent as one keystroke. With the built-ins that ceiling is reached two
+rows earlier than before - guard on `RowNumber(...) <= 9` and return false above it rather than sending
+a digit that means something else.
 
 - [ ] **Step 4: Run it to verify it passes**
 
@@ -488,19 +499,29 @@ Expected: PASS.
         Trace($"{(index >= 0 ? "row " + (index + 1) : delivery + " words")} -> pid {ask.Pid} = {sent}");
 ```
 
-`Write` takes the delivery and asks `WalkSteps` how far to go:
+`Write` stops walking and types the row's number instead. The `VkDown` loop goes entirely:
 
 ```csharp
     private static bool Write(PendingAsk ask, string text, AskDelivery delivery)
     {
         int pid = ask.Pid;
-        int steps = WalkSteps(ask.Options.Count, delivery);
-        if (steps <= 0 || string.IsNullOrWhiteSpace(text)) return false;
-        if (!Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkDown, steps)) return false;
+        int row = RowNumber(ask.Options.Count, delivery);
+        // one keystroke is one digit, and sending the wrong one answers with a real option
+        if (row is <= 0 or > 9 || string.IsNullOrWhiteSpace(text)) return false;
+        if (!Interop.ConsoleRead.Type(pid, row.ToString())) return false;
 ```
 
-The rest of `Write` - the pooled Enter / sleep / Type / Enter sequence - is unchanged. Leave its
-comment about the sleeps; add one line recording that the walk distance is now per-row.
+The pooled tail - sleep, `Enter`, sleep, `Type(text)`, sleep, `Enter` - stays, and so do its comments
+about the box needing a moment between steps. Two things change in them:
+
+- The paragraph explaining the Down-walk is now wrong. Replace it with what the bundle showed: every
+  row prints its own number and typing that number selects it, so there is nothing to walk. Keep the
+  history - say that this used to count `Down` presses, and that the list wraps, so an off-by-one did
+  not miss harmlessly but came back around and answered with a real option.
+- The first `Enter` was there to activate a highlighted row before typing into it. Typing the digit
+  already activates it, so verify in Task 5 whether that `Enter` is still needed for the free-text row
+  and remove it if it is not. Do not remove it on assumption - the sleeps and key order in this method
+  were established by driving a live box, and the comment says so.
 
 - [ ] **Step 6: Send the delivery kind from the click handler**
 
@@ -647,11 +668,15 @@ The "neither" case is a real case: the banner must show the options alone, with 
 This is the step the whole plan exists for. A green test suite proves the arithmetic; only this proves
 the arithmetic was about the right box.
 
-- [ ] **Step 3: If a walk lands on the wrong row, fix the constant, not the test**
+- [ ] **Step 3: If a digit lands on the wrong row, fix the arithmetic, not the test**
 
 `%LOCALAPPDATA%\Halo\` holds the ask trace written by `Trace` - it records which row was targeted and
-whether the keystroke was sent. Read it before changing anything. Adjust `WalkSteps` and the
+whether the keystroke was sent. Read it before changing anything. Adjust `RowNumber` and the
 `[InlineData]` rows in Task 3 together, and record in the comment what the live box actually did.
+
+Also settle here whether the free-text row still needs the `Enter` before the text is typed, and
+whether a question whose options carry `preview` really does render without numbered built-ins - that
+is the one Findings claim taken from reading the bundle rather than from watching it happen.
 
 - [ ] **Step 4: Append to PROGRESS.md**
 
@@ -715,13 +740,48 @@ them in `FromJson`, and populate them where the envelope is built.** `FromJson` 
 unknown fields and defaults missing ones, which is exactly the compatibility this needs - an older
 pill reading a newer envelope, and vice versa, since the hooks are deployed separately from the pill.
 
-**Still open, being answered by a running investigation:**
+**`qZe` is Ink's internal accessibility (screen-reader) mode, default false.** Proof:
+`function Ea(){return y3u.useContext(xmo)}` over a context named `InternalAccessibilityContext`
+created with `createContext(!1)`. So in an ordinary terminal `qZe` is **false**, the `__chat__` branch
+above never runs, and the chat row is not in the option list at all. It is rendered separately:
 
-- What `qZe = Ea()` actually tests. Until this is known the chat row's presence cannot be predicted in
-  full, only its *position* (always last).
-- Whether Down clamps at the last row or wraps to the first. If it clamps, over-walking reaches the
-  chat row deterministically without needing `qZe` at all - which would make the unknown above stop
-  mattering, and is the outcome to hope for.
+```js
+S3S = !qZe && <>... <h>{MMr}. Chat about this</h> ...</>
+```
+
+- The chat row is a block **below** the list, printing its own number `MMr = options.length + 2`.
+- It is gated on `!qZe` only - **not** on `multiSelect`.
+- The list gets `onDownFromLastItem: s3S`, and `s3S = () => Q4S(true)` moves focus onto that block.
+
+So the normal box, which is what everyone actually sees, is: options `1..n`, `__other__` free-text at
+`n+1` inside the list, chat at `n+2` below it. That matches the screenshot exactly.
+
+**Down wraps - and that makes the current mechanism dangerous.** A generic `focus-next-option` reducer
+in the same bundle falls back to `optionMap.first` when the focused row has no `.next`. The question
+list overrides that with `onDownFromLastItem`, but the finding still matters: walking by counting Down
+presses has no safe failure mode. A count that is one too many does not land harmlessly past the end -
+it wraps onto a real option and answers the question with it.
+
+**The mechanism should not be a walk at all.** The same key handler shows the box accepts the row's
+digit directly:
+
+```js
+if(!uwt){ if(!qZe && !BPn && _q(OWe.key)===String(MMr)){ OWe.preventDefault(); $6t(); return } }
+```
+
+Typing `options.length + 2` fires `onRespondToClaude` - the chat action - with no navigation at all.
+`AskStore.Press` already types digits for numbered options; the built-in rows are simply two more
+digits. `BPn` is "the free-text field has focus", so the digit path is live right up until the user is
+actually typing into that field, which is exactly the right condition.
+
+**Revised rule for what to draw.** Both built-in rows are present in a normal terminal, always -
+`__other__` unconditionally, chat whenever `!qZe`. The combinations that looked inexplicable come from
+the *other* component: when `!multiSelect && options.some(o => o.preview)`, the box renders the preview
+layout instead, which has no numbered free-text row and whose chat row is not numbered either
+(`<h>Chat about this</h>`, no `MMr` prefix). So `HasPreview` is what the pill actually needs in order
+to know whether the numbered built-ins exist. `MultiSelect` should be forwarded too: it swaps the list
+widget and changes how `__other__` is submitted, so the pill should not pretend the two cases are the
+same.
 
 **`AskBuiltInCases.All`** - the test fixture Task 1 consumes. Write it as a small internal static class
 in `tests/Halo.Tests/`, one entry per combination above, so the layout tests and the live verification
