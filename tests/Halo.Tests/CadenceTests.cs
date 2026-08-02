@@ -31,13 +31,34 @@ public class CadenceTests
     }
 
     [Theory]
-    [InlineData(240, 4)]
-    [InlineData(144, 7)]
-    [InlineData(120, 8)]
-    [InlineData(60, 16)]
-    [InlineData(30, 33)]
-    public void Each_tier_maps_to_its_timer_interval(int fps, int ms)
-        => Assert.Equal(ms, NotchController.IntervalMs(fps));
+    [InlineData(280, 3.571)]
+    [InlineData(240, 4.167)]
+    [InlineData(144, 6.944)]
+    [InlineData(120, 8.333)]
+    [InlineData(60, 16.667)]
+    [InlineData(30, 33.333)]
+    public void Each_rate_maps_to_its_exact_period(int fps, double ms)
+        => Assert.Equal(ms, NotchController.IntervalMs(fps), 3);
+
+    // The reason the period stopped being rounded to whole milliseconds: 240 and 280 both landed on 4ms,
+    // so the two choices were the same tick and picking the higher one did nothing at all.
+    [Fact]
+    public void Two_neighbouring_choices_do_not_collapse_onto_one_tick()
+        => Assert.True(NotchController.IntervalMs(280) < NotchController.IntervalMs(240),
+            "280 must ask for a shorter period than 240");
+
+    // Picked above MaxFps, the setting has to RAISE what a morph reaches for - capping it away would make
+    // the row a control that cannot be honoured.
+    [Fact]
+    public void A_rate_above_the_built_in_ceiling_is_still_reached_for()
+    {
+        Assert.Equal(280, NotchController.Reach(280));
+        Assert.Equal(280, NotchController.CadenceFps(true, 60, 280));
+    }
+
+    [Fact]
+    public void With_no_setting_a_morph_reaches_for_the_built_in_ceiling()
+        => Assert.Equal(NotchController.MaxFps, NotchController.Reach(0));
 
     // A ceiling the user picks has to be honoured even when it is above what Halo would choose on its
     // own, and a shorter interval must never come out of a lower number.

@@ -546,9 +546,17 @@ internal sealed partial class NotchController
     // can pin a ceiling in the settings rather than being told what their hardware is capable of.
     internal const int MaxFps = 240;
 
-    internal static int CadenceFps(bool morphing, int tier) => morphing ? MaxFps : tier;
-    internal static int IntervalMs(int fps)
-        => fps >= 240 ? 4 : fps >= 144 ? 7 : fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
+    // What the morph reaches for: the setting when there is one, MaxFps otherwise. A picked rate ABOVE
+    // MaxFps has to raise this rather than be clamped away by it, or choosing 280 would be a control that
+    // does nothing - and the tiers below still apply, so a busy machine drops the same as ever.
+    internal static int Reach(int ceiling) => ceiling > 0 ? ceiling : MaxFps;
+    internal static int CadenceFps(bool morphing, int tier, int ceiling = 0)
+        => morphing ? Reach(ceiling) : tier;
+
+    // The exact period, not a bucket. It used to round to whole milliseconds, which quietly made two
+    // different choices the same tick - 240 and 280 both landed on 4ms, i.e. 250Hz - and made the 60 tier
+    // actually 62.5. A rate the user picked has to be the rate that is asked for.
+    internal static double IntervalMs(int fps) => 1000.0 / Math.Max(1, fps);
 
     // A ceiling the user sets, applied last so it wins over both the measured tier and the morph's 120.
     // The adaptive behaviour is the right default - it is measured, and a fixed number is worse on most
@@ -559,6 +567,7 @@ internal sealed partial class NotchController
 
     private int FpsCeiling => _settings.Current.Text(Halo.Settings.SettingsKeys.FrameRate, "Auto") switch
     {
+        "280" => 280,
         "240" => 240,
         "144" => 144,
         "120" => 120,
@@ -571,7 +580,9 @@ internal sealed partial class NotchController
     private int _cadence = MaxFps;   // matches what the constructor arms the timer with
     private void ApplyCadence()
     {
-        int fps = Capped(CadenceFps(_morphing, _fps), FpsCeiling);
+        // A morph runs at what was asked for; a settled panel keeps its measured tier, capped by it.
+        int ceiling = FpsCeiling;
+        int fps = _morphing ? Reach(ceiling) : Capped(_fps, ceiling);
         if (fps == _cadence) return;
         _cadence = fps;
         _timer.Interval = TimeSpan.FromMilliseconds(IntervalMs(fps));

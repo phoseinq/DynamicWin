@@ -63,8 +63,8 @@ internal static class Catalog
                     "Balanced", "Light", "Balanced", "Strong"),
                 Choice("appearance.motion", "Motion", "How quickly the pill settles after it moves",
                     "Soft", "Reduced", "Soft", "Standard"),
-                Choice("appearance.fps", "Frame rate", "A ceiling, not a target - Halo already drops below it when the machine is busy",
-                    "Auto", "Auto", "240", "144", "120", "60", "30"),
+                Choice("appearance.fps", "Frame rate", "What Halo reaches for while the pill is moving. It still drops below this when the machine is busy.",
+                    "Auto", "Auto", "280", "240", "144", "120", "60", "30"),
             ]),
             new("STARTUP", "\uE7E8", [
                 Toggle("general.startup", "Start with Windows", "Launch Halo after you sign in"),
