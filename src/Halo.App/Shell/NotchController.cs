@@ -413,7 +413,7 @@ internal sealed partial class NotchController
         Dispatcher.Ensure();
         var dq = DispatcherQueue.GetForCurrentThread();
         _timer = dq.CreateTimer();
-        _timer.Interval = TimeSpan.FromMilliseconds(8);
+        _timer.Interval = TimeSpan.FromMilliseconds(IntervalMs(MaxFps));
         _timer.Tick += OnTick;
         _timer.Start();
     }
@@ -439,7 +439,7 @@ internal sealed partial class NotchController
     // adaptive cadence: 120fps when the CPU has headroom, 60fps when it's busy (saves heat/battery).
     // "if resources are free → 120" per the user; sampled ~1s from GetSystemTimes (cheap, no counters).
     private long _cpuIdle, _cpuBusyBase, _cpuAt;
-    private int _fps = 120;
+    private int _fps = MaxFps;
     // "heavy" = something else is hammering the CPU. While heavy we back Halo off (lower fps, slower
     // glass capture) AND drop our process priority so the busy app gets the cores — then fire ONE notice.
     private bool _heavy;
@@ -485,7 +485,7 @@ internal sealed partial class NotchController
             if (watching) target = 60;
             else if (busy > 0.90f) target = 30;       // only truly slammed drops to 30
             else if (busy > 0.55f) target = 60;       // busy: hold a smooth 60
-            else if (busy < 0.45f) target = 120;      // headroom: full 120 (hysteresis band between)
+            else if (busy < 0.45f) target = MaxFps;   // headroom: as fast as the timer will go
 
             // "heavy" backs off glass capture AND drops our priority — but NOT while watching, or the
             // panel itself stutters (lower priority = our render thread gets preempted mid-frame).
@@ -535,8 +535,20 @@ internal sealed partial class NotchController
     // because the constants are what someone will nudge later.
     internal static bool MorphHasContent(float t) => ContentFade(t) + MiniFade(t) > 0.3f;
 
-    internal static int CadenceFps(bool morphing, int tier) => morphing ? 120 : tier;
-    internal static int IntervalMs(int fps) => fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
+    // The ceiling Halo will reach for on its own. Raised past 120 because the morph is the one moment the
+    // eye tracks a moving edge and it lasts ~300ms, so the cost of running it flat out is paid for a third
+    // of a second. Everything that made 120 the old limit still applies to the SETTLED panel, which
+    // AdaptFrameRate holds at 60 on its own measurement (~58% CPU at 120 with the glass up).
+    //
+    // A request, not a promise: DispatcherQueueTimer cannot beat the platform's timer resolution, so on a
+    // machine that has not had it raised this asks for 4ms and gets whatever it gets. That is the right
+    // failure - it degrades to the next tier down rather than misbehaving - and it is also why the user
+    // can pin a ceiling in the settings rather than being told what their hardware is capable of.
+    internal const int MaxFps = 240;
+
+    internal static int CadenceFps(bool morphing, int tier) => morphing ? MaxFps : tier;
+    internal static int IntervalMs(int fps)
+        => fps >= 240 ? 4 : fps >= 144 ? 7 : fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
 
     // A ceiling the user sets, applied last so it wins over both the measured tier and the morph's 120.
     // The adaptive behaviour is the right default - it is measured, and a fixed number is worse on most
@@ -547,14 +559,16 @@ internal sealed partial class NotchController
 
     private int FpsCeiling => _settings.Current.Text(Halo.Settings.SettingsKeys.FrameRate, "Auto") switch
     {
+        "240" => 240,
+        "144" => 144,
         "120" => 120,
         "60" => 60,
         "30" => 30,
-        _ => 0,   // Auto: no ceiling
+        _ => 0,   // Auto: no ceiling, which now means MaxFps
     };
 
     private bool _morphing;
-    private int _cadence = 120;   // matches the 8ms the constructor arms the timer with
+    private int _cadence = MaxFps;   // matches what the constructor arms the timer with
     private void ApplyCadence()
     {
         int fps = Capped(CadenceFps(_morphing, _fps), FpsCeiling);

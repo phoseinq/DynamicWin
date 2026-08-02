@@ -64,7 +64,7 @@ internal static class Catalog
                 Choice("appearance.motion", "Motion", "How quickly the pill settles after it moves",
                     "Soft", "Reduced", "Soft", "Standard"),
                 Choice("appearance.fps", "Frame rate", "A ceiling, not a target - Halo already drops below it when the machine is busy",
-                    "Auto", "Auto", "120", "60", "30"),
+                    "Auto", "Auto", "240", "144", "120", "60", "30"),
             ]),
             new("STARTUP", "\uE7E8", [
                 Toggle("general.startup", "Start with Windows", "Launch Halo after you sign in"),

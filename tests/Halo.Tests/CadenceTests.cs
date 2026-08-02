@@ -9,12 +9,18 @@ namespace Halo.Tests;
 public class CadenceTests
 {
     [Fact]
-    public void A_morph_always_gets_120_even_on_the_watching_tier()
-        => Assert.Equal(120, NotchController.CadenceFps(true, 60));
+    public void A_morph_always_gets_the_ceiling_even_on_the_watching_tier()
+        => Assert.Equal(NotchController.MaxFps, NotchController.CadenceFps(true, 60));
 
     [Fact]
     public void A_morph_outruns_the_slammed_tier_too()
-        => Assert.Equal(120, NotchController.CadenceFps(true, 30));
+        => Assert.Equal(NotchController.MaxFps, NotchController.CadenceFps(true, 30));
+
+    // The morph is ~300ms, so running it flat out costs a third of a second of full rate. The settled
+    // panel is the thing that had to stay at 60, and it still does.
+    [Fact]
+    public void The_ceiling_is_above_the_old_120_limit()
+        => Assert.True(NotchController.MaxFps > 120);
 
     [Fact]
     public void Once_settled_the_measured_tier_stands()
@@ -25,11 +31,24 @@ public class CadenceTests
     }
 
     [Theory]
+    [InlineData(240, 4)]
+    [InlineData(144, 7)]
     [InlineData(120, 8)]
     [InlineData(60, 16)]
     [InlineData(30, 33)]
     public void Each_tier_maps_to_its_timer_interval(int fps, int ms)
         => Assert.Equal(ms, NotchController.IntervalMs(fps));
+
+    // A ceiling the user picks has to be honoured even when it is above what Halo would choose on its
+    // own, and a shorter interval must never come out of a lower number.
+    [Fact]
+    public void A_higher_tier_never_asks_for_a_longer_interval()
+    {
+        int[] tiers = [30, 60, 120, 144, 240];
+        for (int i = 1; i < tiers.Length; i++)
+            Assert.True(NotchController.IntervalMs(tiers[i]) <= NotchController.IntervalMs(tiers[i - 1]),
+                $"{tiers[i]}fps asked for a longer interval than {tiers[i - 1]}fps");
+    }
 
     // The ceiling is the user's judgement about their hardware, which a CPU sample cannot make. It is
     // applied last, so it beats the morph's 120 too - otherwise the one moment a weak machine struggles
@@ -47,8 +66,13 @@ public class CadenceTests
     public void Auto_is_no_ceiling_at_all()
     {
         Assert.Equal(120, NotchController.Capped(120, 0));
-        Assert.Equal(120, NotchController.Capped(NotchController.CadenceFps(true, 30), 0));
+        Assert.Equal(NotchController.MaxFps, NotchController.Capped(NotchController.CadenceFps(true, 30), 0));
     }
+
+    // Auto means MaxFps now, so a user who wants the old behaviour has to be able to ask for it.
+    [Fact]
+    public void A_user_can_pin_the_rate_back_down_to_the_old_limit()
+        => Assert.Equal(120, NotchController.Capped(NotchController.CadenceFps(true, 60), 120));
 
     [Fact]
     public void A_ceiling_above_the_tier_changes_nothing()
