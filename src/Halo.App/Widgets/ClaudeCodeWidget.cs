@@ -11,6 +11,7 @@ namespace Halo.Widgets;
 
 internal sealed class ClaudeCodeWidget : IWidget
 {
+    private EasedBar _usageFrac;
     private static readonly Color Blue = Color.FromArgb(91, 157, 255);
     private static readonly Color Green = Color.FromArgb(62, 207, 92);
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
@@ -133,7 +134,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         // not the point of the pill. Collapsed only; the expanded panel keeps its labelled bars, which are
         // what you actually compare three numbers on. Skipped while compacting, whose breathing wash owns
         // the whole pill already.
-        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
+        // eased: usage lands per turn, so the wash used to step visibly between two still frames
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, _usageFrac.Step(UsageFrac()), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {

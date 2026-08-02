@@ -13,6 +13,7 @@ internal enum CodexCancelRoute { None, Cli, Desktop }
 
 internal sealed class CodexWidget : IWidget
 {
+    private EasedBar _usageFrac;
     private static readonly Color Blue = Color.FromArgb(91, 157, 255);
     private static readonly Color Green = Color.FromArgb(62, 207, 92);
     private static readonly Color Amber = Color.FromArgb(255, 176, 32);
@@ -160,7 +161,8 @@ internal sealed class CodexWidget : IWidget
         g.SmoothingMode = SmoothingMode.AntiAlias;
         // mirrors ClaudeCodeWidget: the spent share of the usage window as a whisper-faint pill background,
         // collapsed only, and never while the compacting wash owns the pill
-        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, UsageFrac(), Accent, 0.3f);
+        // eased, the same as ClaudeCodeWidget: usage lands per turn and the wash stepped between frames
+        if (!Compacting(st)) Fx.PillBar(g, w, h, fade, _usageFrac.Step(UsageFrac()), Accent, 0.3f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 26, Accent);
         if (Compacting(st)) // soft blue breathing across the whole pill = process running
         {

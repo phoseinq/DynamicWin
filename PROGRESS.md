@@ -29,8 +29,11 @@ are trailing and defaulted so the separately-deployed hook and pill keep working
 
 Verified: `--render-ask` shows a question with rows 4 and 5 as the two built-ins in order, the typing
 state putting the caret on row 4 while row 5 stays a plain row, and a permission ask with neither.
-**Not yet verified live** - that the digit selects the row the bundle says it does, and that a preview
-question really renders without numbered rows, are still claims read rather than watched.
+**Then verified live** - hot-swapped over the install (`Halo.App.dll`, the four `Halo.Hooks` files and
+`Halo.Settings.*`, all from `dotnet publish` self-contained, never `bin/Release`) and confirmed against
+a real question: both rows draw, and the chat row answers on the click instead of opening a field.
+Still unwatched: a question whose options carry previews, which the bundle says renders without
+numbered rows. **Deployed, not pushed.**
 
 ## 2026-08-02 (earlier today): the About page said 1.0.0, and the morph never ran at 120
 

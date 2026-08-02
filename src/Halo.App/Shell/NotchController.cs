@@ -522,11 +522,26 @@ internal sealed partial class NotchController
     internal static int CadenceFps(bool morphing, int tier) => morphing ? 120 : tier;
     internal static int IntervalMs(int fps) => fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
 
+    // A ceiling the user sets, applied last so it wins over both the measured tier and the morph's 120.
+    // The adaptive behaviour is the right default - it is measured, and a fixed number is worse on most
+    // machines - but it can only ever read the CPU, and whether THIS machine should be pushed to 120 is a
+    // judgement about the hardware that a CPU sample cannot make. Ceiling rather than target so the tiers
+    // below it still apply: capping at 60 must not stop a slammed machine dropping to 30.
+    internal static int Capped(int fps, int ceiling) => ceiling > 0 && fps > ceiling ? ceiling : fps;
+
+    private int FpsCeiling => _settings.Current.Text(Halo.Settings.SettingsKeys.FrameRate, "Auto") switch
+    {
+        "120" => 120,
+        "60" => 60,
+        "30" => 30,
+        _ => 0,   // Auto: no ceiling
+    };
+
     private bool _morphing;
     private int _cadence = 120;   // matches the 8ms the constructor arms the timer with
     private void ApplyCadence()
     {
-        int fps = CadenceFps(_morphing, _fps);
+        int fps = Capped(CadenceFps(_morphing, _fps), FpsCeiling);
         if (fps == _cadence) return;
         _cadence = fps;
         _timer.Interval = TimeSpan.FromMilliseconds(IntervalMs(fps));
@@ -685,6 +700,11 @@ internal sealed partial class NotchController
         if (version == _appliedSettings) return;
         _appliedSettings = version;
         var current = _settings.Current;
+
+        // the ceiling only reaches the timer through here: AdaptFrameRate re-arms on a tier change and the
+        // morph on its own start, and a user who picks 60 while the pill is sitting still would otherwise
+        // see nothing happen until one of those fired
+        ApplyCadence();
 
         // "Start with Windows" is not a value anything reads - it is a scheduled task that either exists or
         // does not. Reconciled from here rather than from the panel's Apply so that a settings.json edited

@@ -30,4 +30,27 @@ public class CadenceTests
     [InlineData(30, 33)]
     public void Each_tier_maps_to_its_timer_interval(int fps, int ms)
         => Assert.Equal(ms, NotchController.IntervalMs(fps));
+
+    // The ceiling is the user's judgement about their hardware, which a CPU sample cannot make. It is
+    // applied last, so it beats the morph's 120 too - otherwise the one moment a weak machine struggles
+    // most would be the one moment the setting did not apply.
+    [Fact]
+    public void The_ceiling_holds_a_morph_down()
+        => Assert.Equal(60, NotchController.Capped(NotchController.CadenceFps(true, 60), 60));
+
+    // Ceiling, not target: capping at 60 must not stop a slammed machine dropping to 30.
+    [Fact]
+    public void A_tier_below_the_ceiling_is_left_alone()
+        => Assert.Equal(30, NotchController.Capped(30, 60));
+
+    [Fact]
+    public void Auto_is_no_ceiling_at_all()
+    {
+        Assert.Equal(120, NotchController.Capped(120, 0));
+        Assert.Equal(120, NotchController.Capped(NotchController.CadenceFps(true, 30), 0));
+    }
+
+    [Fact]
+    public void A_ceiling_above_the_tier_changes_nothing()
+        => Assert.Equal(60, NotchController.Capped(60, 120));
 }

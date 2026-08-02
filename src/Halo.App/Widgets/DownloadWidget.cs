@@ -483,23 +483,31 @@ internal sealed class DownloadWidget : IWidget
             Fill(g, sx, by, seg, bh, Mul(accent, 0.5f + 0.5f * p), bh / 2);
             return;
         }
-        DrawPillProgress(g, w, h, fade, Math.Clamp(Downloads.Percent, 0, 100), accent,
-            Downloads.Paused, ix + sz);
+        // eased, not the raw reading: bytes land per network read, so the fill used to teleport between
+        // whole percents. EasedBar clamps to the remaining distance, so it still never shows more than has
+        // actually downloaded.
+        int pct = Math.Clamp(Downloads.Percent, 0, 100);
+        DrawPillProgress(g, w, h, fade, _pillFrac.Step(pct / 100f), pct, accent, Downloads.Paused, ix + sz);
     }
+
+    private EasedBar _pillFrac;
 
     // Progress WITHOUT a separate bar: the pill itself is the bar. The whole silhouette carries a deep,
     // dim wash of the app's own accent as the track, the vivid accent fills it left-to-right, and a glow
     // rides the leading edge so the motion reads even at a glance. The icon is drawn last, so the fill
     // passes BEHIND it and never sits on top of it. `iconRight` is where the icon ends, so the number can
     // centre in the space that is actually free.
-    private static void DrawPillProgress(Graphics g, int w, int h, float fade, int pct, Color accent,
-        bool paused, float iconRight)
+    // frac is the eased fill and pct is the real reading, and they are deliberately not the same number.
+    // The bar may lag by a fraction of a second because that is what stops it teleporting; the text may
+    // not, because a written percentage that disagrees with the download is an invented figure.
+    private static void DrawPillProgress(Graphics g, int w, int h, float fade, float frac, int pct,
+        Color accent, bool paused, float iconRight)
     {
         var bar = paused ? Dim : accent;
         // breathing while it is actually moving, the same as the media pill: a download that is 40% done and
         // one that is stalled at 40% are the same still picture, and the bar is the thing you glance at to
         // tell them apart. A paused download holds still, which is the other half of the answer.
-        Fx.PillBar(g, w, h, fade, pct / 100f, bar, 1f, alive: !paused);   // both glows live inside PillBar
+        Fx.PillBar(g, w, h, fade, frac, bar, 1f, alive: !paused);   // both glows live inside PillBar
 
         float sz = h - 14f;
         DrawCollapsedIcon(g, Ico(), 9, (h - sz) / 2f, sz, fade); // last, so the fill passes behind it

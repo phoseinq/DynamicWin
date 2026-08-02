@@ -123,6 +123,7 @@ internal static class SettingsKeys
     internal const string Scale = "appearance.scale";
     internal const string Glass = "appearance.glass";
     internal const string Motion = "appearance.motion";
+    internal const string FrameRate = "appearance.fps";
 
     internal static string Feature(FeatureId id) => "feature." + FeatureCatalog.For(id).Key;
 }
