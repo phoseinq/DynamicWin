@@ -282,29 +282,23 @@ row only:
             bool typing = typed != null && IsFreeText(row.Option);
 ```
 
-`src/Halo.App/Shell/NotchController.cs` ~line 1833 - both built-ins collect words, so both begin
-typing; Task 3 is what makes them differ:
+`src/Halo.App/Shell/NotchController.cs` ~line 1833 - **only the free-text row collects words.** "Chat
+about this" is a plain choice in the box: you select it and the question is handed over. Turning it
+into a text field is the reported symptom - a banner showing a caret and "enter to send" on a row that
+takes no text:
 
 ```csharp
-                    if (AskBanner.IsBuiltIn(_askChips[i].Option)) BeginTyping(_askChips[i].Option);
+                    if (AskBanner.IsFreeText(_askChips[i].Option)) BeginTyping();
+                    else if (AskBanner.IsChat(_askChips[i].Option))
+                        _asks.Answer(ask, _askChips[i].Option.Label, AskDelivery.Chat);
 ```
 
-`BeginTyping` does not take a parameter yet. For this task only, add the parameter and ignore it:
+`BeginTyping` keeps its current signature - there is only one row that types, so nothing has to be
+remembered about which. `AskDelivery` arrives in Task 3; until then the `Answer` call takes its
+two-argument form and this line is written without the third argument.
 
-```csharp
-    private void BeginTyping(AskOption row)
-    {
-        if (_askTyped != null) return;
-        _askBuiltIn = row;
-        _askTyped = _askDraftNonce == _ask?.Nonce ? _askDraft : "";
-    }
-```
-
-and add the field next to `_askTyped` (~line 260):
-
-```csharp
-    private AskOption? _askBuiltIn;   // which of the two rows past the options is collecting the words
-```
+Do not add an `_askBuiltIn` field. An earlier draft of this plan had one, to record which built-in was
+collecting words - it exists only if both rows can type, which is exactly the bug.
 
 - [ ] **Step 6: Build and run the full suite**
 
@@ -507,8 +501,11 @@ Expected: PASS.
         int pid = ask.Pid;
         int row = RowNumber(ask.Options.Count, delivery);
         // one keystroke is one digit, and sending the wrong one answers with a real option
-        if (row is <= 0 or > 9 || string.IsNullOrWhiteSpace(text)) return false;
+        if (row is <= 0 or > 9) return false;
+        // the chat row takes no words - selecting it IS the answer. Only the free-text row needs any.
+        if (delivery == AskDelivery.FreeText && string.IsNullOrWhiteSpace(text)) return false;
         if (!Interop.ConsoleRead.Type(pid, row.ToString())) return false;
+        if (delivery == AskDelivery.Chat) return true;   // nothing follows the digit
 ```
 
 The pooled tail - sleep, `Enter`, sleep, `Type(text)`, sleep, `Enter` - stays, and so do its comments
@@ -523,18 +520,28 @@ about the box needing a moment between steps. Two things change in them:
   and remove it if it is not. Do not remove it on assumption - the sleeps and key order in this method
   were established by driving a live box, and the comment says so.
 
-- [ ] **Step 6: Send the delivery kind from the click handler**
+- [ ] **Step 6: Send the delivery kind from the two places that answer**
 
-In `src/Halo.App/Shell/NotchController.cs`, where Enter commits the typed text (~line 2271), pass what
-`BeginTyping` recorded:
+Only one path types, so there is nothing to remember and nothing to clear.
+
+In `src/Halo.App/Shell/NotchController.cs`, where Enter commits the typed text (~line 2271), the words
+can only have come from the free-text row:
 
 ```csharp
             string answer = _askTyped.Trim();
-            var delivery = AskBanner.IsChat(_askBuiltIn!) ? AskDelivery.Chat : AskDelivery.FreeText;
 ```
 
-and use `delivery` in the `Answer` call on the following lines. Clear `_askBuiltIn = null;` wherever
-`_askTyped` is set back to null, so a cancelled banner cannot leave the last choice behind.
+Pass `AskDelivery.FreeText` in the `Answer` call on the following lines.
+
+Then complete the chat branch written in Task 1 Step 5, which was left without its third argument:
+
+```csharp
+                    else if (AskBanner.IsChat(_askChips[i].Option))
+                        _asks.Answer(ask, _askChips[i].Option.Label, AskDelivery.Chat);
+```
+
+That call carries the row's label only so `Trace` has something to print - the chat path sends a digit
+and no words at all, which is why `Write` must not reject it for having no text.
 
 - [ ] **Step 7: Build and run the full suite**
 

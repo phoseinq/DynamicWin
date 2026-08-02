@@ -154,6 +154,20 @@ Pure art, no logic. The current pushpin carries three states - dim outline (off)
 14px against a dark pill, plus the hold-gesture growth. Now that the hover label is gone, the icon is
 the only readout, which raises the bar rather than lowering it.
 
+**Direction chosen: the thumbtack seen from above** - a disc, not the current side-on pin with its
+spike. The reason it wins at this size is that the spike spends two of fourteen pixels on a stem that
+carries no state; from above, every pixel goes to the disc and the three states separate by fill
+instead:
+
+- off: ring only, nothing inside
+- pinned: filled core, cool grey - the same Slate that already exists, so pinned still does not
+  advertise itself
+- recording: amber core, which stays the one thing amber is allowed to mean
+
+The hold gesture has to be redrawn for this shape: it currently grows the pin's head, and a disc has
+no head to grow. Growing the core outward toward the ring is the obvious equivalent and keeps the
+"something is happening before it fires" feedback that the head-growth exists to give.
+
 Verified with the existing `--render-pin` hook, which draws every state side by side.
 
 ---
