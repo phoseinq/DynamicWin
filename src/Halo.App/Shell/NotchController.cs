@@ -367,6 +367,7 @@ internal sealed partial class NotchController
         _api = new Halo.Api.HaloApi(ApiConfig, this);
         _api.Reconcile();
         _startupApplied = _settings.Current.Bool(Halo.Settings.SettingsKeys.StartWithWindows, true);
+        ReconcileAutostart(_startupApplied);
         _silenceApplied = _settings.Current.Bool("notifications.silence", false);
         if (_silenceApplied) System.Threading.ThreadPool.QueueUserWorkItem(
             _ => { try { Halo.Notifications.BannerGate.Enable(); } catch { } });
@@ -509,11 +510,26 @@ internal sealed partial class NotchController
             CheckRam();
         }
         _cpuIdle = idle; _cpuBusyBase = total;
-        if (target != _fps)
-        {
-            _fps = target;
-            _timer.Interval = TimeSpan.FromMilliseconds(target >= 120 ? 8 : target >= 60 ? 16 : 33);
-        }
+        if (target != _fps) { _fps = target; ApplyCadence(); }
+    }
+
+    // The tier above is sampled once a second, but the expand/collapse morph is over in ~300ms. Two
+    // consequences, both of which read as the pill "not being smooth like Apple": the whole morph ran at
+    // the watching tier's 60 and never reached 120, and a tier switch that happened to land mid-morph
+    // changed the cadence while the eye was tracking a moving edge. So the morph is decided here, per
+    // frame, and always wins - it is short, and it is the one moment smoothness is actually being judged.
+    // The settled panel still holds 60: that is the measured glass cost, not a guess.
+    internal static int CadenceFps(bool morphing, int tier) => morphing ? 120 : tier;
+    internal static int IntervalMs(int fps) => fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
+
+    private bool _morphing;
+    private int _cadence = 120;   // matches the 8ms the constructor arms the timer with
+    private void ApplyCadence()
+    {
+        int fps = CadenceFps(_morphing, _fps);
+        if (fps == _cadence) return;
+        _cadence = fps;
+        _timer.Interval = TimeSpan.FromMilliseconds(IntervalMs(fps));
     }
 
     // highest tier index the value reaches, or -1 below the first tier
@@ -723,6 +739,30 @@ internal sealed partial class NotchController
     // Halo.Hooks owns what "start with Windows" means - the installer and the uninstaller call the same
     // two commands - so the pill asks it rather than growing a second copy of the task XML. Off the tick,
     // because spawning a process on the render thread is a visible stutter.
+    // The setting is the intent; the scheduled task is the fact, and the two diverge without anything
+    // noticing - an install with the autostart box unticked leaves no task while settings.json still
+    // defaults to on, and the block above only calls Autostart on a CHANGE, so it never fires. Asked once
+    // at startup, off-thread, which is what actually makes good on "settings.json tells the truth about
+    // the machine".
+    private static void ReconcileAutostart(bool want)
+    {
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                string hooks = System.IO.Path.Combine(AppContext.BaseDirectory, "Halo.Hooks.exe");
+                if (!System.IO.File.Exists(hooks)) return;
+                var psi = new System.Diagnostics.ProcessStartInfo(hooks)
+                { UseShellExecute = false, CreateNoWindow = true };
+                psi.ArgumentList.Add("query-autostart");
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p == null || !p.WaitForExit(20_000)) return;
+                if ((p.ExitCode == 0) != want) Autostart(want);
+            }
+            catch { }
+        });
+    }
+
     private static void Autostart(bool on)
     {
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
@@ -1516,6 +1556,10 @@ internal sealed partial class NotchController
             // and unconditionally while something is carried: the slide-aside eases on its own after the
             // cursor has stopped, and the cursor test above cannot see that
             || _dragHeld >= DragHold;
+        // every size that is still easing counts, not just the hover morph: the banner and the ask panel
+        // grow through the same Apply(), and the tuck-away shrink is the slowest of the lot
+        bool morphing = next != _progress || _notifT != prevNotifT || _askT != prevAskT || _shrink != prevShrink;
+        if (morphing != _morphing) { _morphing = morphing; ApplyCadence(); }
         _progress = next;
         _widgetVersion = wv;
         // against the last DRAWN text, not a copy taken earlier in this same frame. Keystrokes arrive
@@ -2400,25 +2444,9 @@ internal sealed partial class NotchController
         bool hov = WidgetInput.Over && r.Contains(WidgetInput.Mouse);
         _pinHov = Toward(_pinHov, hov ? 1f : 0f, _dt / 0.10f);
         float hv = _pinHov * _pinHov * (3f - 2f * _pinHov);
+        // no hover label. The chip that used to say "pin on top" / "unpin" was one more thing lighting up
+        // next to the agent panels' stop button; the three pin states already read as on/off/recording.
         DrawPushpin(g, r, _pinned, hv, a, _recordable, PinHoldProgress());
-        if (hv > 0.02f) // hover: tiny English label to the right saying what each gesture does
-        {
-            using var f = new Font("Segoe UI", 11f, GraphicsUnit.Pixel);
-            // only the tap is advertised. The hold gesture is deliberately unlabelled.
-            string label = _pinned ? "unpin" : "pin on top";
-            // On its own chip, because the space to the right of the pin is no longer empty - the agent
-            // panels put their stop button at x=42 and the bare text landed on top of it. A hover label
-            // that has to be read against whatever it happens to cover is not a label.
-            var sz = g.MeasureString(label, f);
-            var chip = new RectangleF(r.Right + 6, r.Y + (r.Height - 17) / 2f, sz.Width + 12, 17);
-            using (var bgb = new SolidBrush(Color.FromArgb((int)(215 * hv * a), 18, 18, 20)))
-            using (var chipPath = Fx.Rounded(chip, 6f))
-                g.FillPath(bgb, chipPath);
-            using var b = new SolidBrush(Color.FromArgb((int)(230 * hv * a), 235, 235, 235));
-            using var sf = new StringFormat(StringFormat.GenericTypographic)
-            { LineAlignment = StringAlignment.Center, Alignment = StringAlignment.Center };
-            g.DrawString(label, f, b, chip, sf);
-        }
     }
 
     // The pin art, and the whole state readout: the pill has no menu, so these three shapes are the only

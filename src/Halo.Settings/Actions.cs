@@ -28,8 +28,10 @@ internal static class Actions
                 case "access.notifications":
                     Open("ms-settings:privacy-notifications");
                     break;
+                // autostart is a logon-triggered scheduled task now, not a Startup-folder shortcut, so
+                // opening that folder showed the user an empty window and no explanation
                 case "access.startup":
-                    Open(Environment.GetFolderPath(Environment.SpecialFolder.Startup));
+                    Open("taskschd.msc");
                     break;
                 // both of these rendered a button that did nothing at all, because Run had no case for them
                 case "about.state":

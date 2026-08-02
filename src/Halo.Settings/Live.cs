@@ -16,7 +16,7 @@ internal static class Live
         // window is a full one in every screen recording of a settings window
         "api.token" => Token,
         "about.version" => Version,
-        "access.startup" => StartupShortcut ? "On" : "Missing",
+        "access.startup" => StartupTask ? "On" : "Missing",
         "access.notifications" => "Managed by Windows",
         _ => row.Fallback,
     };
@@ -51,24 +51,30 @@ internal static class Live
         }
     }
 
-    // The installer writes this; the toggle on General is meant to add and remove it. Reading the file
-    // rather than the setting is the point of a Status row - it reports what Windows will actually do.
-    private static bool StartupShortcut
+    // Reading the machine rather than the setting is the point of a Status row - it reports what Windows
+    // will actually do. It used to scan the Startup folder for a .lnk, which stopped being the truth the
+    // day autostart became a logon-triggered scheduled task (Explorer released those shortcuts one at a
+    // time and Halo came up last on every boot). So this row read "Missing" on a machine that was starting
+    // Halo perfectly well. Halo.Hooks answers through its exit code, which is the same thing the installer
+    // and the pill ask.
+    private static bool StartupTask
     {
         get
         {
             try
             {
-                string dir = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-                foreach (var link in Directory.EnumerateFiles(dir, "*.lnk"))
-                {
-                    string name = Path.GetFileNameWithoutExtension(link);
-                    if (name.Contains("Halo", StringComparison.OrdinalIgnoreCase)
-                        || name.Contains("DynamicWin", StringComparison.OrdinalIgnoreCase)) return true;
-                }
+                string hooks = Path.Combine(AppContext.BaseDirectory, "Halo.Hooks.exe");
+                if (!File.Exists(hooks)) return false;
+                var psi = new System.Diagnostics.ProcessStartInfo(hooks)
+                { UseShellExecute = false, CreateNoWindow = true };
+                psi.ArgumentList.Add("query-autostart");
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p == null) return false;
+                // bounded: a Status row must never be what hangs the window opening
+                if (!p.WaitForExit(4000)) return false;
+                return p.ExitCode == 0;
             }
-            catch { }
-            return false;
+            catch { return false; }
         }
     }
 }

@@ -3,7 +3,9 @@
 ; ponytail: per-user install (no UAC), Inno's stock wizard = the UI, one optional autostart task.
 
 #define AppName "Halo"
-#define AppVersion "3.2.0"
+; read back from the publish rather than repeating the number: Directory.Build.props is the one source,
+; and a hand-typed copy here had already drifted from what the About page showed.
+#define AppVersion GetStringFileInfo("..\dist\app\Halo.App.exe", "FileVersion")
 #define AppPublisher "phoseinq"
 #define AppExe "Halo.App.exe"
 

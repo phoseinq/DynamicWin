@@ -146,8 +146,8 @@ internal static class Catalog
             new("PERMISSIONS", "\uE890", [
                 new("access.notifications", "Notification access", "Required to mirror Windows toasts",
                     RowKind.Status, "", [], "Open settings"),
-                new("access.startup", "Startup entry", "The shortcut that launches Halo when you sign in",
-                    RowKind.Status, "", [], "Open folder"),
+                new("access.startup", "Startup entry", "The scheduled task that launches Halo when you sign in",
+                    RowKind.Status, "", [], "Open Task Scheduler"),
             ]),
         ]),
         new(PageId.DocsAbout, "Docs & About", "Where things are written down",

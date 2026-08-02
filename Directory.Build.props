@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- the one place the product version lives. it used to sit only in Halo.App.csproj, so the About
+         page - which reads its OWN assembly (Halo.Settings/Live.cs) - reported the SDK default 1.0.0
+         while the pill and the installer said 3.x. every assembly inherits this now, and installer's
+         Halo.iss reads the version back out of the published Halo.App.exe. -->
+    <Version>3.2.0</Version>
+  </PropertyGroup>
+
+</Project>

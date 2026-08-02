@@ -1,5 +1,49 @@
 # Halo — progress
 
+## 2026-08-02 (latest): the About page said 1.0.0, and the morph never ran at 120
+
+**Release 0/0, 606 tests pass (6 new). Not deployed, not pushed** — source-only so far in
+`.worktrees/claude-master`; the running install still has the old numbers.
+
+**The settings panel reported version 1.0.0 while the pill and the installer said 3.2.0.** Root cause:
+`Halo.Settings/Live.cs` reads its OWN assembly version for the About row, and `<Version>` lived only in
+`Halo.App.csproj` — so Halo.Settings compiled at the SDK default. The version was in three places (that
+csproj, `installer/Halo.iss`, and implicitly whatever Halo.Settings happened to be). Now one place:
+`Directory.Build.props` at the repo root carries `<Version>`, every project inherits it, the literal is
+gone from `Halo.App.csproj`, and `Halo.iss` reads the number back out of the published exe with
+`GetStringFileInfo` instead of repeating it. Verified: `Halo.Settings.dll` FileVersion is `3.2.0.0`, so
+`Live.Version` renders `3.2.0`. `VersionSourceTests` pins both halves — the built assembly matches the
+declared number, and no project under `src/` may re-declare `<Version>`.
+
+**The expand/collapse morph was never smooth, and never reached 120fps.** Root cause: `AdaptFrameRate`
+forces the watching tier to 60 (`if (watching) target = 60`), and `watching` is true from
+`_progress > 0.02f` — i.e. from the first frame of the morph. So the animation ran at 60 by
+construction. Worse, the tier is sampled once a second while the morph lasts ~300ms, so a 120→60 switch
+could land mid-animation and change cadence under a moving edge. Split the decision in two:
+`CadenceFps(morphing, tier)` gives any in-flight morph 120 and leaves the settled panel on the measured
+tier (60 open is a real glass-cost measurement, not a guess), and `ApplyCadence()` re-arms the timer the
+moment the morph starts rather than on the CPU sampler's next tick. `morphing` covers every easing size
+— hover progress, the banner, the ask panel, the tuck-away shrink. `CadenceTests` covers it.
+
+**Removed the pin's hover label.** The chip that said "pin on top" / "unpin" lit up next to the agent
+panels' stop button; the three pin states already carry the readout.
+
+**"Start with Windows" reported Missing on a machine that starts Halo fine.** The toggle itself was
+wired (the pill reconciles it through `Autostart()`), but the panel around it was still describing the
+world before autostart became a scheduled task: `Live.StartupShortcut` scanned the Startup folder for a
+`.lnk`, the row's own button opened that folder, and the copy called it "the shortcut". Measured on this
+box — `Halo.Hooks query-autostart` exits 0 (registered) while the Startup folder holds no Halo link at
+all, so the row read Missing while autostart was On. The status now asks `query-autostart` (bounded at
+4s so a Status row can never be what hangs the window), the button opens Task Scheduler, and the copy
+says "scheduled task". Separately, `ReconcileAutostart()` now asks once at startup whether the task
+matches the setting: the old code only called `Autostart` on a *change*, so an install with the box
+unticked left no task while settings.json still defaulted to on, and nothing ever closed the gap.
+
+Still open from this session: the reported black flash mid-morph (root cause not found yet — needs a
+live look, and the pill cannot be screenshotted), a user-editable frame-rate setting for weak machines,
+progress bars easing 1% at a time instead of jumping, a crash/manual bug-report path, a redesigned pin
+icon, and a pass over the settings panel to confirm every control actually does something.
+
 ## 2026-08-02 (later): the pill stops queueing at boot, and a dead question stops haunting the banner
 
 **Release 0/0, 591 tests pass. Deployed** — `Halo.Hooks` published self-contained and its four files
