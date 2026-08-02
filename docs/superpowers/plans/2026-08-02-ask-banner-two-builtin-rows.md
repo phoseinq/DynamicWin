@@ -671,26 +671,61 @@ git commit -m "docs: record the ask banner fix and how it was verified live"
 
 ## Findings from Task 0
 
-Task 0 fills this in before any code is written. Until it is filled in, Tasks 1 and 3 cannot be
-implemented, because both read the rule from here.
+Task 0 did not need live boxes. Claude Code ships as a Bun-compiled binary with its JavaScript source
+readable inside it, so the rule was read off the implementation instead of inferred from behaviour -
+which is better evidence than driving boxes could ever be, because it covers cases nobody thought to
+try.
 
-**Which rows the box shows.** One line per box driven. Record enough that the rule can be stated in
-terms of `PendingAsk` fields alone.
+Source: `%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`, version 2.1.220, the
+question component at byte offset ~255258000.
 
-| Options | Descriptions? | Multi-select? | Tool | "Type something"? | "Chat about this"? | Their row numbers |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+**The rule, from the source:**
 
-**The rule, stated in terms of `PendingAsk`:** _(written by Task 0)_
+```js
+const vJf = JP.multiSelect ? "Type something" : "Type something.";
+let aLI = { type:"input", value:"__other__", label:"Other", placeholder:vJf, ... };
 
-**Down at the bottom: clamps or wraps?** _(written by Task 0)_ - if it clamps, over-walking is a
-deterministic way to reach the last row and Task 3 can use it; if it wraps, every count must be exact.
+let m3S = qZe && !JP.multiSelect
+    ? [{ type:"text", value:"__chat__", label:"Chat about this" }]
+    : [];
 
-**Which of Task 0 Step 4's three outcomes applies:** _(written by Task 0)_
+let h3S = [...oLI, aLI, ...lLI];   // options, then __other__, then optionally __chat__
+```
 
-**`AskBuiltInCases.All`** - the test fixture Task 1 consumes. Task 0 writes it as a small internal
-static class in `tests/Halo.Tests/`, one entry per row of the table above, so the layout tests and the
-live verification in Task 5 are driven by the same list.
+- The free-text row (`__other__`, placeholder "Type something") is appended **unconditionally**.
+- The chat row (`__chat__`, "Chat about this") is appended **only when `qZe && !multiSelect`**.
+- Row numbers therefore run: options `1..n`, free-text `n+1`, chat `n+2`. Confirmed independently by
+  `MMr = JP.options.length + 1 + 1` in the same component, whose matching digit key calls
+  `onRespondToClaude` - the chat action.
+
+**A second layout exists.** When `!multiSelect && options.some(o => o.preview) && !qZe`, a different
+component renders: it has no free-text row at all, offering a **Notes** field instead ("press n to add
+notes"), with a chat row of its own at the bottom. This is the source of the combinations that looked
+inexplicable from the outside.
+
+**The blocker this exposes, which was not in the original plan.** The rule depends on `multiSelect` and
+on whether any option carries a `preview` - and `AskEnvelope` forwards neither. It carries only
+`Options` as label/description pairs, plus `Tool`, `Target`, `Question`. So `Halo.App` cannot evaluate
+the rule with what it is given today, no matter how the banner is written.
+
+`Halo.Hooks` does receive both: the `PreToolUse` payload contains the tool input, and
+`questions[].multiSelect` and `questions[].options[].preview` are in it. **So Task 3 gains a
+prerequisite: extend `AskEnvelope` with `MultiSelect` and `HasPreview`, write them in `ToJson`, read
+them in `FromJson`, and populate them where the envelope is built.** `FromJson` already ignores
+unknown fields and defaults missing ones, which is exactly the compatibility this needs - an older
+pill reading a newer envelope, and vice versa, since the hooks are deployed separately from the pill.
+
+**Still open, being answered by a running investigation:**
+
+- What `qZe = Ea()` actually tests. Until this is known the chat row's presence cannot be predicted in
+  full, only its *position* (always last).
+- Whether Down clamps at the last row or wraps to the first. If it clamps, over-walking reaches the
+  chat row deterministically without needing `qZe` at all - which would make the unknown above stop
+  mattering, and is the outcome to hope for.
+
+**`AskBuiltInCases.All`** - the test fixture Task 1 consumes. Write it as a small internal static class
+in `tests/Halo.Tests/`, one entry per combination above, so the layout tests and the live verification
+in Task 5 are driven by the same list.
 
 ---
 
