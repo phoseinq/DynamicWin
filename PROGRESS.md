@@ -1,5 +1,38 @@
 # Halo — progress
 
+## 2026-08-03 (later still 5): telegram gets a REAL bar — read out of its own UI over UIA
+
+**Release 0/0, 712 tests pass (10 new). Deployed (hot-swapped `Halo.App.dll`, pid 21252 alive, no
+crash log), not pushed. Queue item 4 closed for real this time.**
+
+**The chain of findings.** (1) SMTC gives Telegram nothing: `--probe-media`/`--probe-timeline` measured
+`end=pos=0, canSeek=false` across 12s of playback — no timeline exists on the public path, and tdesktop
+has no local API, no identifiable cache file. First pass shipped the honest fallbacks: an indeterminate
+sweep on the bar rows (panel + collapsed pill; `SweepMs`, gradient sweep, non-interactive) plus a
+wall-clock elapsed stopwatch (`_wallBase`/`_wallAt`, play/pause transitions from SMTC). (2) User asked
+"نمیشه بزور ازش گرفت؟" — and yes: Telegram's Qt widgets sit in the UI Automation tree. The player
+strip's `Ui::FilledSlider` answers ValuePattern with `"84%"` and the strip carries one mm:ss text.
+
+**The build.** `Interop/Uia.cs`: hand-written UIA COM client (no NuGet), gap-slot vtables sized to
+exactly ElementFromHandle / CreatePropertyCondition / FindFirst / FindAll / GetCurrentPropertyValue /
+GetCurrentPattern / ValuePattern. Trap for the record: an invented IID for `IUIAutomationCondition`
+E_NOINTERFACE'd on the out-param cast — the real one is 352FFBA8-0973-437C-A61F-F64CAFD81DF9; the
+`Debug` channel + `--probe-tg` found it in one lap. `Widgets/TelegramPlayer.cs`: 1Hz MTA poll thread,
+scoped to the strip's own subtree (`Media::Player::Widget`, not the 7k-element message list), auto-off
+15s after the last Poke. The strip never labels its one time text, so `Infer` (pure, pinned by
+`TelegramPlayerTests`) reads MOTION: advancing text = elapsed (duration = elapsed/frac, jitter-damped
+because the slider rounds to whole percents), still text under a moving slider = total, empty slider
+under a >10s text = total. `MediaWidget.TelegramTimeline` feeds the numbers into `_pos/_end` — bar,
+ring, timestamps and extrapolation light up through the ordinary pipeline; `MediaTiming.IsBlank`
+(the Chrome-background fix) already protects them from SMTC's zeros. Strip closed → after 5s grace the
+injected timeline is withdrawn and the sweep/stopwatch fallbacks take back over. Scrubbing stays off —
+SMTC still says the session cannot seek. **Verified live:** `--probe-tg` while a track played: pos
+1:56→2:02 second-by-second, duration settling at 3:43±2s (real length 3:43).
+
+Also this entry: flip overflow guard (`Flipping`/`DrawArt` check `el` from both sides, `FlipPose`
+clamps t — an unset `_flipAt` after the hash early-out walked a negative el into cos() → NaN →
+ScaleTransform threw; found by `--render-widget` against the live telegram session).
+
 ## 2026-08-03 (later still 4): identical-face flips killed + the drag-rank now picks the pill
 
 **Release 0/0, 702 tests pass (3 new). Deployed (hot-swapped `Halo.App.dll`, pid 17820 alive, no

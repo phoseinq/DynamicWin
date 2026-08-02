@@ -37,6 +37,12 @@ internal sealed class MediaWidget : IWidget
     private byte[]? _thumb;
     private TimeSpan _pos, _end;
     private TimeSpan _start, _minSeek, _maxSeek;   // the seekable window; not always [0, end]
+    // For sessions that report no timeline at all (telegram: end=pos=0 for the whole track), the one
+    // number that is a MEASUREMENT rather than an invention is how long the track has been playing by
+    // our own clock: telegram starts every track at zero, and play/pause transitions arrive via SMTC.
+    // It drifts if the user seeks inside the app itself - accepted; elapsed-only is shown, never a bar.
+    private TimeSpan _wallBase;                    // playing time accumulated up to the last transition
+    private DateTime _wallAt;                      // start of the current playing stretch; default = unknown
     private TimeSpan? _seekPending;                // where we have asked to be, until the player confirms it
     private DateTimeOffset _seekSentAt, _seekAskedAt;
     private TimeSpan _reported;                    // the last position the PLAYER actually claimed
@@ -257,7 +263,13 @@ internal sealed class MediaWidget : IWidget
                     _minSeek = _maxSeek = TimeSpan.Zero;   // a leftover seek window clamps the NEW track's
                     _posAt = DateTime.UtcNow;              // seeks into the old one's range
                 }
-                if (trackChanged) _trackEpoch++;
+                if (trackChanged)
+                {
+                    _trackEpoch++;
+                    _wallBase = TimeSpan.Zero;
+                    _wallAt = _playing ? DateTime.UtcNow : default;
+                    _tgTimeline = false;   // next track re-earns its numbers from the strip
+                }
                 _version++;
                 // No cover yet is normal, not final: Spotify hands SMTC the track's text as soon as it
                 // starts and fetches the artwork afterwards, so the first properties read after a track
@@ -375,7 +387,10 @@ internal sealed class MediaWidget : IWidget
                     || _rateEnabled != info.Controls.IsPlaybackRateEnabled
                     || _seekEnabled != info.Controls.IsPlaybackPositionEnabled;
                 _status = info.PlaybackStatus;
-                _playing = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                bool nowPlaying = info.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+                if (nowPlaying && !_playing) _wallAt = DateTime.UtcNow;
+                else if (!nowPlaying && _playing && _wallAt != default) _wallBase += DateTime.UtcNow - _wallAt;
+                _playing = nowPlaying;
                 _isVideo = info.PlaybackType == Windows.Media.MediaPlaybackType.Video;
                 _rateEnabled = info.Controls.IsPlaybackRateEnabled;
                 _seekEnabled = info.Controls.IsPlaybackPositionEnabled;
@@ -476,7 +491,51 @@ internal sealed class MediaWidget : IWidget
         if (now - _pollAt < 200) return;   // the seek pump lives on this cadence too
         _pollAt = now;
         if (Cur() is { } s) { RefreshTimeline(s); RefreshPlayback(s); }
+        TelegramTimeline();
         NudgeSeek();
+    }
+
+    // the timeline in _pos/_end came from telegram's own ui (TelegramPlayer), not smtc
+    private bool _tgTimeline;
+
+    // Telegram publishes an EMPTY smtc timeline for the whole track (measured: end=pos=0, canSeek
+    // false), but its own player strip carries the numbers - so they are read from there and fed into
+    // the same fields smtc would have filled. The bar, the ring, the timestamps and the extrapolation
+    // all light up through the ordinary pipeline; no drawing code knows the difference. Scrubbing
+    // stays off: smtc still says the session cannot seek, and that gate is untouched.
+    private void TelegramTimeline()
+    {
+        bool want;
+        lock (_lock)
+            want = _title != null && (_end <= _start || _tgTimeline)
+                && _appId?.Contains("telegram", StringComparison.OrdinalIgnoreCase) == true;
+        if (!want) return;
+        TelegramPlayer.Poke();
+        var (pos, dur) = TelegramPlayer.Read();
+        if (TelegramPlayer.Live && dur is { } d && d > TimeSpan.Zero)
+        {
+            lock (_lock)
+            {
+                if (!_tgTimeline && _end > _start) return;   // real smtc numbers arrived - they win
+                _tgTimeline = true;
+                _start = TimeSpan.Zero; _end = d;
+                _pos = pos; _posAt = DateTime.UtcNow;
+                _version++;
+            }
+        }
+        else if (Environment.TickCount64 - TelegramPlayer.LastLiveAt > 5000)
+        {
+            // strip gone (player closed, window shut to tray) - stop extrapolating into a pinned bar;
+            // the honest no-timeline states (sweep + stopwatch) take back over
+            lock (_lock)
+            {
+                if (!_tgTimeline) return;
+                _tgTimeline = false;
+                _pos = _end = _start = TimeSpan.Zero;
+                _posAt = DateTime.UtcNow;
+                _version++;
+            }
+        }
     }
 
     private void Clear()
@@ -488,6 +547,8 @@ internal sealed class MediaWidget : IWidget
             _title = _artist = _trackKey = null;
             _thumb = null;
             _pos = _end = _start = _minSeek = _maxSeek = TimeSpan.Zero;
+            _wallBase = TimeSpan.Zero; _wallAt = default;
+            _tgTimeline = false;
             _seekPending = null;
             _version++;
         }
@@ -929,11 +990,13 @@ internal sealed class MediaWidget : IWidget
     {
         if (fade <= 0.01f) return;
         PollTimeline();
-        string? title, artist; bool playing; TimeSpan pos, end, start; DateTime posAt;
+        string? title, artist; bool playing; TimeSpan pos, end, start, wall; DateTime posAt;
         lock (_lock)
         {
             title = _title; artist = _artist; playing = _playing;
             pos = _pos; end = _end; start = _start; posAt = _posAt;
+            wall = _wallAt == default ? TimeSpan.MinValue
+                 : _wallBase + (_playing ? DateTime.UtcNow - _wallAt : TimeSpan.Zero);
         }
         if (title == null) return;
 
@@ -1007,7 +1070,36 @@ internal sealed class MediaWidget : IWidget
         float bh = bhRest * (1f + 2f * st);
         float by = barCy - bh / 2f;
         Fill(g, tx, by, tw, bh, Mul(Track, fade));
-        if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(White, fade));
+        if (end > start)
+        {
+            if (_fracShown > 0) Fill(g, tx, by, tw * _fracShown, bh, Mul(White, fade));
+        }
+        else if (playing)
+        {
+            // Telegram (and some radio streams) report NO timeline at all - measured live: 12s of
+            // playback with end=pos=0 and canSeek false, and unlike vlc there is no local api to ask
+            // instead. The track used to sit empty at the 0:00 it would never leave, which reads as a
+            // broken bar. Indeterminate is the honest shape: a soft sweep that says "moving" and
+            // refuses to say "where". Non-interactive by construction - scrubbing is already gated on
+            // _seekEnabled, and there are no timestamps to lie with.
+            float ts2 = (Environment.TickCount64 % SweepMs) / (float)SweepMs;
+            float sw = tw * 0.24f;
+            float sx = tx - sw + (tw + sw) * ts2;
+            var sst = g.Save();
+            g.SetClip(new RectangleF(tx, by, tw, bh));
+            var sweep = new RectangleF(sx, by - 1f, sw, bh + 2f);
+            using (var lg = new LinearGradientBrush(sweep, Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal))
+            {
+                var mid = Mul(Color.FromArgb(96, 255, 255, 255), fade);
+                lg.InterpolationColors = new ColorBlend
+                {
+                    Colors = new[] { Color.FromArgb(0, mid), mid, Color.FromArgb(0, mid) },
+                    Positions = new[] { 0f, 0.5f, 1f },
+                };
+                g.FillRectangle(lg, sweep);
+            }
+            g.Restore(sst);
+        }
         if (end > TimeSpan.Zero)
         {
             using var eb = new SolidBrush(Mul(Dim, fade));
@@ -1019,6 +1111,14 @@ internal sealed class MediaWidget : IWidget
             g.DrawString(Fmt(shown), timeF, eb, tx, ty);
             var ts = g.MeasureString(Fmt(span), timeF);
             g.DrawString(Fmt(span), timeF, eb, tx + tw - ts.Width, ty);
+        }
+        else if (wall >= TimeSpan.Zero)
+        {
+            // no timeline to place this on (telegram) - but how long it has been playing IS our own
+            // measurement (the stopwatch above). elapsed only, on the left where elapsed always sits;
+            // no total and no fill, because the denominator genuinely does not exist here.
+            using var eb = new SolidBrush(Mul(Dim, fade));
+            g.DrawString(Fmt(wall), timeF, eb, tx, barCy + bh / 2f + 3f);
         }
 
         // volume (left column, under the art): soft glass mute chip + a bar that breathes on hover;
@@ -1299,6 +1399,7 @@ internal sealed class MediaWidget : IWidget
     }
 
     internal const int FlipMs = 560;
+    internal const int SweepMs = 2800;   // one lap of the no-timeline indeterminate sweep
     private Bitmap? _prevArt;      // the outgoing cover, alive only for the flip
     private long _artHash;         // ThumbHash of the bytes behind _art; 0 = no art decoded
 
@@ -1317,7 +1418,11 @@ internal sealed class MediaWidget : IWidget
     }
 
     private long _flipAt = long.MinValue;
-    private bool Flipping => Environment.TickCount64 - _flipAt < FlipMs;
+    // el must be checked from BOTH sides: an unset clock (long.MinValue) makes the subtraction
+    // overflow negative, and a negative el walked straight into FlipPose as t << 0, whose smoothstep
+    // fed cos() a huge angle -> NaN -> ScaleTransform threw. found by --render-widget the first time
+    // a session with no art hit the hash early-out, which leaves the clock unset by design.
+    private bool Flipping => (Environment.TickCount64 - _flipAt) is >= 0 and < FlipMs;
 
     // the card's pose at clock t in 0..1: horizontal squeeze |cos(angle)| (1 -> 0 -> 1) and which face is
     // showing. The angle rides a smoothstep rather than t itself - at constant angular speed the card
@@ -1326,6 +1431,7 @@ internal sealed class MediaWidget : IWidget
     // narrowest instant. The floor keeps GDI+ from a degenerate zero-width transform at the crossing.
     internal static (float sx, bool front) FlipPose(float t)
     {
+        t = Math.Clamp(t, 0f, 1f);   // t outside the clock is a caller bug, but NaN out of cos() is worse
         float e = t * t * (3f - 2f * t);
         return (Math.Max(MathF.Abs(MathF.Cos(e * MathF.PI)), 0.001f), t < 0.5f);
     }
@@ -1333,7 +1439,7 @@ internal sealed class MediaWidget : IWidget
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
     {
         long el = Environment.TickCount64 - _flipAt;
-        if (el < FlipMs)
+        if (el is >= 0 and < FlipMs)
         {
             // a card turning on its vertical axis, faked with a horizontal squeeze: |cos| runs 1 -> 0 -> 1
             // and the face swaps at the zero crossing, so the new cover really does come in "from behind"
@@ -1539,6 +1645,29 @@ internal sealed class MediaWidget : IWidget
         // is" - which is a download's problem, not a track's. A track already shows its position by the
         // bar moving, so a pulse on top of it is decoration competing with the one honest signal there is.
         Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f);
+        else if (playing && RingProgress < 0f && Halo.Settings.SettingsStore.On("media.progress"))
+        {
+            // telegram-style sessions report no position at all (measured: end=pos=0 for the whole
+            // track - see the panel's sweep). the pill bar's language for that is a wash that travels
+            // without a wavefront: "playing, position unknown", never a bar stuck at zero.
+            float ts3 = (Environment.TickCount64 % SweepMs) / (float)SweepMs;
+            float sw3 = w * 0.30f;
+            var sweep = new RectangleF(-sw3 + (w + sw3) * ts3, 0, sw3, h);
+            var sst = g.Save();
+            using (var pp = Fx.PillPath(w, h, h / 2f))
+                g.SetClip(pp);
+            using (var lg = new LinearGradientBrush(sweep, Color.Transparent, Color.Transparent, LinearGradientMode.Horizontal))
+            {
+                var mid = Mul(Color.FromArgb(64, _accentShown), fade);
+                lg.InterpolationColors = new ColorBlend
+                {
+                    Colors = new[] { Color.FromArgb(0, mid), mid, Color.FromArgb(0, mid) },
+                    Positions = new[] { 0f, 0.5f, 1f },
+                };
+                g.FillRectangle(lg, sweep);
+            }
+            g.Restore(sst);
+        }
         ArtGlow(g, w, h, fade, _accent);
         DrawArt(g, x, y, sz, fade, ArtRadius(h));
 

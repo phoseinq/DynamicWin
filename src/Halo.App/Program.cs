@@ -128,6 +128,20 @@ internal static class Program
         // thumbnail, and what each icon resolver answers for it. The pill falling back to a glyph is always
         // one of these three coming back empty, and guessing which is how a whole evening gets spent.
         if (args.Length >= 1 && args[0] == "--probe-media") { ProbeMedia(); return; }
+        // dev hook: `Halo.App --probe-tg` — telegram's player strip as TelegramPlayer reads it over UIA,
+        // 8 samples 1s apart. The strip's meaning (elapsed vs total) is inferred from MOTION, so a single
+        // still can lie; play something in telegram while this runs.
+        if (args.Length >= 1 && args[0] == "--probe-tg")
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                Halo.Widgets.TelegramPlayer.Poke();
+                System.Threading.Thread.Sleep(1000);
+                var (tpos, tdur) = Halo.Widgets.TelegramPlayer.Read();
+                Console.WriteLine($"{i}s live={Halo.Widgets.TelegramPlayer.Live} pos={tpos} dur={(tdur?.ToString() ?? "-")} debug={Halo.Widgets.TelegramPlayer.Debug ?? "-"}");
+            }
+            return;
+        }
         // dev hook: `Halo.App --probe-size "<title>"` — the file-size lookup on its own, without needing a
         // player to be open. It is a match against the shell's Recent shortcuts, so it is worth being able to
         // ask it directly rather than only through a live session.
