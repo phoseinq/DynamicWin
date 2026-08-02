@@ -44,11 +44,44 @@ internal static class Program
 
         if (args.Length >= 2 && args[0] == "--render-badges") { RenderBadges(args[1]); return; }
 
+        if (args.Length >= 2 && args[0] == "--render-ask") { RenderAsk(args[1]); return; }
+
+        if (args.Length >= 2 && args[0] == "--render-greeting") { RenderGreeting(args[1]); return; }
+
         if (args.Length >= 2 && args[0] == "--render-local") { RenderLocal(args[1]); return; }
 
         if (args.Length >= 2 && args[0] == "--render-copy") { RenderCopy(args[1]); return; }
 
         if (args.Length >= 2 && args[0] == "--render-glyphs") { RenderGlyphs(args[1]); return; }
+
+        if (args.Length >= 3 && args[0] == "--probe-console")
+        {
+            int.TryParse(args[1], out int cpid);
+            int cbelow = args.Length > 3 && int.TryParse(args[3], out var cb) ? cb : 0;
+            System.IO.File.WriteAllText(args[2], Halo.Interop.ConsoleRead.Describe(cpid, 16, cbelow));
+            return;
+        }
+
+        if (args.Length >= 4 && args[0] == "--probe-type")
+        {
+            int.TryParse(args[1], out int tpid);
+
+            bool sent = args[2] switch
+            {
+                "enter" => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkEnter),
+                "tab" => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkTab),
+                var s when s.StartsWith("down:") && int.TryParse(s[5..], out var n)
+                    => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkDown, n),
+                var s when s.StartsWith("up:") && int.TryParse(s[3..], out var n)
+                    => Halo.Interop.ConsoleRead.Press(tpid, Halo.Interop.ConsoleRead.VkUp, n),
+                _ => Halo.Interop.ConsoleRead.Type(tpid, args[2]),
+            };
+            System.Threading.Thread.Sleep(400);
+            System.IO.File.WriteAllText(args[3], $"sent={sent}\n" + Halo.Interop.ConsoleRead.Dump(tpid, 10));
+            return;
+        }
+        if (args.Length >= 2 && args[0] == "--render-fluent")
+        { RenderFluent(args[1], args.Length > 2 ? args[2] : "E700", args.Length > 3 ? args[3] : "256"); return; }
 
         if (args.Length >= 2 && args[0] == "--render-bar")
         { RenderBar(args[1], args.Length > 2 ? args[2] : null, args.Length > 3 ? args[3] : null); return; }
@@ -176,8 +209,9 @@ internal static class Program
 
         if (args.Length >= 1 && args[0] == "--moods") { Moods(); return; }
 
-        using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
-        if (!created) return;
+        _instance = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
+        if (!created) { OpenSettingsPanel(); return; }
+        if (args.Contains("--settings", StringComparer.OrdinalIgnoreCase)) OpenSettingsPanel();
 
         try
         {
@@ -188,6 +222,7 @@ internal static class Program
             Halo.ClaudeCode.NetMon.Poke();
             Halo.Codex.CodexNetMon.Poke();
             _ = new NotchController(notch);
+            _tray = new Halo.Shell.TrayIcon();
             Win32.RunMessageLoop();
         }
         catch (Exception ex)
@@ -311,6 +346,9 @@ internal static class Program
                 ("an mcp server", "working", "mcp__serena__find_symbol", 0, 120_000, 0.30f, null),
                 ("a tool with no slot", "working", "SomeOtherTool", 0, 120_000, 0.30f, null),
                 ("thinking, 10 min in", "working", null, 10, 120_000, 0.30f, null),
+
+                ("compacting, just in", "compacting", null, 0, 920_000, 0.30f, null),
+                ("compacting, 2 min in", "compacting", null, 2, 986_000, 0.30f, null),
                 ("named, but context 92%", "working", "Edit", 1, 920_000, 0.30f, "Fx.cs"),
                 ("shell, usage 96%", "working", "Bash", 1, 120_000, 0.96f, null),
                 ("both, and dragging", "working", "Grep", 15, 950_000, 0.97f, null),
@@ -414,11 +452,141 @@ internal static class Program
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
 
+    private static void RenderGreeting(string outPath)
+    {
+
+        float[] install = [0.05f, 0.20f, 0.36f, 0.51f, 0.59f, 0.70f, 0.85f, 0.97f];
+        float[] login = [0.10f, 0.35f, 0.62f, 0.88f];
+
+        const int cellW = 620, pad = 18;
+
+        float tall = 40f;
+        foreach (float t in install) tall += Halo.Shell.GreetingPlan.Install(t).PillH + pad;
+        foreach (float t in login) tall += Halo.Shell.GreetingPlan.Login(t).PillH + pad;
+        using var bmp = new System.Drawing.Bitmap(cellW + pad * 2, (int)tall + pad * 4);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height),
+                System.Drawing.Color.FromArgb(255, 22, 26, 34),
+                System.Drawing.Color.FromArgb(255, 46, 30, 40), 60f))
+                g.FillRectangle(lg, 0, 0, bmp.Width, bmp.Height);
+
+            using var cap = new System.Drawing.Font("Segoe UI", 12f, System.Drawing.GraphicsUnit.Pixel);
+            using var capBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(150, 255, 255, 255));
+            var notch = new Halo.Shell.LayeredNotch();
+            float y = pad;
+
+            g.DrawString("install - the pill opens, writes, clears, then says who it is", cap, capBrush, pad, y);
+            y += 20f;
+            foreach (float t in install)
+            {
+                var s = Halo.Shell.GreetingPlan.Install(t);
+                int w = (int)s.PillW, h = (int)s.PillH;
+                float x = pad + (cellW - w) / 2f;
+                var st = g.Save();
+                g.TranslateTransform(x, y);
+                notch.DrawShape(g, w, h, (int)s.Radius, 190, glass: false);
+                var box = Halo.Widgets.Greeting.InkBox(w, h);
+                Halo.Widgets.Greeting.DrawHello(g, box, s.Written, s.HelloAlpha,
+                    System.Drawing.Color.White, 9f);
+                if (s.LineAlpha > 0f)
+                    Halo.Widgets.Greeting.DrawLine(g, Halo.Widgets.Greeting.Lines[s.LineIndex], box,
+                        s.LineWritten, s.LineAlpha, System.Drawing.Color.White, 9f);
+                g.Restore(st);
+                g.DrawString($"t={t:0.00}", cap, capBrush, pad, y + h - 14f);
+                y += h + pad;
+            }
+
+            y += pad;
+            g.DrawString("login - the same hand, inside a pill that never opens", cap, capBrush, pad, y);
+            y += 20f;
+            foreach (float t in login)
+            {
+                var s = Halo.Shell.GreetingPlan.Login(t);
+                int w = (int)s.PillW, h = (int)s.PillH;
+                float x = pad + (cellW - w) / 2f;
+                var st = g.Save();
+                g.TranslateTransform(x, y);
+                notch.DrawShape(g, w, h, (int)s.Radius, 190, glass: false);
+                Halo.Widgets.Greeting.DrawHello(g, Halo.Widgets.Greeting.InkBox(w, h),
+                    s.Written, s.HelloAlpha, System.Drawing.Color.White, 11f);
+                g.Restore(st);
+                g.DrawString($"t={t:0.00}", cap, capBrush, pad, y + h - 4f);
+                y += h + pad;
+            }
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+        Console.WriteLine($"wrote {outPath}");
+    }
+
+    private static void RenderAsk(string outPath)
+    {
+        var expires = DateTimeOffset.UtcNow.AddSeconds(20);
+        var question = new Halo.ClaudeCode.PendingAsk(
+            "n1", 100, "sess", "AskUserQuestion", null,
+
+            "Fix the frame cadence first, or the icon nobody can miss?",
+            [new Halo.ClaudeCode.AskOption("Cadence", "the CPU one"),
+             new Halo.ClaudeCode.AskOption("Icon", "the visible one"),
+             new Halo.ClaudeCode.AskOption("Measure more first",
+                 "no code yet - sit on the profiler until the regression names itself, "
+                 + "which is the option that costs a day and saves three")], expires);
+
+        var permission = new Halo.ClaudeCode.PendingAsk(
+            "n2", 100, "sess", "Bash", "git push --force-with-lease origin master", null,
+            [new Halo.ClaudeCode.AskOption("allow", "run it"),
+             new Halo.ClaudeCode.AskOption("deny", "skip it")], expires);
+
+        int W = Halo.Widgets.AskBanner.W, pad = 24;
+        int h1 = Halo.Widgets.AskBanner.Height(question, W);
+        int h2 = Halo.Widgets.AskBanner.Height(permission, W);
+
+        int[] tints =
+        [
+            Halo.Shell.NotchController.TintAskDesk,
+            Halo.Shell.NotchController.TintAskApp,
+        ];
+        int total = h1 * tints.Length + h2 + pad * (tints.Length + 2);
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, total);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+
+            using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
+                new System.Drawing.Rectangle(0, 0, W + pad * 2, total),
+                System.Drawing.Color.FromArgb(70, 150, 210), System.Drawing.Color.FromArgb(210, 110, 70), 35f))
+                g.FillRectangle(lg, 0, 0, W + pad * 2, total);
+
+            using (var wb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(238, 240, 244)))
+            using (var kb = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(18, 18, 20)))
+                for (int i = 0; i < tints.Length + 1; i++)
+                {
+                    g.FillRectangle(wb, 0, pad + i * (h1 + pad) + 92, W + pad * 2, 74);
+                    g.FillRectangle(kb, 0, pad + i * (h1 + pad) + 176, W + pad * 2, 74);
+                }
+
+            g.TranslateTransform(pad, pad);
+            for (int i = 0; i < tints.Length; i++)
+            {
+
+                string? typed = i == 1 ? "\u0633\u0644\u0627\u0645 - profile first" : null;
+                new Halo.Shell.LayeredNotch().DrawShape(g, W, h1, 26, tints[i], glass: false);
+                Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1, tints[i], typed);
+                g.TranslateTransform(0, h1 + pad);
+            }
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, h2, 26, tints[^1], glass: false);
+            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1, tints[^1]);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
     private static void RenderNotif(string outPath)
     {
 
-        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 24;
-        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H * 2 + pad * 3);
+        int W = Halo.Widgets.NotifBanner.W, H = Halo.Widgets.NotifBanner.SummaryH, pad = 24, detailRoom = 340;
+        using var bmp = new System.Drawing.Bitmap(W + pad * 2, H * 2 + detailRoom + pad * 4);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
             using (var lg = new System.Drawing.Drawing2D.LinearGradientBrush(
@@ -471,9 +639,29 @@ internal static class Program
             {
                 Icon = icon,
                 App = "Telegram",
-                Title = "سلام",
-                Body = "بزن بریم",
+                Title = "\u0633\u0644\u0627\u0645",
+                Body = "\u0628\u0632\u0646 \u0628\u0631\u06cc\u0645",
+
+                Stacked = 5,
             }, 0f, false);
+
+            var mixed = new Halo.Notifications.NotifItem
+            {
+                Icon = icon,
+                App = "ChatGPT",
+                Title = "\u0633\u0627\u062e\u062a \u067e\u0646\u0644 \u0645\u062f\u06cc\u0631\u06cc\u062a \u062f\u0633\u062a\u0631\u0633\u06cc Halo",
+                Body = "\u0627\u0648\u06a9\u06cc\u060c \u0622\u062e\u0631\u06cc\u0646 \u0627\u0646\u062a\u062e\u0627\u0628: \u0645\u0646\u0648 \u0633\u0645\u062a \u0686\u067e\u060c \u0645\u062d\u062a\u0648\u0627\u06cc \u062a\u0646\u0638\u06cc\u0645\u0627\u062a \u0633\u0645\u062a \u0631\u0627\u0633\u062a. "
+                     + "Halo | Media | [ Enabled ] | General | Appearance | Playback | "
+                     + "Auto-show on track change | FEATURES | Include VLC | Show collapsed progress | "
+                     + "Downloads | File Tray | Bluetooth | Follow active player | Notifications | "
+                     + "Idle timeout 15 sec | Claude",
+            };
+            int dh = Math.Min(detailRoom, Halo.Widgets.NotifBanner.DetailHeight(mixed));
+            g.TranslateTransform(0, H + pad);
+            new Halo.Shell.LayeredNotch().DrawShape(g, W, dh, 26, 245, glass: false);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            Halo.Widgets.NotifBanner.Draw(g, W, dh, 1f, mixed, 1f, true);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
@@ -775,7 +963,7 @@ internal static class Program
 
     private static void RenderBadges(string outPath)
     {
-        var badges = Halo.Shell.NotchController.AllLocalBadges();
+        var badges = Halo.Shell.Badges.All();
         using var bmp = new System.Drawing.Bitmap(badges.Length * 84 + 20, 104);
         using (var g = System.Drawing.Graphics.FromImage(bmp))
         {
@@ -784,6 +972,99 @@ internal static class Program
             g.Clear(System.Drawing.Color.FromArgb(28, 28, 32));
             for (int i = 0; i < badges.Length; i++)
                 g.DrawImage(badges[i], 10 + i * 84, 20, 64, 64);
+        }
+        bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
+    }
+
+    private static IWidget Tray()
+    {
+        var tray = new FileTray();
+        FileTray.SetDragActive(true);
+        return tray;
+    }
+
+    private static System.Threading.Mutex? _instance;
+    private static Halo.Shell.TrayIcon? _tray;
+
+    private static void OpenSettingsPanel()
+    {
+        try
+        {
+            string exe = System.IO.Path.Combine(AppContext.BaseDirectory, "Halo.Settings.exe");
+            if (!System.IO.File.Exists(exe)) return;
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    internal static void OpenSettings() => OpenSettingsPanel();
+
+    private static void Teardown()
+    {
+        try { _tray?.Dispose(); _tray = null; } catch { }
+        try { _instance?.ReleaseMutex(); } catch { }
+        try { _instance?.Dispose(); _instance = null; } catch { }
+    }
+
+    internal static void Quit()
+    {
+        Teardown();
+        Environment.Exit(0);
+    }
+
+    internal static void Restart()
+    {
+        string exe = Environment.ProcessPath ?? "";
+        Teardown();
+        try
+        {
+            if (exe.Length > 0)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch { }
+        Environment.Exit(0);
+    }
+
+    private static void RenderFluent(string outPath, string startOrList, string countArg)
+    {
+        var codes = new System.Collections.Generic.List<int>();
+        if (startOrList.Contains(','))
+        {
+            foreach (var part in startOrList.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                if (int.TryParse(part.Trim(), System.Globalization.NumberStyles.HexNumber, null, out var c)) codes.Add(c);
+        }
+        else if (int.TryParse(startOrList, System.Globalization.NumberStyles.HexNumber, null, out var start))
+        {
+            int n = int.TryParse(countArg, out var parsed) ? parsed : 256;
+            for (int i = 0; i < n; i++) codes.Add(start + i);
+        }
+        if (codes.Count == 0) return;
+
+        const int Cell = 92, Cols = 12, Label = 18;
+        int rows = (codes.Count + Cols - 1) / Cols;
+        using var bmp = new System.Drawing.Bitmap(Cols * Cell, rows * (Cell + Label) + 10);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.Clear(System.Drawing.Color.FromArgb(24, 24, 28));
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            using var glyphFont = new System.Drawing.Font("Segoe Fluent Icons", 46f, System.Drawing.GraphicsUnit.Pixel);
+            using var labelFont = new System.Drawing.Font("Consolas", 14f, System.Drawing.GraphicsUnit.Pixel);
+            using var ink = new System.Drawing.SolidBrush(System.Drawing.Color.White);
+            using var dim = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(150, 160, 170));
+            using var sf = new System.Drawing.StringFormat
+            {
+                Alignment = System.Drawing.StringAlignment.Center,
+                LineAlignment = System.Drawing.StringAlignment.Center,
+            };
+            for (int i = 0; i < codes.Count; i++)
+            {
+                float x = i % Cols * Cell, y = i / Cols * (Cell + Label);
+                g.DrawString(((char)codes[i]).ToString(), glyphFont, ink,
+                    new System.Drawing.RectangleF(x, y, Cell, Cell), sf);
+                g.DrawString(codes[i].ToString("X4"), labelFont, dim,
+                    new System.Drawing.RectangleF(x, y + Cell - 4, Cell, Label), sf);
+            }
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
@@ -876,6 +1157,8 @@ internal static class Program
                     Halo.Codex.CodexSurface.Cli, () => { }, observeLimits: _ => { }),
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 "download" => new DownloadWidget(),
+
+                "tray" => Tray(),
                 _ => new MediaWidget(new MediaSessions(), 0),
             };
             for (int i = 0; i < 100 && !w.IsActive; i++)

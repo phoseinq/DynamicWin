@@ -28,6 +28,7 @@ internal sealed class NotifItem
     public Action? OnActivate;
     public string Code = "";
     public bool Copied;
+    public int Stacked;
 
     public void Activate()
     {
@@ -102,6 +103,22 @@ internal sealed class NotifSource
 
     public int Version { get { lock (_lock) { return _version; } } }
 
+    private bool Stack(NotifItem item)
+    {
+        foreach (var queued in _pending)
+        {
+            if (!string.Equals(queued.Aumid, item.Aumid, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(queued.Title, item.Title, StringComparison.Ordinal)) continue;
+            queued.Stacked++;
+            queued.Body = item.Body;
+            queued.Time = item.Time;
+
+            queued.Duration = Math.Min(12, queued.Duration + 1.5);
+            return true;
+        }
+        return false;
+    }
+
     public NotifItem? Dequeue()
     {
         lock (_lock) { return _pending.Count > 0 ? _pending.Dequeue() : null; }
@@ -158,7 +175,7 @@ internal sealed class NotifSource
             Log($"access = {access}");
             if (access != UserNotificationListenerAccessStatus.Allowed) return;
             LoadSeen();
-            BannerGate.Enable();
+
             await Refresh();
 
             try { _listener.NotificationChanged += (s, e) => { _ = Refresh(); }; }
@@ -197,6 +214,7 @@ internal sealed class NotifSource
                     if (item != null)
                     {
                         BannerGate.SuppressApp(item.Aumid);
+                        if (Stack(item)) continue;
                         _pending.Enqueue(item);
 
                         try { _listener.RemoveNotification(n.Id); } catch { }

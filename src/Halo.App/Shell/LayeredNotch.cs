@@ -30,11 +30,19 @@ internal struct MenuFrame
     public Bitmap? DropImage;
     public float Drop;
     public float FromX, FromY, ToX, ToY;
+    public int CarryRow;
+    public float CarryDY;
+    public float[] RowShift;
 }
 
 internal sealed class LayeredNotch
 {
-    private const int CaptureW = 560, CaptureH = 220;
+    private const int CaptureW = 560, CaptureBaseH = 220;
+
+    internal static int CaptureH { get; private set; } = CaptureBaseH;
+
+    internal static void WantCaptureHeight(int logicalHeight)
+        => CaptureH = Math.Max(CaptureBaseH, Math.Min(720, logicalHeight + 8));
 
     public const int CircleD = 40, CircleGap = 4, CircleY = 0;
 
@@ -194,6 +202,12 @@ internal sealed class LayeredNotch
         Bitmap? raw = _capturable ? null : GrabScreen(nx, ny);
         how = raw != null ? "screen" : "";
 
+        if (raw == null && _capturable)
+        {
+            var direct = CaptureViaPrintWindow(behind, wr, sx, sy);
+            if (direct != null) { raw = direct; how = "printwindow"; }
+        }
+
         if (raw == null)
         {
             raw = new Bitmap(CaptureW, CaptureH, PixelFormat.Format24bppRgb);
@@ -234,9 +248,45 @@ internal sealed class LayeredNotch
         }
 
         raw.Dispose();
+
+        ulong hash = PlateHash(blurred);
+        if (hash == _bgHash && _bg != null)
+        {
+            if (_staleStreak < 1000) _staleStreak++;
+            blurred.Dispose();
+            GlassTrace(how + " same", (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0
+                / System.Diagnostics.Stopwatch.Frequency);
+            return;
+        }
+        _bgHash = hash;
+        _staleStreak = 0;
         lock (_bgLock) { var old = _bg; _bg = blurred; old?.Dispose(); }
         System.Threading.Interlocked.Increment(ref _captureVersion);
         GlassTrace(how, (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    private ulong _bgHash;
+    private int _staleStreak;
+
+    internal int StaleStreak => _staleStreak;
+
+    private static ulong PlateHash(Bitmap b)
+    {
+        var data = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly,
+                              PixelFormat.Format32bppPArgb);
+        try
+        {
+            ulong h = 14695981039346656037UL;
+            int stepX = Math.Max(1, b.Width / 48), stepY = Math.Max(1, b.Height / 24);
+            for (int y = 0; y < b.Height; y += stepY)
+                for (int x = 0; x < b.Width; x += stepX)
+                {
+                    int px = System.Runtime.InteropServices.Marshal.ReadInt32(data.Scan0, y * data.Stride + x * 4);
+                    h = (h ^ (uint)px) * 1099511628211UL;
+                }
+            return h;
+        }
+        finally { b.UnlockBits(data); }
     }
 
     private static Bitmap? GrabScreen(int x, int y)
@@ -332,7 +382,7 @@ internal sealed class LayeredNotch
 
     public void Render(int w, int h, int radius, int tintAlpha, float contentFade, float collapsedFade, bool glass,
         MenuFrame menu, Action<Graphics, int, int, float> drawContent, Action<Graphics, int, int, float> drawCollapsed,
-        float glassFade = 1f)
+        float glassFade = 1f, float clarity = 0f)
     {
         int menuX = w + CircleGap + PrivacyPad;
 
@@ -372,7 +422,7 @@ internal sealed class LayeredNotch
         {
             g.Clear(Color.Transparent);
             g.ScaleTransform(S, S);
-            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade);
+            DrawShape(g, w, h, radius, tintAlpha, glass, glassFade, clarity);
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             if (collapsedFade > 0.01f) drawCollapsed(g, w, h, collapsedFade);
@@ -430,9 +480,10 @@ internal sealed class LayeredNotch
         g.FillEllipse(cb, cx - ri, cy - ri, ri * 2, ri * 2);
     }
 
-    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass, float glassFade = 1f)
+    internal void DrawShape(Graphics g, int w, int h, int radius, int tintAlpha, bool glass,
+        float glassFade = 1f, float clarity = 0f)
     {
-        lock (_bgLock) ShapeInto(g, w, h, radius, tintAlpha, glass ? _bg : null, glassFade);
+        lock (_bgLock) ShapeInto(g, w, h, radius, tintAlpha, glass ? _bg : null, glassFade, clarity);
     }
 
     private static readonly object _scratchLock = new();
@@ -451,22 +502,23 @@ internal sealed class LayeredNotch
 
     private const float FrostDesat = 0.40f, FrostContrast = 0.34f, FrostFloor = 0.05f;
 
-    private static ColorMatrix Frost(float alpha)
+    private static ColorMatrix Frost(float alpha, float clarity)
     {
         const float lr = 0.2126f, lg = 0.7152f, lb = 0.0722f;
-        float d = FrostDesat, c = FrostContrast;
+        float k = Math.Clamp(clarity, 0f, 1f);
+        float d = FrostDesat * (1f - k), c = FrostContrast + (1f - FrostContrast) * k;
         return new ColorMatrix(new[]
         {
             new[] { ((1 - d) + lr * d) * c, lr * d * c,             lr * d * c,             0f, 0f },
             new[] { lg * d * c,             ((1 - d) + lg * d) * c, lg * d * c,             0f, 0f },
             new[] { lb * d * c,             lb * d * c,             ((1 - d) + lb * d) * c, 0f, 0f },
             new[] { 0f,                     0f,                     0f,                     alpha, 0f },
-            new[] { FrostFloor,             FrostFloor,             FrostFloor,             0f, 1f },
+            new[] { FrostFloor * (1 - k),   FrostFloor * (1 - k),   FrostFloor * (1 - k),   0f, 1f },
         });
     }
 
     internal static void ShapeInto(Graphics g, int w, int h, int radius, int tintAlpha,
-                                   Bitmap? backdrop, float glassFade)
+                                   Bitmap? backdrop, float glassFade, float clarity = 0f)
     {
         const int ss = 2;
 
@@ -479,12 +531,16 @@ internal sealed class LayeredNotch
             if (backdrop != null && glassFade > 0.004f)
             {
                 int sx = (CaptureW - w) / 2;
+
+                int srcW = Math.Min(w, backdrop.Width - Math.Max(0, sx));
+                int srcH = Math.Min(h, backdrop.Height);
                 cg.InterpolationMode = InterpolationMode.HighQualityBilinear;
                 cg.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 using var ia = new ImageAttributes();
-                ia.SetColorMatrix(Frost(Math.Clamp(glassFade, 0f, 1f)));
-                cg.DrawImage(backdrop, new Rectangle(0, 0, w * ss, h * ss),
-                    sx, 0, w, h, GraphicsUnit.Pixel, ia);
+                ia.SetColorMatrix(Frost(Math.Clamp(glassFade, 0f, 1f), clarity));
+                if (srcW > 0 && srcH > 0)
+                    cg.DrawImage(backdrop, new Rectangle(0, 0, w * ss, h * ss),
+                        Math.Max(0, sx), 0, srcW, srcH, GraphicsUnit.Pixel, ia);
             }
             using var tint = new SolidBrush(Color.FromArgb(tintAlpha, 8, 8, 8));
             cg.FillRectangle(tint, 0, 0, w * ss, h * ss);
@@ -627,10 +683,20 @@ internal sealed class LayeredNotch
                 }
             }
 
+            int carry = menu.CarryRow;
+            bool carrying = carry >= 0 && carry < rows && menu.Drop <= 0f;
             for (int i = 0; i < rows; i++)
-                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D,
+            {
+                if (carrying && i == carry) continue;
+
+                float slide = menu.RowShift is { } sh && i < sh.Length ? sh[i] : 0f;
+                Cell(menu.RowIcons[i], menu.RowImages[i], 0, i * D + slide * ss,
                     Math.Clamp((hf - i * CircleD) / CircleD, 0f, 1f), menu.RowRings[i], menu.RowProgress[i],
                     menu.RowImageOffsets[i]);
+            }
+            if (carrying)
+                Cell(menu.RowIcons[carry], menu.RowImages[carry], 0, (carry * CircleD + menu.CarryDY) * ss,
+                    1f, menu.RowRings[carry], menu.RowProgress[carry], menu.RowImageOffsets[carry]);
             if (extf > 0.5f)
                 for (int j = 0; j < menu.RowCounts[or_]; j++)
                     Cell(menu.SessIcons[or_][j], menu.SessImages[or_][j], (j + 1) * D, or_ * D,
@@ -1014,6 +1080,12 @@ internal sealed class LayeredNotch
                 }
             }
             catch { }
+        }
+
+        if (msg == Win32.WM_TIMECHANGE)
+        {
+            try { Almanac.TimeZoneChanged(); } catch { }
+            return IntPtr.Zero;
         }
         if (msg == Win32.WM_DESTROY)
         {

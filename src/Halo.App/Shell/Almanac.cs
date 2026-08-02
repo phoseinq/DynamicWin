@@ -13,7 +13,46 @@ internal static class Almanac
 
     internal static volatile Weather? Latest;
 
-    internal static string? Place { get; } = CityFromTimeZone();
+    internal static string? Place { get; private set; } = CityFromTimeZone();
+
+        internal static void TimeZoneChanged()
+    {
+        try
+        {
+            TimeZoneInfo.ClearCachedData();
+            _zoneId = SafeZoneId();
+            Place = CityFromTimeZone();
+            _coords = null;
+            PlaceCountry = null;
+            FromDevice = false;
+            Latest = null;
+
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => Refresh());
+        }
+        catch { }
+    }
+
+    private static long _nextZoneCheck;
+    private static string? _zoneId = SafeZoneId();
+
+    private static string? SafeZoneId()
+    {
+        try { return TimeZoneInfo.Local.Id; } catch { return null; }
+    }
+
+        internal static void SyncZone()
+    {
+        try
+        {
+            if (Environment.TickCount64 < _nextZoneCheck) return;
+            _nextZoneCheck = Environment.TickCount64 + 60_000;
+            TimeZoneInfo.ClearCachedData();
+            var id = SafeZoneId();
+            if (id == _zoneId) return;
+            TimeZoneChanged();
+        }
+        catch { }
+    }
 
     internal static string? CityFromTimeZone()
     {

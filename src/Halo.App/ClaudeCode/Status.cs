@@ -38,7 +38,6 @@ internal sealed class CcStatus
     public string? StartedAt { get; set; }
     public string? Message { get; set; }
     public string? CompactedAt { get; set; }
-    public long LastCompactMs { get; set; }
     public CcSession? Session { get; set; }
     public CcUsage? Usage { get; set; }
     public string? UpdatedAt { get; set; }
@@ -239,7 +238,11 @@ internal sealed class StatusStore
         catch
         {
         }
+
+        try { AfterLoad?.Invoke(); } catch { }
     }
+
+    internal Action? AfterLoad;
 
     private IEnumerable<KeyValuePair<string, CcStatus>> LiveFiles(DateTimeOffset now) =>
         _files.Where(kv => IsLiveStatus(kv.Value, _processStartedAt, now))

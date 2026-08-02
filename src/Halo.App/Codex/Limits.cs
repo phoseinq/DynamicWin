@@ -124,9 +124,9 @@ internal static class CodexLimits
 
     internal static void ForceRefresh() => _statusStore?.ForceRefresh();
 
-    internal static float FiveHour => Current?.Primary is { } primary ? (float)(primary.UsedPercent / 100) : -1;
-    internal static float Week => Current?.Secondary is { } secondary ? (float)(secondary.UsedPercent / 100) : -1;
-    internal static DateTimeOffset FiveHourReset => Current?.Primary?.ResetsAt ?? DateTimeOffset.MinValue;
-    internal static DateTimeOffset WeekReset => Current?.Secondary?.ResetsAt ?? DateTimeOffset.MinValue;
+    internal static float PrimaryFrac => Current?.Primary is { } primary ? (float)(primary.UsedPercent / 100) : -1;
+    internal static float SecondaryFrac => Current?.Secondary is { } secondary ? (float)(secondary.UsedPercent / 100) : -1;
+    internal static DateTimeOffset PrimaryReset => Current?.Primary?.ResetsAt ?? DateTimeOffset.MinValue;
+    internal static DateTimeOffset SecondaryReset => Current?.Secondary?.ResetsAt ?? DateTimeOffset.MinValue;
     internal static void OnPanelOpen() => ForceRefresh();
 }

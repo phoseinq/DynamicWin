@@ -24,4 +24,21 @@ internal static class Clipboard
         }
         finally { Win32.CloseClipboard(); }
     }
+
+    public static string? Text()
+    {
+        if (!Win32.IsClipboardFormatAvailable(Win32.CF_UNICODETEXT)) return null;
+        if (!Win32.OpenClipboard(IntPtr.Zero)) return null;
+        try
+        {
+            IntPtr h = Win32.GetClipboardData(Win32.CF_UNICODETEXT);
+            if (h == IntPtr.Zero) return null;
+            IntPtr p = Win32.GlobalLock(h);
+            if (p == IntPtr.Zero) return null;
+            try { return Marshal.PtrToStringUni(p); }
+            finally { Win32.GlobalUnlock(h); }
+        }
+        catch { return null; }
+        finally { Win32.CloseClipboard(); }
+    }
 }

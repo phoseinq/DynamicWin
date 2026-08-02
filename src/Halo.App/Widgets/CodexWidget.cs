@@ -71,7 +71,7 @@ internal sealed class CodexWidget : IWidget
     public Color? Ring => Current is { } st ? RingColor(st) : null;
 
     public float RingProgress
-        => Current is null || (CodexLimits.FiveHour < 0 && CodexLimits.Week < 0) ? -1f : UsageFrac();
+        => Current is null || (CodexLimits.PrimaryFrac < 0 && CodexLimits.SecondaryFrac < 0) ? -1f : UsageFrac();
     public int Version => _store.Version + CodexNetMon.Version + CodexLimits.Version;
     public bool IsDesktop => _surface == CodexSurface.Desktop;
     public AgentNotice AgentNotice => Current is { } status
@@ -164,7 +164,7 @@ internal sealed class CodexWidget : IWidget
                 g.FillEllipse(db, x, y, sz, sz);
 
         string el0 = LimitHit ? LimitReset() : Elapsed(st);
-        if (Compacting(st) && !LimitHit && el0.Length > 0) el0 = CompactPct(st!) + " · " + el0;
+
         float textX0 = x + sz + 11;
         if (st?.State == "waiting_input") textX0 += 16;
         using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -207,12 +207,18 @@ internal sealed class CodexWidget : IWidget
             Alignment = centred ? StringAlignment.Center : StringAlignment.Near,
             LineAlignment = StringAlignment.Center,
             FormatFlags = StringFormatFlags.NoWrap,
-        };
-        var clip = g.Clip;
-        g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h));
-        float zoneW = centred ? avail - 34f : avail + 16f;
 
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
+            Trimming = StringTrimming.EllipsisCharacter,
+        };
+
+        float originX = textX - 16f * (1f - e);
+        float rightEdge = textX + avail;
+        var clip = g.Clip;
+        g.SetClip(new RectangleF(x + sz + 2, 0, rightEdge - (x + sz + 2), h));
+
+        float zoneW = (centred ? rightEdge - 34f : rightEdge) - originX;
+
+        g.DrawString(verb, f, b, new RectangleF(originX, -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0)
@@ -248,9 +254,6 @@ internal sealed class CodexWidget : IWidget
     private static bool Compacting(CodexSnapshot? st) =>
         st?.State == "compacting" && st.StartedAt is { } t && t != _cancelledCompactKey
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3);
-
-    private static string CompactPct(CodexSnapshot st) => st.StartedAt is { } t
-        ? $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / 180, 1, 99)}%" : "";
 
     private static void DrawIcon(Graphics g, Bitmap img, float x, float y, float size, float fade, float radius)
     {
@@ -497,11 +500,17 @@ internal sealed class CodexWidget : IWidget
         DrawNetHover(g, a);
     }
 
-    private static string LimitCaption(CodexLimit limit) => limit.WindowMinutes switch
+    internal static string LimitCaption(CodexLimit limit) => LimitCaption(limit.WindowMinutes);
+
+    internal static string LimitCaption(int windowMinutes) => windowMinutes switch
     {
-        300 => "5-hour",
+        <= 0 => "plan",
         10_080 => "weekly",
-        _ => "plan",
+        < 60 => $"{windowMinutes}-min",
+        < 1440 when windowMinutes % 60 == 0 => $"{windowMinutes / 60}-hour",
+        < 1440 => $"{windowMinutes / 60}h{windowMinutes % 60}m",
+        _ when windowMinutes % 1440 == 0 => $"{windowMinutes / 1440}-day",
+        _ => $"{windowMinutes / 1440}d{windowMinutes % 1440 / 60}h",
     };
 
     private void DrawCancel(Graphics g, int w, int h, float a, Color state)
@@ -719,7 +728,8 @@ internal sealed class CodexWidget : IWidget
     };
 
     private static float UsageFrac()
-        => CodexLimits.FiveHour >= 0 ? CodexLimits.FiveHour : CodexLimits.Week >= 0 ? CodexLimits.Week : 0f;
+        => CodexLimits.PrimaryFrac >= 0 ? CodexLimits.PrimaryFrac
+         : CodexLimits.SecondaryFrac >= 0 ? CodexLimits.SecondaryFrac : 0f;
 
     private static bool RingIsTheMessage(CodexSnapshot? st)
         => CodexNetMon.ApiDown || CodexNetMon.NetDown || LimitHit || Compacting(st);
@@ -771,11 +781,11 @@ internal sealed class CodexWidget : IWidget
             _ => Moods.Line("idle"),
         };
 
-    private static bool LimitHit => CodexLimits.FiveHour >= 0.99f || CodexLimits.Week >= 0.99f;
+    private static bool LimitHit => CodexLimits.PrimaryFrac >= 0.99f || CodexLimits.SecondaryFrac >= 0.99f;
 
     private static string LimitReset()
     {
-        var r = ResetIn(CodexLimits.FiveHour >= 0.99f ? CodexLimits.FiveHourReset : CodexLimits.WeekReset);
+        var r = ResetIn(CodexLimits.PrimaryFrac >= 0.99f ? CodexLimits.PrimaryReset : CodexLimits.SecondaryReset);
         return r.Length > 0 ? "back in " + r : "";
     }
 
@@ -783,7 +793,7 @@ internal sealed class CodexWidget : IWidget
         CodexNetMon.NetDown ? Moods.Line("offline")
         : CodexNetMon.ApiDown ? Moods.Line("apiDown")
         : JustCompacted(st) ? Moods.Line("compacted")
-        : CodexLimits.FiveHour >= 0.95f ? Moods.Line("outOfCredit")
+        : CodexLimits.PrimaryFrac >= 0.95f ? Moods.Line("outOfCredit")
         : Moods.Line("idle", ctx);
 
     private static bool JustCompacted(CodexSnapshot? st) =>

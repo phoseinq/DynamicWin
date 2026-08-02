@@ -16,6 +16,7 @@ internal static class Win32
     public const uint WM_DESTROY = 0x0002;
     public const uint WM_DISPLAYCHANGE = 0x007E;
     public const uint WM_SETTINGCHANGE = 0x001A;
+    public const uint WM_TIMECHANGE = 0x001E;
     public const uint WM_MOUSEMOVE = 0x0200;
     public const uint WM_MOUSELEAVE = 0x02A3;
     public const uint WM_NCHITTEST = 0x0084;
@@ -92,6 +93,59 @@ internal static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style,
         int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr hInstance, IntPtr param);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyWindow(IntPtr hwnd);
+
+    public static readonly IntPtr HWND_MESSAGE = new(-3);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct NOTIFYICONDATA
+    {
+        public int cbSize;
+        public IntPtr hWnd;
+        public int uID;
+        public int uFlags;
+        public int uCallbackMessage;
+        public IntPtr hIcon;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+        public int dwState;
+        public int dwStateMask;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+        public int uVersion;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+        public int dwInfoFlags;
+        public Guid guidItem;
+        public IntPtr hBalloonIcon;
+    }
+
+    public const int NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIM_SETVERSION = 4;
+    public const int NIF_MESSAGE = 0x01, NIF_ICON = 0x02, NIF_TIP = 0x04, NIF_SHOWTIP = 0x80;
+    public const int NOTIFYICON_VERSION_4 = 4;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool Shell_NotifyIcon(int message, ref NOTIFYICONDATA data);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint RegisterWindowMessage(string message);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool AppendMenu(IntPtr menu, int flags, int id, string? item);
+
+    [DllImport("user32.dll")]
+    public static extern bool DestroyMenu(IntPtr menu);
+
+    public const int MF_STRING = 0x0000, MF_SEPARATOR = 0x0800;
+    public const int TPM_RIGHTBUTTON = 0x0002, TPM_RETURNCMD = 0x0100;
+
+    [DllImport("user32.dll")]
+    public static extern int TrackPopupMenuEx(IntPtr menu, int flags, int x, int y, IntPtr hwnd, IntPtr lptpm);
+
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     public static extern IntPtr DefWindowProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -255,9 +309,22 @@ internal static class Win32
     public const int VK_LBUTTON = 0x01;
     public const int VK_ESCAPE = 0x1B;
     public const int VK_CONTROL = 0x11;
+    public const int VK_BACK = 0x08;
+    public const int VK_RETURN = 0x0D;
+    public const int VK_V = 0x56;
 
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    public const uint WM_KEYDOWN = 0x0100;
+    public const uint WM_CHAR = 0x0102;
+    public const int GWL_EXSTYLE = -20;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
 
     public const uint WM_CLIPBOARDUPDATE = 0x031D;
     public const uint CF_BITMAP = 2;
@@ -310,6 +377,36 @@ internal static class Win32
     [DllImport("kernel32.dll")]
     public static extern uint GetCurrentThreadId();
     public const uint KEYEVENTF_KEYUP = 0x0002;
+
+    public const int WH_KEYBOARD_LL = 13;
+    public const int VK_SHIFT = 0x10, VK_MENU = 0x12, VK_CAPITAL = 0x14;
+    public const int VK_LWIN = 0x5B, VK_RWIN = 0x5C;
+    public const uint WM_SYSKEYDOWN = 0x0104, WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode, scanCode, flags, time;
+        public UIntPtr dwExtraInfo;
+    }
+
+    public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookExW(int idHook, HookProc fn, IntPtr mod, uint threadId);
+
+    [DllImport("user32.dll")]
+    public static extern bool UnhookWindowsHookEx(IntPtr hook);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern short GetKeyState(int vKey);
+
+    [DllImport("user32.dll")]
+    public static extern int ToUnicodeEx(uint vk, uint scan, byte[] state,
+        [Out] byte[] buf, int bufLenChars, uint flags, IntPtr layout);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);

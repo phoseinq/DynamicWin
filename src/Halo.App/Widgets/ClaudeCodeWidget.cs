@@ -58,7 +58,7 @@ internal sealed class ClaudeCodeWidget : IWidget
 
     public float RingProgress
         => Live is null || (Limits.FiveHour < 0 && Limits.Week < 0) ? -1f : UsageFrac();
-    public int Version => _store.Version + NetMon.Version;
+    public int Version => _store.Version + NetMon.Version + CompactProgress.Version;
     public AgentNotice AgentNotice => Live is { } status
         ? new AgentNotice(Shown(status), ParseTime(status.CompactedAt), status.Message)
         : AgentNotice.None;
@@ -128,7 +128,8 @@ internal sealed class ClaudeCodeWidget : IWidget
                 g.FillEllipse(db, x, y, sz, sz);
 
         string el0 = LimitHit ? LimitReset() : Elapsed(st);
-        if (Compacting(st) && !LimitHit && el0.Length > 0) el0 = CompactPct(st!) + " · " + el0;
+        if (Compacting(st) && !LimitHit && CompactPct(st!) is { Length: > 0 } done)
+            el0 = el0.Length > 0 ? done + " · " + Coarse(el0) : done;
         float textX0 = x + sz + 11;
         if (st?.State == "waiting_input") textX0 += 16;
         using var elFont = new Font("Segoe UI", 13f, GraphicsUnit.Pixel);
@@ -172,12 +173,18 @@ internal sealed class ClaudeCodeWidget : IWidget
             Alignment = centred ? StringAlignment.Center : StringAlignment.Near,
             LineAlignment = StringAlignment.Center,
             FormatFlags = StringFormatFlags.NoWrap,
-        };
-        var clip = g.Clip;
-        g.SetClip(new RectangleF(x + sz + 2, 0, w - (x + sz + 2), h));
-        float zoneW = centred ? avail - 34f : avail + 16f;
 
-        g.DrawString(verb, f, b, new RectangleF(textX - 16f * (1f - e), -Fx.CenterLift(f), zoneW, h), sf);
+            Trimming = StringTrimming.EllipsisCharacter,
+        };
+
+        float originX = textX - 16f * (1f - e);
+        float rightEdge = textX + avail;
+        var clip = g.Clip;
+        g.SetClip(new RectangleF(x + sz + 2, 0, rightEdge - (x + sz + 2), h));
+
+        float zoneW = (centred ? rightEdge - 34f : rightEdge) - originX;
+
+        g.DrawString(verb, f, b, new RectangleF(originX, -Fx.CenterLift(f), zoneW, h), sf);
         g.Clip = clip;
 
         if (elW > 0)
@@ -209,17 +216,18 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string? Shown(CcStatus? st) =>
         TurnOver(st, DateTimeOffset.UtcNow) ? "idle" : st?.State;
 
-    private static bool Compacting(CcStatus? st) =>
+    internal static bool Compacting(CcStatus? st) =>
         st?.State == "compacting" && st.StartedAt != _cancelledCompactKey
         && ParseTime(st.StartedAt) is { } t
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3);
 
-    private static string CompactPct(CcStatus st)
-    {
-        if (ParseTime(st.StartedAt) is not { } t) return "";
+    internal static string CompactPct(CcStatus st)
+        => CompactProgress.Caption();
 
-        double expect = 3 * (st.LastCompactMs is > 3000 and < 600_000 ? st.LastCompactMs / 1000.0 : 60);
-        return $"~{(int)Math.Clamp(100 * (DateTimeOffset.UtcNow - t).TotalSeconds / expect, 1, 99)}%";
+    internal static string Coarse(string elapsed)
+    {
+        int m = elapsed.IndexOf('m');
+        return m > 0 ? elapsed[..(m + 1)] : elapsed;
     }
 
     private static DateTimeOffset? ParseTime(string? s) =>
@@ -246,7 +254,8 @@ internal sealed class ClaudeCodeWidget : IWidget
         g.FillPath(tb, path);
     }
 
-    internal const float ContextWarnAt = 0.80f;
+    internal static float ContextWarnAt
+        => Halo.Settings.SettingsStore.Percent("alert.contextAt", 80) / 100f;
 
     internal static int ContextBand(float frac)
         => frac >= ContextWarnAt ? 2 : frac >= ContextWarnAt - 0.15f ? 1 : 0;

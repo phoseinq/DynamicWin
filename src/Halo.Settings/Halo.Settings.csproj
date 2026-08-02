@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Halo.Settings</AssemblyName>
+    <RootNamespace>Halo.Settings</RootNamespace>
+    <ApplicationIcon>..\Halo.App\Assets\halo.ico</ApplicationIcon>
+    <!-- WPF, not WinUI: the design is the same and the compositor path for acrylic is the same DWM call,
+         but the Windows App SDK would have added 145MB to a 109MB install for one window. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <Resource Include="..\Halo.App\Assets\halo.ico" Link="halo.ico" />
+  </ItemGroup>
+
+</Project>

@@ -287,8 +287,7 @@ internal sealed class VlcWidget : IWidget
         if (name == null) return;
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float prog = Progress();
-        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.5f,
-            alive: VlcHttp.Online && VlcHttp.Playing);
+        if (prog >= 0f) Fx.PillBar(g, w, h, fade, prog, Orange, 0.5f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 30, Orange);
         var icon = IconImage;
         if (icon != null)

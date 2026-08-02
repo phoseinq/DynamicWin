@@ -39,6 +39,8 @@ internal sealed class FileTray : IWidget
     public string Icon => ((char)0xE7B8).ToString();
 
     public bool IsActive { get { lock (_lock) return DragActive || _paths.Count > 0; } }
+
+    public static bool Holding { get { lock (_lock) return _paths.Count > 0; } }
     public int Version => _version + (DragActive ? (int)(Environment.TickCount64 / 60) : 0);
     public bool Animating => DragActive || !_settled;
 
@@ -146,6 +148,8 @@ internal sealed class FileTray : IWidget
     }
 
     private static long _pruneAt;
+
+    public static string[] Paths() => Snapshot();
 
     private static string[] Snapshot()
     {
@@ -260,7 +264,7 @@ internal sealed class FileTray : IWidget
         using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            g.DrawString("File Tray", title, tb, Pad + 20, 14);
+            g.DrawString("File Tray", title, tb, Pad + 20, 10);
 
         int sel = SelectedCount;
         if (sel > 0) DrawRemoveChip(g, w, fade, sel);
@@ -345,7 +349,8 @@ internal sealed class FileTray : IWidget
 
     private void DrawDropZone(Graphics g, int w, int h, float fade)
     {
-        var box = new RectangleF(Pad, HeaderH - 8, w - Pad * 2, h - (HeaderH - 8) - Pad + 6);
+
+        var box = new RectangleF(Pad, HeaderH - 2, w - Pad * 2, h - (HeaderH - 2) - Pad + 6);
         bool active = DragActive;
         float pulse = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 600f);
         float border = fade * (active ? 0.75f + 0.25f * pulse : 0.5f);

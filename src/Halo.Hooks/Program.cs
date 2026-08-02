@@ -19,6 +19,32 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+
+        if (args.Length > 0 && args[0] is "install-autostart" or "uninstall-autostart" or "query-autostart")
+        {
+            try
+            {
+                switch (args[0])
+                {
+                    case "install-autostart":
+                        if (args.Length != 2) throw new ArgumentException("install-autostart requires an executable path.");
+                        Autostart.Install(args[1]);
+                        break;
+                    case "uninstall-autostart":
+                        Autostart.Uninstall();
+                        break;
+                    default:
+                        return Autostart.IsInstalled() ? 0 : 2;
+                }
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
+        }
+
         if (args.Length > 0 && args[0] is "install-codex-hooks" or "uninstall-codex-hooks")
         {
             try
@@ -103,6 +129,8 @@ internal static class Program
                     status["state"] = "compacting";
                     status["startedAt"] = DateTimeOffset.UtcNow.ToString("o");
                     status["message"] = null;
+
+                    UpdateContext(status, Field("transcript_path"));
                     break;
                 case "prompt":
                     status["state"] = "working";
@@ -128,14 +156,6 @@ internal static class Program
                     UpdateContext(status, Field("transcript_path"));
                     break;
                 case "post-compact":
-
-                    if (!codex && status["state"]?.GetValue<string>() == "compacting"
-                        && DateTimeOffset.TryParse(status["startedAt"]?.GetValue<string>(), null,
-                            System.Globalization.DateTimeStyles.RoundtripKind, out var compactStart))
-                    {
-                        var ms = (long)(DateTimeOffset.UtcNow - compactStart).TotalMilliseconds;
-                        if (ms is > 3000 and < 600_000) status["lastCompactMs"] = ms;
-                    }
 
                     status["state"] = codex || Field("trigger") == "auto" ? "working" : "idle";
                     status["compactedAt"] = DateTimeOffset.UtcNow.ToString("o");
@@ -171,6 +191,15 @@ internal static class Program
 
             status["updatedAt"] = DateTimeOffset.UtcNow.ToString("o");
             Save(status, path);
+
+            int askOwner = status["pid"] is JsonValue pv && pv.TryGetValue<int>(out var askPid) ? askPid : 0;
+            if (cmd == "tool" && !codex)
+                AskFlow.Run(ClaudeDir, input, Field("session_id"), Field("cwd"), askOwner);
+
+            bool questionOver = cmd is "prompt" or "stop"
+                || (cmd == "tool-done" && Field("tool_name") == "AskUserQuestion");
+            if (questionOver && !codex) AskFlow.Clear(ClaudeDir, askOwner);
+
             return 0;
         }
         catch
@@ -183,7 +212,10 @@ internal static class Program
     {
         try
         {
-            var text = Console.In.ReadToEnd();
+
+            using var stdin = Console.OpenStandardInput();
+            using var reader = new System.IO.StreamReader(stdin, new System.Text.UTF8Encoding(false));
+            var text = reader.ReadToEnd();
             if (string.IsNullOrWhiteSpace(text)) return null;
             return JsonNode.Parse(text) as JsonObject;
         }

@@ -44,6 +44,7 @@ internal sealed class MediaWidget : IWidget
 
     private string? _artKey;
     private Bitmap? _art;
+    private volatile bool _artStale;
     private Bitmap[]? _frames;
     private int[]? _delays;
     private int _totalDelay;
@@ -58,6 +59,11 @@ internal sealed class MediaWidget : IWidget
     }
 
     public string App => _sessions.SlotApp(_slot);
+
+    public int Slot => _slot;
+    public string? TitleText { get { lock (_lock) return _title; } }
+    public string? ArtistText { get { lock (_lock) return _artist; } }
+    public bool Playing { get { lock (_lock) return _playing; } }
 
     public string Icon => "\uE768";
 
@@ -91,8 +97,10 @@ internal sealed class MediaWidget : IWidget
     {
         byte[]? thumb; string? key;
         lock (_lock) { thumb = _thumb; key = _trackKey; }
-        if (key != _artKey)
+
+        if (key != _artKey || _artStale)
         {
+            _artStale = false;
             DisposeFrames();
             (_frames, _delays) = DecodeFrames(thumb);
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
@@ -153,7 +161,8 @@ internal sealed class MediaWidget : IWidget
             string key = title + "" + artist;
             byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
             bool wide = ThumbIsWide(thumb);
-            bool trackChanged;
+            bool trackChanged, chase;
+            int epoch;
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return;
@@ -174,11 +183,56 @@ internal sealed class MediaWidget : IWidget
                 }
                 if (trackChanged) _trackEpoch++;
                 _version++;
+
+                chase = _thumb is not { Length: > 0 };
+                epoch = _trackEpoch;
             }
             if (trackChanged) DebugLog(title);
+            if (chase) ChaseArt(s, epoch);
         }
         catch { }
     }
+
+    private static readonly int[] ArtRetries = [350, 700, 1400, 2600, 4500, 6000];
+
+    private async void ChaseArt(GlobalSystemMediaTransportControlsSession s, int epoch)
+    {
+        if (_chasing) return;
+        _chasing = true;
+        try
+        {
+            foreach (int wait in ArtRetries)
+            {
+                await System.Threading.Tasks.Task.Delay(wait);
+                lock (_lock)
+                {
+                    if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
+                    if (_thumb is { Length: > 0 }) return;
+                }
+                try
+                {
+                    var props = await s.TryGetMediaPropertiesAsync();
+                    byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
+                    if (thumb is not { Length: > 0 }) continue;
+                    bool wide = ThumbIsWide(thumb);
+                    lock (_lock)
+                    {
+                        if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
+                        _thumb = thumb;
+                        _thumbWide = wide;
+                        _version++;
+                    }
+                    _artStale = true;
+                    return;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        finally { _chasing = false; }
+    }
+
+    private volatile bool _chasing;
 
     private void DebugLog(string title)
     {
@@ -602,7 +656,7 @@ internal sealed class MediaWidget : IWidget
         || app.Contains("brave") || app.Contains("opera") || app.Contains("vivaldi");
 
     private static byte SubtitleKey(string app) =>
-        app.Contains("vlc") || app.Contains("mpv") ? (byte)'V' : IsBrowser(app) ? (byte)'C' : (byte)0;
+        app.Contains("vlc") || app.Contains("mpv") ? (byte)'V' : (byte)0;
 
     private void SendHotkey(byte vk)
     {
@@ -1052,7 +1106,9 @@ internal sealed class MediaWidget : IWidget
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float dt = PillDt();
-        float prog = PillFrac(RingProgress, dt);
+
+        float prog = Halo.Settings.SettingsStore.On("media.progress")
+            ? PillFrac(RingProgress, dt) : -1f;
 
         var accentTarget = _accent == Fx.White ? NeutralBar : _accent;
         if (!_accentInit) { _accentShown = accentTarget; _accentInit = true; }
@@ -1061,7 +1117,8 @@ internal sealed class MediaWidget : IWidget
         if (prog >= 0f) _lastProg = prog;
         _barIn = Ease(_barIn, prog >= 0f ? 1f : 0f, dt, 0.20f);
         if (_barIn > 0.01f && _lastProg >= 0f)
-            Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f, alive: playing);
+
+        Fx.PillBar(g, w, h, fade * _barIn, _lastProg, _accentShown, 0.5f);
         Fx.Glow(g, w, h, fade, x + sz / 2f, h / 2f, w * 0.7f, h * 2.2f, 34, _accent);
         DrawArt(g, x, y, sz, fade, sz * 0.28f);
 
