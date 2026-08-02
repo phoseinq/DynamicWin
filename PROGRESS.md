@@ -1,5 +1,50 @@
 # Halo — progress
 
+## Next up — reported 2026-08-02, not started
+
+Queued by the user at the end of the session, in their order. Nothing below has been investigated yet;
+these are the reports, not diagnoses.
+
+1. **Spotify art does not get retried.** First fetch of the album art from Spotify sometimes comes back
+   empty and the pill falls back to the app icon — the green Spotify circle instead of the cover, which
+   is what the screenshot shows. It is supposed to chase it: `MediaWidget.ChaseArt` already exists for
+   exactly this (`chase = _thumb is not { Length: > 0 }`, then a retry loop that sets `_artStale`). So
+   the mechanism is there and is not working — find out whether `chase` is ever true on this path,
+   whether the loop exits early, or whether `_artStale` is being cleared before the decode. Start by
+   confirming which of the three it is rather than rewriting the retry.
+
+2. **The pill's progress bar looks like two bars.** Reported from the collapsed pill: one stronger and
+   set further back, one fainter and further forward. Has to be a single bar. Suspects, in order:
+   `Fx.PillBar`'s sheen/lip (it draws a bright edge on top of the body, and a previous round already
+   found that at low alpha the lip reads as detached — see the 2026-07 entries on the `--render-bar`
+   filmstrip), or `_barIn`/`_lastProg` drawing a second time on top of `EasedBar`. Use `--render-bar`,
+   and remember that filmstrip's rows are 430ms apart so it cannot show short-lived banding.
+
+3. **And the bar's movement must be much smoother.** `EasedBar` is a fixed 1.25/second ramp; it removes
+   the teleport but is not the same thing as smooth. Likely wants a real time constant rather than a
+   constant rate, so it eases in and out instead of sliding at one speed.
+
+4. **Telegram media is not supported by the bar.** Music played from Telegram gets no timeline. Needs a
+   full pass over one real track — the user will confirm after their limit resets. Probably an SMTC
+   session that reports no `end`, in which case the honest answer is no bar rather than an invented one;
+   check before assuming it is a bug in Halo.
+
+5. **Bug reports should reach somewhere.** Crash *and* user-triggered. The user wants it delivered by
+   email or written to their own server rather than only sitting in `%TEMP%\halo-crash.log`. Their
+   constraint, stated: with proper security and within Microsoft's rules. That means, at minimum: never
+   send anything without the user pressing something, show them exactly what is being sent before it
+   goes, no credentials or tokens in the payload, no silent background upload. This replaces unit D's
+   "no automatic upload" with "opt-in upload", so the design pass has to be redone, not skipped.
+
+6. **Release when these are clean.** The user will say when. Last release is `v3.2.0` on
+   `phoseinq/Halo`; `Directory.Build.props` still says `3.2.0`, so a release needs a version bump first.
+   Note `phoseinq/Halo` `main` is a *stripped* mirror with no shared history — comment-bearing `master`
+   must never be pushed there directly; it goes through `tools/strip`.
+
+Still open from before this list: instrumenting `LayeredNotch.Render` to find where the ~24ms per morph
+frame goes (see the entry below — the measured rate is 41fps and no setting moves it), and units C, E
+and F.
+
 ## 2026-08-02 (latest): the pill stopped guessing what monitor it is on
 
 **Release 0/0, 671 tests pass (32 new). Deployed (hot-swapped `Halo.App.dll` + `Halo.Settings.*`), not
