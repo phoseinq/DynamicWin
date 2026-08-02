@@ -19,15 +19,30 @@ internal static class Actions
             switch (key)
             {
                 // the pill reads this file at startup and after every drag; deleting it is "centred"
+                // Written, not deleted: the pill watches this file's timestamp and re-reads it, and a
+                // deleted file has no timestamp to notice. Zero is centred.
                 case "general.reset":
-                    var offset = Path.Combine(HaloDir, "offset");
-                    if (File.Exists(offset)) File.Delete(offset);
+                    Directory.CreateDirectory(HaloDir);
+                    File.WriteAllText(Path.Combine(HaloDir, "offset"), "0");
                     break;
                 case "access.notifications":
                     Open("ms-settings:privacy-notifications");
                     break;
                 case "access.startup":
                     Open(Environment.GetFolderPath(Environment.SpecialFolder.Startup));
+                    break;
+                // both of these rendered a button that did nothing at all, because Run had no case for them
+                case "about.state":
+                    Directory.CreateDirectory(HaloDir);
+                    Open(HaloDir);
+                    break;
+                // the full token, not the truncated one the row displays
+                case "api.token":
+                    var token = new Store().Text("api.token", "");
+                    if (token.Length > 0) System.Windows.Clipboard.SetText(token);
+                    break;
+                case "about.repo":
+                    Open("https://github.com/phoseinq/DynamicWin");
                     break;
             }
         }

@@ -1,6 +1,7 @@
 <Application x:Class="Halo.Settings.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Halo.Settings"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <!-- The palette is lifted from the approved preview, unchanged: ink, two quieter greys, four
@@ -28,6 +29,7 @@
         <Style x:Key="Glass" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource Frost}" />
             <Setter Property="BorderBrush" Value="{StaticResource FrostEdge}" />
+            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Foreground" Value="{StaticResource Ink}" />
             <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
             <Setter Property="FontSize" Value="12" />
@@ -35,21 +37,41 @@
             <Setter Property="Padding" Value="13,7" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="SnapsToDevicePixels" Value="True" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="local:Ui.Radius" Value="10" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Shell" Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
-                                CornerRadius="10" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="Center" />
-                        </Border>
+                        <!-- The hover state is an ADDITIVE sheen over whatever colour the button carries,
+                             not a replacement background. Every accent-tinted surface here - the home
+                             cards, the selected nav pill, a chosen option - would have lost its tint on
+                             hover the moment a trigger overwrote Background with plain frost. -->
+                        <Grid x:Name="Root" RenderTransformOrigin="0.5,0.5">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{Binding Path=(local:Ui.Radius), RelativeSource={RelativeSource TemplatedParent}}" />
+                            <Border x:Name="Sheen" Background="Transparent"
+                                    CornerRadius="{Binding Path=(local:Ui.Radius), RelativeSource={RelativeSource TemplatedParent}}" />
+                            <ContentPresenter Margin="{TemplateBinding Padding}"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostHover}" />
+                                <Setter TargetName="Sheen" Property="Background" Value="#12FFFFFF" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostPressed}" />
+                                <Setter TargetName="Sheen" Property="Background" Value="#20FFFFFF" />
+                                <Setter TargetName="Root" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.985" ScaleY="0.985" />
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.46" />
+                                <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -57,70 +79,55 @@
             </Setter>
         </Style>
 
+        <!-- The rail's rows are glass like everything else in the window. They were flat transparent, which
+             made the one selected row the only object in the rail and the rest a list of words.
+             Selection is a left accent BAR plus a tint of the same accent, set per-item in code:
+             3,1,1,1 keeps the glass outline while the bar hangs off the left edge. -->
         <Style x:Key="NavItem" TargetType="Button" BasedOn="{StaticResource Glass}">
             <Setter Property="Height" Value="36" />
             <Setter Property="Padding" Value="10,0" />
-            <Setter Property="Margin" Value="8,1" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Margin" Value="8,2" />
             <Setter Property="FontWeight" Value="Normal" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
 
-        <!-- The window buttons are the one place a hover has to read as "this will close the window",
-             so close warms to coral rather than to more frost. -->
-        <Style x:Key="Caption" TargetType="Button">
-            <Setter Property="Width" Value="46" />
-            <Setter Property="Height" Value="32" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="{StaticResource Secondary}" />
-            <Setter Property="Cursor" Value="Arrow" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Shell" Background="{TemplateBinding Background}" CornerRadius="8">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource FrostHover}" />
-                                <Setter Property="Foreground" Value="{StaticResource Ink}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="CloseCaption" TargetType="Button" BasedOn="{StaticResource Caption}">
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Foreground" Value="{StaticResource Coral}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- A scrollbar wide enough to grab and quiet enough to ignore. The stock one drew a track and
-             two arrow buttons over the glass. -->
+        <!-- A 3px hairline: no arrows, no track, and dim until you go near it. It was 7px wide holding a
+             bright 3px thumb, which is furniture down the side of a pane of glass. Implicit (no x:Key) so
+             every ScrollViewer in the window gets it. -->
         <Style TargetType="ScrollBar">
             <Setter Property="Width" Value="7" />
+            <Setter Property="Background" Value="Transparent" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Track x:Name="PART_Track" IsDirectionReversed="True">
-                            <Track.Thumb>
-                                <Thumb>
-                                    <Thumb.Template>
-                                        <ControlTemplate TargetType="Thumb">
-                                            <Border Background="#33FFFFFF" CornerRadius="3" Margin="2,0" />
-                                        </ControlTemplate>
-                                    </Thumb.Template>
-                                </Thumb>
-                            </Track.Thumb>
-                        </Track>
+                        <Border Background="Transparent" Width="7" Padding="2,2">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.Thumb>
+                                    <Thumb x:Name="Thumb">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="Bar" CornerRadius="1.5" Background="#26FFFFFF" />
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Bar" Property="Background" Value="#66FFFFFF" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="Bar" Property="Background" Value="#8CFFFFFF" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- The Caption/CloseCaption button styles used to live here, for a minimise/maximise/close set
+             drawn by hand. They are gone with the buttons: DWM already draws those three, so the pair of
+             them appeared twice, and the hand-drawn set could not offer Snap Layouts on hover. -->
     </Application.Resources>
 </Application>

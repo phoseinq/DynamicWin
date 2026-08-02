@@ -19,6 +19,33 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        // The installer, the uninstaller and the settings panel all drive autostart through here, so there
+        // is one definition of what "start with Windows" means instead of three that drift apart.
+        if (args.Length > 0 && args[0] is "install-autostart" or "uninstall-autostart" or "query-autostart")
+        {
+            try
+            {
+                switch (args[0])
+                {
+                    case "install-autostart":
+                        if (args.Length != 2) throw new ArgumentException("install-autostart requires an executable path.");
+                        Autostart.Install(args[1]);
+                        break;
+                    case "uninstall-autostart":
+                        Autostart.Uninstall();
+                        break;
+                    default:
+                        return Autostart.IsInstalled() ? 0 : 2;   // exit code is the answer; nothing is printed
+                }
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(error.Message);
+                return 1;
+            }
+        }
+
         if (args.Length > 0 && args[0] is "install-codex-hooks" or "uninstall-codex-hooks")
         {
             try
@@ -190,8 +217,16 @@ internal static class Program
             // The question is no longer answered by this hook, so nothing else would ever take it down:
             // the box in the terminal has been dealt with by the time the tool finishes, however it was
             // dealt with, and the mirrored banner has to go with it.
-            if (cmd == "tool-done" && !codex && Field("tool_name") == "AskUserQuestion")
-                AskFlow.Clear(ClaudeDir, askOwner);
+            //
+            // tool-done alone was not enough, and the way it failed was ugly: picking "Chat about this" (or
+            // Esc) REJECTS the call, and a rejected call never reaches PostToolUse. So the file stayed, and
+            // the pill sat there mirroring a question nobody was being asked until the 30-minute backstop
+            // expired it - verified live, banner still up five minutes after the box was gone. prompt and
+            // stop are the two events that do fire on that path, and both mean the same thing: this agent
+            // is doing something else now, so whatever it had parked is over.
+            bool questionOver = cmd is "prompt" or "stop"
+                || (cmd == "tool-done" && Field("tool_name") == "AskUserQuestion");
+            if (questionOver && !codex) AskFlow.Clear(ClaudeDir, askOwner);
 
             return 0;
         }

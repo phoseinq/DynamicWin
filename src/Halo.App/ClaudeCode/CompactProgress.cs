@@ -52,6 +52,7 @@ internal static class CompactProgress
     private static int _busy;
     private static long _polledAt;
     private static int _pid;
+    private static string? _key;         // the stamp pre-compact wrote: which compact this reading is of
     private static int _peak;            // the highest reading of THIS compact, for calibration
     private static int _expect = TypicalSummary;
     private static bool _loaded;
@@ -61,18 +62,19 @@ internal static class CompactProgress
 
     // Called once a second from the alert tick while a session is compacting. The scrape itself goes on
     // the pool: attaching to another console is a handful of syscalls, and the render loop is 8ms.
-    public static void Poke(int pid)
+    public static void Poke(int pid, string? key)
     {
         Load();
         if (pid <= 0) return;
-        if (pid != _pid) Reset(pid);
+        Track(pid, key);
         long now = Environment.TickCount64;
         if (now - _polledAt < 600) return;
         _polledAt = now;
         if (Interlocked.Exchange(ref _busy, 1) == 1) return;
+        var of = _key;   // which compact this sample belongs to; a reset while it is in flight voids it
         ThreadPool.QueueUserWorkItem(_ =>
         {
-            try { Sample(pid); } catch { } finally { Volatile.Write(ref _busy, 0); }
+            try { Sample(pid, of); } catch { } finally { Volatile.Write(ref _busy, 0); }
         });
     }
 
@@ -80,20 +82,32 @@ internal static class CompactProgress
     // reading is kept - a compact the user escaped out of after two seconds must not become the yardstick.
     public static void Done()
     {
+        if (_pid == 0 && _key is null && Percent < 0 && Tokens < 0) return;  // already clear; called every tick
         if (_peak >= 400) Save(_peak);
-        Reset(0);
+        Track(0, null);
+    }
+
+    /// <summary>
+    /// Point the reader at a compact, clearing the previous one's figure. A compact is identified by the
+    /// stamp pre-compact wrote, NOT by the pid: a second /compact in the same terminal is the same
+    /// process, so keying on the pid alone left the previous run's percentage standing. Reported live -
+    /// a compact cancelled at 40% was still reading 40% when the next one started, instead of opening
+    /// at nothing. The other half of that bug was Done() being called only when a TOKEN reading was on
+    /// screen, while the bar path deliberately leaves Tokens at -1, so the clearing branch never ran.
+    /// </summary>
+    internal static bool Track(int pid, string? key)
+    {
+        if (pid == _pid && key == _key) return false;
+        _pid = pid;
+        _key = key;
+        _peak = 0;
         Percent = -1;
         Tokens = -1;
         Interlocked.Increment(ref Version);
+        return true;
     }
 
-    private static void Reset(int pid)
-    {
-        _pid = pid;
-        _peak = 0;
-    }
-
-    private static void Sample(int pid)
+    private static void Sample(int pid, string? of)
     {
         // 14 rows and two past the cursor: the spinner sits above the prompt, and a TUI parks the cursor
         // in whatever it wants typed into, which is not always the bottom of what it is drawing.
@@ -109,6 +123,7 @@ internal static class CompactProgress
         // pill cannot be screenshotted, and "no percentage appeared" has three different causes.
         Trace(pid, rows, bar, tokens);
         if (rows is null) return;
+        if (of != _key) return;   // the compact this was read for ended while the read was in flight
 
         int now;
         if (bar is { } pct) { Tokens = -1; now = pct; }

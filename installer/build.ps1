@@ -18,17 +18,21 @@ function Sign([string[]]$files) {
 }
 
 # Halo is a layered-window tool the Restart Manager can't close — free the locked Release exes first
-taskkill /f /im Halo.App.exe   2>$null | Out-Null
-taskkill /f /im Halo.Hooks.exe 2>$null | Out-Null
+taskkill /f /im Halo.App.exe      2>$null | Out-Null
+taskkill /f /im Halo.Hooks.exe    2>$null | Out-Null
+taskkill /f /im Halo.Settings.exe 2>$null | Out-Null
 
 Remove-Item "$root\dist\app" -Recurse -Force -ErrorAction SilentlyContinue
-foreach ($proj in 'src\Halo.App\Halo.App.csproj', 'src\Halo.Hooks\Halo.Hooks.csproj') {
+# Halo.Settings belongs in this list, and its absence was invisible: clicking the shortcut while Halo is
+# already running calls OpenSettingsPanel, which looks for Halo.Settings.exe beside Halo.App.exe and
+# returns without a word when it is not there. So the panel simply never opened, on any install.
+foreach ($proj in 'src\Halo.App\Halo.App.csproj', 'src\Halo.Hooks\Halo.Hooks.csproj', 'src\Halo.Settings\Halo.Settings.csproj') {
     dotnet publish "$root\$proj" -c Release -r win-x64 --self-contained true `
         -p:PublishSingleFile=false -o "$root\dist\app" -v q -nologo
     if ($LASTEXITCODE) { throw "publish failed: $proj" }
 }
 
-Sign @("$root\dist\app\Halo.App.exe", "$root\dist\app\Halo.Hooks.exe")
+Sign @("$root\dist\app\Halo.App.exe", "$root\dist\app\Halo.Hooks.exe", "$root\dist\app\Halo.Settings.exe")
 & $iscc "$root\installer\Halo.iss"; if ($LASTEXITCODE) { throw 'ISCC failed' }
 Sign @("$root\dist\DynamicWinSetup.exe")
 & $signtool verify /pa "$root\dist\DynamicWinSetup.exe"

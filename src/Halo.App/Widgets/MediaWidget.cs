@@ -50,6 +50,7 @@ internal sealed class MediaWidget : IWidget
     // UI-thread-only album-art cache
     private string? _artKey;
     private Bitmap? _art;            // the frame used for accent/icon (first frame of an animated cover)
+    private volatile bool _artStale; // set when art arrives late for a track already decoded without it
     private Bitmap[]? _frames;       // >1 when the thumbnail is an animated GIF
     private int[]? _delays;          // per-frame duration (ms)
     private int _totalDelay;         // sum of _delays; 0 → static
@@ -65,6 +66,13 @@ internal sealed class MediaWidget : IWidget
 
     // the process name of the app this slot mirrors (e.g. "spotify", "chrome") — for the focus-hide rule
     public string App => _sessions.SlotApp(_slot);
+
+    // Read by the local API, which needs to describe what is playing without going through the drawing
+    // code that normally reads these under the same lock.
+    public int Slot => _slot;
+    public string? TitleText { get { lock (_lock) return _title; } }
+    public string? ArtistText { get { lock (_lock) return _artist; } }
+    public bool Playing { get { lock (_lock) return _playing; } }
 
     public string Icon => "\uE768"; // Segoe MDL2 Play — ponytail: glyph, not album art (menu draws glyphs only)
 
@@ -101,8 +109,11 @@ internal sealed class MediaWidget : IWidget
     {
         byte[]? thumb; string? key;
         lock (_lock) { thumb = _thumb; key = _trackKey; }
-        if (key != _artKey)
+        // _artStale is how late-arriving art gets in: the key has not changed - it is the same track - so
+        // without it the decode below would be skipped and the cover that finally turned up ignored.
+        if (key != _artKey || _artStale)
         {
+            _artStale = false;
             DisposeFrames();
             (_frames, _delays) = DecodeFrames(thumb);
             _art = _frames is { Length: > 0 } ? _frames[0] : null;
@@ -167,7 +178,8 @@ internal sealed class MediaWidget : IWidget
             string key = title + "" + artist;
             byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
             bool wide = ThumbIsWide(thumb); // decode dims off-lock (small image, track-change only)
-            bool trackChanged;
+            bool trackChanged, chase;
+            int epoch;
             lock (_lock)
             {
                 if (!ReferenceEquals(_session, s)) return; // stale session
@@ -196,11 +208,65 @@ internal sealed class MediaWidget : IWidget
                 }
                 if (trackChanged) _trackEpoch++;
                 _version++;
+                // No cover yet is normal, not final: Spotify hands SMTC the track's text as soon as it
+                // starts and fetches the artwork afterwards, so the first properties read after a track
+                // change routinely comes back with an empty thumbnail. Nothing here ever asked a second
+                // time, which is why a track could play to the end wearing the app's logo.
+                chase = _thumb is not { Length: > 0 };
+                epoch = _trackEpoch;
             }
             if (trackChanged) DebugLog(title);
+            if (chase) ChaseArt(s, epoch);
         }
         catch { }
     }
+
+    // Ask again for a cover that was not ready the first time, on a widening delay. Stops the instant art
+    // lands, the track moves on, or the session goes - so a track that genuinely has no artwork costs six
+    // cheap property reads spread over fifteen seconds and then nothing.
+    //
+    // The epoch is the cancellation: _trackEpoch bumps on every track change, so a chase started for the
+    // song before last cannot come back and staple its cover onto whatever is playing now.
+    private static readonly int[] ArtRetries = [350, 700, 1400, 2600, 4500, 6000];
+
+    private async void ChaseArt(GlobalSystemMediaTransportControlsSession s, int epoch)
+    {
+        if (_chasing) return;   // one chain per widget; a new track's chain starts when this one gives up
+        _chasing = true;
+        try
+        {
+            foreach (int wait in ArtRetries)
+            {
+                await System.Threading.Tasks.Task.Delay(wait);
+                lock (_lock)
+                {
+                    if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
+                    if (_thumb is { Length: > 0 }) return;
+                }
+                try
+                {
+                    var props = await s.TryGetMediaPropertiesAsync();
+                    byte[]? thumb = props.Thumbnail != null ? await ReadStream(props.Thumbnail) : null;
+                    if (thumb is not { Length: > 0 }) continue;
+                    bool wide = ThumbIsWide(thumb);
+                    lock (_lock)
+                    {
+                        if (!ReferenceEquals(_session, s) || _trackEpoch != epoch) return;
+                        _thumb = thumb;
+                        _thumbWide = wide;
+                        _version++;
+                    }
+                    _artStale = true;   // the decode is the UI thread's job, in EnsureArt
+                    return;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        finally { _chasing = false; }
+    }
+
+    private volatile bool _chasing;
 
     // ponytail: one line per track change to learn what real players report (VLC's app id in particular,
     // so we can wire its subtitle/PiP hotkey). Trim once VLC support is confirmed.
@@ -717,9 +783,15 @@ internal sealed class MediaWidget : IWidget
         app.Contains("chrome") || app.Contains("msedge") || app.Contains("edge") || app.Contains("firefox")
         || app.Contains("brave") || app.Contains("opera") || app.Contains("vivaldi");
 
-    // best-effort per-app hotkey (needs the player focused). unknown app → 0 = no button.
+    // Best-effort per-app hotkey (needs the player focused). Unknown app -> 0 = no button.
+    //
+    // Browsers are back to 0, which takes the button away there. C toggles captions on YouTube and nowhere
+    // else: on any other site, in any other tab, in a video that simply has no track, the key lands in the
+    // page and does nothing at all - and the pill was still offering a subtitle button for it. A control
+    // the underlying app cannot honour does not ship here; VLC and mpv genuinely toggle on V, so they keep
+    // it and everything else loses it until there is a real way to ask.
     private static byte SubtitleKey(string app) =>
-        app.Contains("vlc") || app.Contains("mpv") ? (byte)'V' : IsBrowser(app) ? (byte)'C' : (byte)0;
+        app.Contains("vlc") || app.Contains("mpv") ? (byte)'V' : (byte)0;
 
     // focus the player's window, then inject the key (KeyInject verifies focus before typing).
     // ponytail: fragile by nature (right app/tab must be up) — user accepted it.
@@ -1242,7 +1314,11 @@ internal sealed class MediaWidget : IWidget
         EnsureArt();
         float sz = h - 14f, x = 9, y = (h - sz) / 2f;
         float dt = PillDt();
-        float prog = PillFrac(RingProgress, dt);   // -1 for a live stream with no duration
+        // -1 is also what a switched-off timeline looks like from here, which is the point: every
+        // downstream branch already knows how to draw a pill with no bar, because a live stream has
+        // none either.
+        float prog = Halo.Settings.SettingsStore.On("media.progress")
+            ? PillFrac(RingProgress, dt) : -1f;
 
         // Backmost: how far through the video you are, as the pill's own background — the same "the pill IS
         // the bar" language the agent pills use for a spent usage window, and a better use of it here, since

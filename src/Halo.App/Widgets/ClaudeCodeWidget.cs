@@ -276,7 +276,7 @@ internal sealed class ClaudeCodeWidget : IWidget
     private static string? Shown(CcStatus? st) =>
         TurnOver(st, DateTimeOffset.UtcNow) ? "idle" : st?.State;
 
-    private static bool Compacting(CcStatus? st) =>
+    internal static bool Compacting(CcStatus? st) =>
         st?.State == "compacting" && st.StartedAt != _cancelledCompactKey
         && ParseTime(st.StartedAt) is { } t
         && DateTimeOffset.UtcNow - t < TimeSpan.FromMinutes(3); // backstop if the Esc guess misses
@@ -333,7 +333,10 @@ internal sealed class ClaudeCodeWidget : IWidget
     // Past this the answers measurably drift and the fix is /compact, so it is worth one banner. Public
     // because the controller raises that banner and the panel colours its figures off the same number -
     // two places disagreeing about "nearly full" would be worse than either threshold.
-    internal const float ContextWarnAt = 0.80f;
+    // Was a const. It is the figure the banner and the ring both key on, so it had to become one lookup
+    // rather than a setting the banner honoured and the ring did not.
+    internal static float ContextWarnAt
+        => Halo.Settings.SettingsStore.Percent("alert.contextAt", 80) / 100f;
 
     // Context has its own ramp: 0 blue while there is room, 1 amber on the approach, 2 red past the line
     // where /compact stops being optional. Shares ContextWarnAt with the banner on purpose - the figure

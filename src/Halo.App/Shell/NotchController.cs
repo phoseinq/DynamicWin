@@ -112,7 +112,7 @@ internal sealed class AgentNoticeCoordinator
     private readonly record struct NoticeWindow(DateTimeOffset Until, bool DesktopBacked, long Order);
 }
 
-internal sealed class NotchController
+internal sealed partial class NotchController
 {
     private const int CollapsedW = 220, CollapsedH = 40, CollapsedR = 20;
     private const int ExpandedW = 560, ExpandedH = 220, ExpandedR = 30;
@@ -221,6 +221,19 @@ internal sealed class NotchController
     private Win32.POINT _holdAnchor;
     private int _moveGrabDX; // cursor-X − pill-centre at grab, so the pill doesn't jump on pickup
     private bool _pinned;   // pin button: keep the pill on top of everything, even fullscreen apps
+
+    // What the rest of the code should ask, rather than reading _pinned: the tray holding files pins the
+    // pill on its own. _pinned stays exactly as the user left it, so putting a file in the tray and taking
+    // it out again does not silently rewrite their setting.
+    private static bool Pinned(bool userPin) => userPin || FileTray.Holding;
+
+    // Whether the pin BUTTON is out of place, which is a narrower question than whether we are pinned.
+    // Being pinned is global while the tray holds files; the button only has to disappear where it would
+    // be lying, and that is on the tray's own surface. Hiding it everywhere meant switching to another app
+    // left the pill with no pin at all. The drag state counts too: the drop zone is the tray's surface
+    // before anything has landed in it, so Holding is still false there and the button was surviving on
+    // the one screen it most obviously does not belong on.
+    private bool TrayFront => FileTray.DragActive || (!_empty && _widgets[_primary] is FileTray);
     private float _pinHov;  // eased 0..1 hover brightness, so the glyph breathes instead of snapping
     private float _shrink;  // no-app tuck-away: 0 = normal pill, 1 = invisible alpha≈1 drop-catch strip
     private bool _empty; // no active widgets: pill stays visible but renders blank
@@ -346,6 +359,18 @@ internal sealed class NotchController
         _codexDesktopRuntime = CodexDesktopRuntime.Shared;
         CodexLimits.Attach(_codexStore);
         CodexLimits.UpdateFrom(_codexStore.Current);
+        // The settings the panel writes. Watched, so a change is on the pill within a frame and nothing
+        // restarts - which is the whole reason SettingsStore exists rather than a read at startup.
+        _settings = new Halo.Settings.SettingsStore();
+        Halo.Settings.SettingsStore.Shared = _settings;   // widgets read their own switches through this
+        _appliedSettings = _settings.Version;
+        _api = new Halo.Api.HaloApi(ApiConfig, this);
+        _api.Reconcile();
+        _startupApplied = _settings.Current.Bool(Halo.Settings.SettingsKeys.StartWithWindows, true);
+        _silenceApplied = _settings.Current.Bool("notifications.silence", false);
+        if (_silenceApplied) System.Threading.ThreadPool.QueueUserWorkItem(
+            _ => { try { Halo.Notifications.BannerGate.Enable(); } catch { } });
+
         _mediaSessions = new MediaSessions();
         var widgets = new List<IWidget>();
         for (int s = 0; s < MediaSessions.MaxSlots; s++)
@@ -376,7 +401,7 @@ internal sealed class NotchController
         _shrink = _empty ? 1f : 0f; // boot straight into the right size, no opening animation
         if (!_empty) _primary = active[0];
         _prevActive = new bool[_widgets.Length];
-        for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = _widgets[i].IsActive;
+        for (int i = 0; i < _widgets.Length; i++) _prevActive[i] = Live(i);
         Apply(0f); // empty or not, the pill shows from the first frame (boot = blank pill)
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
@@ -423,6 +448,18 @@ internal sealed class NotchController
     // above the tier are required so launch spikes don't count.
     private static readonly int[] CpuTiers = { 50, 70, 85, 95 };
     private static readonly int[] RamTiers = { 70, 85, 95 };
+
+    // The user sets where warnings START; the escalation above it is kept. Picking 80 for CPU gives
+    // 80/85/95, picking 60 gives 60/70/85/95 - the fixed tiers below the chosen one are dropped rather
+    // than the whole ladder being replaced, so "warn me later" does not also mean "and then never
+    // escalate". Recomputed per call: it is an array of four ints once a second, and caching it would be
+    // one more thing to invalidate when the panel writes.
+    internal static int[] Tiers(int[] fixedTiers, int first)
+    {
+        var tiers = new List<int> { first };
+        foreach (var tier in fixedTiers) if (tier > first) tiers.Add(tier);
+        return [.. tiers];
+    }
     private int _cpuTierFired = -1, _ramTierFired = -1; // index of highest tier already notified
     private int _cpuStreak, _ramStreak;
     internal bool Heavy => _heavy; // Frame() slows glass capture while heavy
@@ -460,9 +497,15 @@ internal sealed class NotchController
                           : System.Diagnostics.ProcessPriorityClass.Normal; } catch { }
             }
             int pctNow = (int)(busy * 100);
-            int tier = TierOf(CpuTiers, pctNow);
+            int tier = TierOf(Tiers(CpuTiers, Halo.Settings.SettingsStore.Percent("alert.cpuAt", 50)), pctNow);
             _cpuStreak = tier > _cpuTierFired ? _cpuStreak + 1 : 0;
-            if (_cpuStreak >= 10) { _cpuTierFired = tier; _cpuStreak = 0; QueueCpuNotice(pctNow); }
+            // the tier still advances with the alert switched off, so turning it back on does not fire
+            // immediately about a peak that has already passed
+            if (_cpuStreak >= 10)
+            {
+                _cpuTierFired = tier; _cpuStreak = 0;
+                if (Alert("cpu")) QueueCpuNotice(pctNow);
+            }
             CheckRam();
         }
         _cpuIdle = idle; _cpuBusyBase = total;
@@ -487,9 +530,13 @@ internal sealed class NotchController
         var ms = new Win32.MEMORYSTATUSEX { dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.MEMORYSTATUSEX>() };
         if (!Win32.GlobalMemoryStatusEx(ref ms)) return;
         int pct = (int)ms.dwMemoryLoad;
-        int tier = TierOf(RamTiers, pct);
+        int tier = TierOf(Tiers(RamTiers, Halo.Settings.SettingsStore.Percent("alert.memoryAt", 70)), pct);
         _ramStreak = tier > _ramTierFired ? _ramStreak + 1 : 0;
-        if (_ramStreak >= 10) { _ramTierFired = tier; _ramStreak = 0; QueueRamNotice(pct); }
+        if (_ramStreak >= 10)
+        {
+            _ramTierFired = tier; _ramStreak = 0;
+            if (Alert("memory")) QueueRamNotice(pct);
+        }
     }
 
     private void QueueRamNotice(int pct)
@@ -572,24 +619,188 @@ internal sealed class NotchController
 
     // System alerts, throttled to ~1/s and edge-triggered so we don't nag: battery <=20% (click → Power
     // Saver), Claude/Codex usage >=80%, slow internet. Each flag re-arms once the condition clears.
+    // The default has to match the panel's own fallback for the same row, or a setting nobody has touched
+    // means one thing to the pill and another to the window describing it.
+    private bool Alert(string name, bool on = true) => _settings.Current.Bool("alert." + name, on);
+
+    // Settings arrive on the watcher's thread, and two of them touch the window - so they are picked up
+    // here instead, on the tick, where every other frame-affecting change is already made. Version rather
+    // than the values themselves: this runs once a second forever and must cost nothing when idle.
+    // Seeded from the store's opening version in the constructor, so the first tick applies nothing: pin,
+    // capture and scale were all loaded from disk at startup already, and re-applying them would mean
+    // registering the logon task on every single launch.
+    private int _appliedSettings = -1;
+    private bool _startupApplied;
+    private bool _silenceApplied;
+    private readonly Halo.Api.HaloApi _api;
+
+    // The token is generated the first time the API is switched on, not shipped as a default: a default
+    // token is the same token on every install, which is no token at all. Written straight through rather
+    // than staged, because the panel has to be able to show the user what it is.
+    private Halo.Api.HaloApi.Config ApiConfig()
+    {
+        var current = _settings.Current;
+        bool on = current.Bool("api.enabled", false);
+        string token = current.Text("api.token", "");
+        if (on && token.Length == 0)
+        {
+            token = Guid.NewGuid().ToString("n");
+            _settings.Set("api.token", token);
+        }
+        return new Halo.Api.HaloApi.Config(
+            on,
+            int.TryParse(current.Text("api.port", ""), out var port) && port is > 1023 and < 65536
+                ? port : Halo.Api.HaloApi.DefaultPort,
+            token,
+            current.Bool("api.notify", true),
+            current.Bool("api.ask", true),
+            current.Bool("api.state", false),
+            // control and settings are off by default and stay that way: one is a program pressing
+            // buttons on your desktop, the other is a program rewriting how Halo behaves.
+            current.Bool("api.control", false),
+            current.Bool("api.settings", false));
+    }
+
+
+
+    private void SyncSettings()
+    {
+        int version = _settings.Version;
+        if (version == _appliedSettings) return;
+        _appliedSettings = version;
+        var current = _settings.Current;
+
+        // "Start with Windows" is not a value anything reads - it is a scheduled task that either exists or
+        // does not. Reconciled from here rather than from the panel's Apply so that a settings.json edited
+        // by hand, or restored from a backup, still ends up telling the truth about the machine.
+        bool startup = current.Bool(Halo.Settings.SettingsKeys.StartWithWindows, true);
+        if (startup != _startupApplied)
+        {
+            _startupApplied = startup;
+            Autostart(startup);
+        }
+
+        bool pin = current.Bool(Halo.Settings.SettingsKeys.OverFullscreen, _pinned);
+        if (pin != _pinned)
+        {
+            _pinned = pin;
+            try { System.IO.File.WriteAllText(PinPath, _pinned ? "1" : "0"); } catch { }
+        }
+
+        // Both directions, and reversible: BannerGate recorded each app's ORIGINAL ShowBanner before it
+        // wrote a zero, so switching this off puts every one of them back.
+        _api.Reconcile();   // switching it off must close the socket, not leave it refusing
+
+        bool silence = current.Bool("notifications.silence", false);
+        if (silence != _silenceApplied)
+        {
+            _silenceApplied = silence;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try { if (silence) Halo.Notifications.BannerGate.Enable(); else Halo.Notifications.BannerGate.Restore(); }
+                catch { }
+            });
+        }
+
+        bool recordable = current.Bool(Halo.Settings.SettingsKeys.InCaptures, _recordable);
+        if (recordable != _recordable)
+        {
+            _recordable = recordable;
+            try { System.IO.File.WriteAllText(RecordablePath, _recordable ? "1" : "0"); } catch { }
+            try { _notch.SetCapturable(_recordable); } catch { }
+        }
+
+        // "105%" -> 1.05. The corner drag writes the same number the other way, so the panel's slider and
+        // the drag are two handles on one value rather than two settings that overwrite each other.
+        if (Scale(current.Text(Halo.Settings.SettingsKeys.Scale, "")) is { } scale
+            && Math.Abs(scale - _notch.Scale) > 0.001f)
+        {
+            _notch.Scale = scale;
+            try { _notch.SaveScale(); } catch { }
+        }
+    }
+
+    // Halo.Hooks owns what "start with Windows" means - the installer and the uninstaller call the same
+    // two commands - so the pill asks it rather than growing a second copy of the task XML. Off the tick,
+    // because spawning a process on the render thread is a visible stutter.
+    private static void Autostart(bool on)
+    {
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                string hooks = System.IO.Path.Combine(AppContext.BaseDirectory, "Halo.Hooks.exe");
+                if (!System.IO.File.Exists(hooks)) return;
+                var psi = new System.Diagnostics.ProcessStartInfo(hooks)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                psi.ArgumentList.Add(on ? "install-autostart" : "uninstall-autostart");
+                if (on) psi.ArgumentList.Add(Environment.ProcessPath ?? "");
+                using var p = System.Diagnostics.Process.Start(psi);
+                p?.WaitForExit(20_000);
+            }
+            catch { }
+        });
+    }
+
+    // Read per frame, which is free: SettingsStore hands back an immutable snapshot and these are two
+    // dictionary lookups. Anything cached here would need invalidating, and the last thing this file needs
+    // is another thing to keep in step.
+    private float MotionScale => _settings.Current.Text(Halo.Settings.SettingsKeys.Motion, "Soft") switch
+    {
+        "Reduced" => 0.35f,
+        "Standard" => 1.55f,
+        _ => 1f,
+    };
+
+    private float GlassScale => _settings.Current.Text(Halo.Settings.SettingsKeys.Glass, "Balanced") switch
+    {
+        "Light" => 0.66f,
+        "Strong" => 1.34f,
+        _ => 1f,
+    };
+
+    private static float? Scale(string text)
+    {
+        if (text.Length == 0) return null;
+        string digits = text.TrimEnd('%');
+        return float.TryParse(digits, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var pct)
+            ? Math.Clamp(pct / 100f, 0.7f, 1.6f)
+            : null;
+    }
+
     private void CheckAlerts()
     {
         long now = Environment.TickCount64;
         if (now - _alertAt < 1000) return;
         _alertAt = now;
-        if (_pinned) _notch.AssertTopmost(); // keep a pinned pill above fullscreen apps (survives reboot/autostart)
-        CheckBattery();
-        CheckLimit("Claude", ClaudeCode.Limits.FiveHour, ClaudeCode.Limits.FiveHourReset, "5-hour");
-        CheckLimit("Claude", ClaudeCode.Limits.Week, ClaudeCode.Limits.WeekReset, "weekly");
-        // "weekly" was a guess about the second bucket's length that nothing here ever verified; the
-        // rollout only tells us the order. Positional names cannot be wrong about a window Codex may
-        // not even have.
-        CheckLimit("Codex", CodexLimits.PrimaryFrac, CodexLimits.PrimaryReset, "primary");
-        CheckLimit("Codex", CodexLimits.SecondaryFrac, CodexLimits.SecondaryReset, "secondary");
-        CheckInternet();
-        CheckContext();
+        SyncSettings();
+        if (Pinned(_pinned)) _notch.AssertTopmost(); // keep a pinned pill above fullscreen apps (survives reboot/autostart)
+
+        // Each alert is switchable on its own, because they are not one feature: somebody who wants to
+        // know their battery is dying does not necessarily want an hourly chime. The CHECK is skipped, not
+        // just the banner, so a condition that came and went while an alert was off does not fire the
+        // moment it is switched back on - the latches inside each Check are edge-triggered and would
+        // otherwise see the whole episode as one long edge.
+        ReloadOffset();
+        if (Alert("battery")) CheckBattery();
+        if (Alert("limit"))
+        {
+            CheckLimit("Claude", ClaudeCode.Limits.FiveHour, ClaudeCode.Limits.FiveHourReset, "5-hour");
+            CheckLimit("Claude", ClaudeCode.Limits.Week, ClaudeCode.Limits.WeekReset, "weekly");
+            // "weekly" was a guess about the second bucket's length that nothing here ever verified; the
+            // rollout only tells us the order. Positional names cannot be wrong about a window Codex may
+            // not even have.
+            CheckLimit("Codex", CodexLimits.PrimaryFrac, CodexLimits.PrimaryReset, "primary");
+            CheckLimit("Codex", CodexLimits.SecondaryFrac, CodexLimits.SecondaryReset, "secondary");
+        }
+        if (Alert("internet")) CheckInternet();
+        if (Alert("context")) CheckContext();
         CheckCompact();
-        CheckHourly();
+        if (Alert("hourly", on: false)) CheckHourly();
         Almanac.Poke();   // idempotent: arms the half-hourly weather refresh once, ~20s after launch
     }
 
@@ -632,10 +843,18 @@ internal sealed class NotchController
     private void CheckCompact()
     {
         int pid = 0;
+        string? key = null;
         for (int s = 0; s < StatusStore.MaxSessions && pid == 0; s++)
-            if (_claudeStore.SessionLive(s) is { State: "compacting", Pid: > 0 } st) pid = st.Pid;
-        if (pid > 0) ClaudeCode.CompactProgress.Poke(pid);
-        else if (ClaudeCode.CompactProgress.Tokens >= 0) ClaudeCode.CompactProgress.Done();
+            // Compacting(), not the raw state: an Esc'd compact leaves "compacting" on disk forever
+            // (nothing fires a hook for an interrupt), and polling it kept the cancelled figure alive.
+            if (_claudeStore.SessionLive(s) is { State: "compacting", Pid: > 0 } st
+                && Widgets.ClaudeCodeWidget.Compacting(st))
+            {
+                pid = st.Pid;
+                key = st.StartedAt;
+            }
+        if (pid > 0) ClaudeCode.CompactProgress.Poke(pid, key);
+        else ClaudeCode.CompactProgress.Done();
     }
 
     // on the hour (2:00, 3:00 …) a small glance banner with the time. Init to the current hour so
@@ -705,7 +924,16 @@ internal sealed class NotchController
     // Two rungs rather than one. A single 20% latch meant a laptop that went 19% → 6% said nothing the
     // second time, which is the moment the warning is actually for; the tier only ever ratchets DOWN while
     // unplugged, so the second banner costs one more interruption and never nags. Plugging in re-arms both.
+    // Descending, unlike the CPU and RAM ladders: a battery gets WORSE as the number falls. The user's
+    // value is "low", the 10% critical step below it is kept, and a low set at or under 10 collapses the
+    // two into one warning rather than firing twice at the same moment.
     private static readonly int[] BatteryTiers = [20, 10];
+
+    private static int[] BatteryLadder()
+    {
+        int low = Halo.Settings.SettingsStore.Percent("alert.batteryAt", 20);
+        return low <= 10 ? [low] : [low, 10];
+    }
     private int _battTier = -1;
 
     private void CheckBattery()
@@ -714,7 +942,7 @@ internal sealed class NotchController
         bool onBattery = s.ACLineStatus == 0;   // 1 = plugged, 255 = unknown
         int pct = s.BatteryLifePercent;          // 255 = unknown
         if (!onBattery || pct > 100) { _battTier = -1; return; }   // plugged / unknown → re-arm
-        int tier = BatteryTier(pct);
+        int tier = BatteryTier(pct, BatteryLadder());
         if (tier <= _battTier) { if (tier < 0) _battTier = -1; return; }
         _battTier = tier;
         bool dead = tier >= 1;
@@ -729,10 +957,14 @@ internal sealed class NotchController
 
     // -1 above the first rung, then 0 (low) and 1 (critical). Pure so the ratchet can be tested without a
     // battery to drain.
-    internal static int BatteryTier(int pct)
+    internal static int BatteryTier(int pct) => BatteryTier(pct, BatteryTiers);
+
+    // The ladder is a parameter so the ratchet stays testable against a fixed one while the running app
+    // passes the user's.
+    internal static int BatteryTier(int pct, int[] ladder)
     {
         int t = -1;
-        for (int i = 0; i < BatteryTiers.Length; i++) if (pct <= BatteryTiers[i]) t = i;
+        for (int i = 0; i < ladder.Length; i++) if (pct <= ladder[i]) t = i;
         return t;
     }
 
@@ -756,7 +988,7 @@ internal sealed class NotchController
     // 30min of the recorded one; plus a hard 6h cooldown per key regardless.
     private void CheckLimit(string app, float util, DateTimeOffset reset, string window)
     {
-        if (util < 0.80f) return;                   // below threshold (or unknown)
+        if (util < Halo.Settings.SettingsStore.Percent("alert.limitAt", 80) / 100f) return;   // below threshold (or unknown)
         string key = app + window;
         if (_limitFired.TryGetValue(key, out var f)
             && (DateTime.UtcNow - f.at < TimeSpan.FromHours(6)
@@ -843,6 +1075,8 @@ internal sealed class NotchController
     private long _lastFrameAt;
     private void Frame()
     {
+        DrainPosted();   // whatever the local API asked for, applied on the thread that owns the window
+
         long frameNow = Environment.TickCount64;
         _dt = _lastFrameAt == 0 ? 0.008f : Math.Clamp((frameNow - _lastFrameAt) / 1000f, 0.001f, 0.05f);
         _lastFrameAt = frameNow;
@@ -861,7 +1095,7 @@ internal sealed class NotchController
         // Program Files - which an unpackaged app in LOCALAPPDATA cannot be. So the once-a-second assert in
         // CheckAlerts stays, which is what recovers a pill buried by ordinary windows, and fullscreen video
         // is left as the platform's answer rather than papered over with something that breaks other things.
-        bool fullscreen = !_pinned && _notch.IsFullscreen(fg); // pinned: stay over games/movies
+        bool fullscreen = !Pinned(_pinned) && _notch.IsFullscreen(fg); // pinned: stay over games/movies
         var active = fullscreen ? [] : ActiveIndices();
         // a live/queued toast overrides the fullscreen hide: the pill stays empty (active = [])
         // but the banner still wakes and renders over the game
@@ -903,7 +1137,7 @@ internal sealed class NotchController
             bool desktopBacked = _widgets[i] is CodexWidget codex && codex.IsDesktop;
             _agentNotices.Observe(i, _widgets[i].AgentNotice, now, desktopBacked, allowSelection: _drop < 0f);
         }
-        _agentNotices.Tick(now, i => _widgets[i].IsActive, allowSelection: _drop < 0f);
+        _agentNotices.Tick(now, Live, allowSelection: _drop < 0f);
         if (_drop < 0f)
             _primary = _agentNotices.Primary;
         if (!_empty && Array.IndexOf(active, _primary) < 0)
@@ -949,11 +1183,11 @@ internal sealed class NotchController
         // Still swappable — an explicit pick wins, and a live compact-done notice keeps its 4s slot.
         if (_drop < 0f && !_empty && _userPicked < 0 && !notice)
             for (int i = 0; i < _widgets.Length; i++)
-                if (_widgets[i] is DownloadWidget && _widgets[i].IsActive)
+                if (_widgets[i] is DownloadWidget && Live(i))
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
 
         // a just-connected BT device briefly owns the collapsed pill (device + battery ring), then releases
-        if (_drop < 0f && _btWidget.IsActive)
+        if (_drop < 0f && _btWidget.IsActive && _settings.Enabled(Halo.Settings.FeatureId.Bluetooth))
             for (int i = 0; i < _widgets.Length; i++)
                 if (_widgets[i] is BtWidget) { _primary = i; _agentNotices.SetPrimary(i); break; }
 
@@ -963,7 +1197,8 @@ internal sealed class NotchController
         // instant DragActive clears and the tray never shows ("همون دانلودر باز میشه بجای File Tray").
         if (_prevDragActive && !FileTray.DragActive) _trayShowUntil = Environment.TickCount64 + 2500;
         _prevDragActive = FileTray.DragActive;
-        if (_drop < 0f && (FileTray.DragActive || Environment.TickCount64 < _trayShowUntil))
+        if (_drop < 0f && (FileTray.DragActive || Environment.TickCount64 < _trayShowUntil)
+            && _settings.Enabled(Halo.Settings.FeatureId.FileTray))
             for (int i = 0; i < _widgets.Length; i++)
                 if (_widgets[i] is FileTray)
                 { _primary = i; _agentNotices.SetPrimary(i); break; }
@@ -971,7 +1206,7 @@ internal sealed class NotchController
         // a supported app just appeared → toss its icon out of the pill into the swap circle
         for (int i = 0; i < _widgets.Length; i++)
         {
-            bool isAct = _widgets[i].IsActive;
+            bool isAct = Live(i);
             if (isAct && !_prevActive[i] && !fullscreen && _drop < 0f)
             {
                 if (i == _primary) _arrive = 0f; // became the pill itself → bloom
@@ -1018,7 +1253,10 @@ internal sealed class NotchController
             }
         }
 
-        if (_askTyped != null || _asks.Pending != null || _greet != GreetingKind.None)
+        // Draining rather than simply not reading: a feature switched back on must not replay every
+        // toast that arrived while it was off.
+        if (_askTyped != null || _asks.Pending != null || _greet != GreetingKind.None
+            || !_settings.Enabled(Halo.Settings.FeatureId.Notifications))
         { while (_notifSrc.Dequeue() is not null) { } }
         else if (_notif == null && !_notifClosing && _progress <= 0.02f && _drop < 0f
             && _notifSrc.Dequeue() is { } item)
@@ -1040,7 +1278,7 @@ internal sealed class NotchController
         if (_notif != null && _asks.Pending != null && !_notifDetailOn) _notifClosing = true;
         float prevAskT = _askT;
         int prevAskHover = _askHover;
-        var pendingAsk = _notif == null ? _asks.Pending : null;
+        var pendingAsk = _notif == null && _settings.Current.Bool("claude.ask", true) ? _asks.Pending : null;
         if (pendingAsk?.Nonce != _ask?.Nonce)
         {
             EndTyping();   // before _ask moves, so the draft is filed against the question it was written for
@@ -1125,10 +1363,16 @@ internal sealed class NotchController
         UpdateMove(p, down, hovered);
         // an empty pill has nothing to expand into; a live banner owns the pill until it's gone;
         // while dragging, the pill stays collapsed so it's a small puck to move
-        bool open = (hovered || notice || FileTray.DragActive) && !_empty && _notif == null && !_moving;
+        // _apiHold is a fourth reason to be open. It cannot be done by faking `hovered`, which is
+        // recomputed from the real cursor every frame and would overwrite it within 8ms.
+        bool open = (hovered || notice || FileTray.DragActive || _apiHold)
+            && !_empty && _notif == null && !_moving;
 
         int dir = open ? 1 : -1;
-        float step = _dt / (open ? OpenSeconds : CloseSeconds);
+        // Motion is one multiplier on the time constants rather than a second set of them: the shapes of
+        // the eases are the design and are not up for negotiation, only how long they take. Reduced is
+        // nearly instant rather than zero, because a pill that teleports reads as a glitch.
+        float step = _dt / ((open ? OpenSeconds : CloseSeconds) * MotionScale);
         // a live file drag snaps to full size INSTANTLY (no glide): a half-grown window lets the cursor
         // fall past the drop-zone the user sees onto the app behind, which then opens the file instead of
         // the tray catching it ("یه صفحه دیگه باز میشه"). The reliable drop target must be full-size at once.
@@ -1189,9 +1433,10 @@ internal sealed class NotchController
         if (_askTyped == null && (fg != _lastFg || startExpand))
         {
             // the pill follows the session you're inside (skip while a notice/drop owns it)
-            if (fg != _lastFg && _drop < 0f && !_agentNotices.IsOpen(now))
+            bool follow = _settings.Current.Bool(Halo.Settings.SettingsKeys.FollowFocus, true);
+            if (follow && fg != _lastFg && _drop < 0f && !_agentNotices.IsOpen(now))
                 FollowForeground(fg);
-            if (fg != _lastFg) FollowForegroundMedia(ProcessNameOf(fg)); // in the player you're looking at → show the other
+            if (follow && fg != _lastFg) FollowForegroundMedia(ProcessNameOf(fg)); // in the player you're looking at → show the other
             _lastFg = fg;
             bool desk = _notch.ProbeBehind(out _behind);
             deskChanged = desk != _lastDesktop;
@@ -1374,11 +1619,37 @@ internal sealed class NotchController
         return _stripKinds.ConvertAll(k => byKind[k].ToArray());
     }
 
+    private readonly Halo.Settings.SettingsStore _settings;
+
+    // "Has this widget got something to say" and "has the user left it switched on" are two different
+    // questions, and the pill asks the combined one in half a dozen places. Live() is that combined
+    // question, so a feature switched off in the panel cannot leak back in through whichever call site
+    // was written before the setting existed.
+    private bool Live(int i)
+    {
+        var feature = FeatureOf(_widgets[i]);
+        return _widgets[i].IsActive && (feature is null || _settings.Enabled(feature.Value));
+    }
+
+    // Widget type to the switch that governs it. The media family is two classes and one switch: a user
+    // turning off "Media" means all of it, not "all of it except VLC".
+    private static Halo.Settings.FeatureId? FeatureOf(IWidget widget) => widget switch
+    {
+        MediaWidget or VlcWidget => Halo.Settings.FeatureId.Media,
+        DownloadWidget => Halo.Settings.FeatureId.Downloads,
+        FileTray => Halo.Settings.FeatureId.FileTray,
+        Widgets.BtWidget => Halo.Settings.FeatureId.Bluetooth,
+        ClaudeCodeWidget => Halo.Settings.FeatureId.ClaudeCode,
+        CodexWidget => Halo.Settings.FeatureId.Codex,
+        GenericAgentWidget => Halo.Settings.FeatureId.GenericAgents,
+        _ => null,
+    };
+
     private int[] ActiveIndices()
     {
         var active = new List<int>(_widgets.Length);
         for (int i = 0; i < _widgets.Length; i++)
-            if (_widgets[i].IsActive)
+            if (Live(i))
                 active.Add(i);
         return [.. active];
     }
@@ -1398,6 +1669,7 @@ internal sealed class NotchController
     private int WidgetVersion()
     {
         int v = Privacy.Version; // repaint when mic/camera use toggles (the dot)
+        v += _settings.Version;  // a feature switched off changes WHICH widgets exist, so it is a repaint
         foreach (var wgt in _widgets) v += wgt.Version;
         return v;
     }
@@ -1740,8 +2012,10 @@ internal sealed class NotchController
             r = (int)Lerp(r, 6, s);
         }
         bool glass = !_lastDesktop;
-        int cT = glass ? TintAppCollapsed : TintDeskCollapsed;
-        int eT = glass ? TintAppExpanded : TintDeskExpanded;
+        // Glass strength moves the TINT, not the blur: the blur is DWM's and has one knob, which is on
+        // or off. Less tint = more wallpaper through the pill, which is what the setting is about.
+        int cT = (int)((glass ? TintAppCollapsed : TintDeskCollapsed) * GlassScale);
+        int eT = (int)((glass ? TintAppExpanded : TintDeskExpanded) * GlassScale);
         int tint = (int)Lerp(cT, eT, t);
         // empty & idle (no privacy dot to show): fade the slim tab down to an alpha≈1 strip — invisible
         // to the eye but still a live OLE hit-target, so a dragged file wakes the tray at the notch home.
@@ -1863,7 +2137,9 @@ internal sealed class NotchController
             : _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
             : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
-        bool pin = _notif == null && _ask == null && _greet == GreetingKind.None; // no chrome on a banner
+        // ...and no pin button on the tray's own surface: it is pinned regardless there, so the button
+        // could only lie about what it does.
+        bool pin = _notif == null && _ask == null && _greet == GreetingKind.None && !TrayFront;
         _curW = w;
         _curH = h;
         _notch.OffsetX = _offsetX; // where the pill is parked (drag-to-move)
@@ -1984,7 +2260,7 @@ internal sealed class NotchController
             if (pid == 0) return;
             for (int i = 0; i < _widgets.Length; i++)
             {
-                if (i == _primary || !_widgets[i].IsActive) continue;
+                if (i == _primary || !Live(i)) continue;
                 foreach (var owner in _widgets[i].OwnerPids)
                     if (owner == (int)pid)
                     {
@@ -2081,7 +2357,9 @@ internal sealed class NotchController
 
     private bool UpdatePinGesture(Win32.POINT p, bool down)
     {
-        bool over = _progress > 0.9f && _notif == null && OverPin(p);
+        // the same condition that hides the pin has to disarm it, or the tray leaves an invisible control
+        // sitting in the corner that still toggles when clicked
+        bool over = _progress > 0.9f && _notif == null && !TrayFront && OverPin(p);
         if (down && !_lastMouseDown)
         {
             if (!over) return false;
@@ -2146,11 +2424,87 @@ internal sealed class NotchController
     // The pin art, and the whole state readout: the pill has no menu, so these three shapes are the only
     // place the two settings are visible.
     //   dim outline      nothing on
-    //   fully lit        pinned
-    //   lit head only    shows up in screenshots and recordings
+    //   solid slate      pinned
+    //   lit amber head   shows up in screenshots and recordings
+    // Pinned was amber, and amber on a dark pill is the brightest thing on screen - which is wrong for a
+    // setting you turn on once and then live with. It is a cool grey now: still unmistakably filled rather
+    // than outlined, but it stops advertising itself. Amber is left to mean one thing only, "this shows up
+    // in captures", which is a state worth noticing, and the two no longer have to be told apart by
+    // remembering which shade of yellow meant what.
     // holdT grows the head while a hold is in progress, so the gesture is visibly doing something well
     // before it fires — a hold with no feedback reads as a click that did not register.
     // static so the `--render-pin` dev hook can draw it in isolation.
+    // cool grey, deliberately close in weight to the pill's own text rather than to an accent
+    private static readonly Color Slate = Color.FromArgb(255, 154, 165, 180);
+
+    // A ball on a spike, lit from the top-left, at 14 pixels across.
+    //
+    // A flat disc with one white blob on it is what this was, and at this size that reads as a sticker.
+    // Three things turn it into an object and all three are cheap: the rim goes to roughly 55% of the base
+    // colour so the sphere has a terminator instead of a hard edge; a contact shadow sits under it so it is
+    // resting on the pill rather than floating in front of it; and the needle is a two-stop gradient across
+    // its width, lit on the same side as the head, which is what stops it looking like a flat triangle.
+    private static void Sphere(Graphics g, RectangleF head, float hr, GraphicsPath? needle, float a,
+        Color baseColor, Color? needleColor = null)
+    {
+        int A(float f) => (int)Math.Clamp(f * a, 0, 255);
+        Color Tint(Color c, float k) => Color.FromArgb(A(255),
+            (int)Math.Clamp(c.R * k, 0, 255),
+            (int)Math.Clamp(c.G * k, 0, 255),
+            (int)Math.Clamp(c.B * k, 0, 255));
+        Color Shade(float k) => Tint(baseColor, k);
+
+        // the needle first, so the head's shadow lands on top of where the two meet
+        if (needle != null)
+        {
+            var nc = needleColor ?? baseColor;
+            using var nb = new LinearGradientBrush(
+                new PointF(-3f * hr, 0), new PointF(3f * hr, 0), Tint(nc, 1.16f), Tint(nc, 0.52f));
+            g.FillPath(nb, needle);
+        }
+
+        using (var shadow = new GraphicsPath())
+        {
+            shadow.AddEllipse(head.X + hr * 0.16f, head.Y + hr * 0.42f, head.Width * 0.92f, head.Height * 0.92f);
+            using var sb = new PathGradientBrush(shadow)
+            {
+                CenterColor = Color.FromArgb(A(96), 0, 0, 0),
+                SurroundColors = [Color.FromArgb(0, 0, 0, 0)],
+            };
+            g.FillPath(sb, shadow);
+        }
+
+        using (var hp = new GraphicsPath())
+        {
+            hp.AddEllipse(head);
+            using var pgb = new PathGradientBrush(hp)
+            {
+                // the light source sits up and to the left, which is where every other lit surface in this
+                // app is lit from - the glass edges included
+                CenterPoint = new PointF(head.X + hr * 0.60f, head.Y + hr * 0.58f),
+                CenterColor = Shade(1.34f),
+                SurroundColors = [Shade(0.55f)],
+            };
+            g.FillPath(pgb, hp);
+        }
+
+        // a small, tight specular rather than a broad wash: a big soft blob reads as wet plastic
+        using (var spec = new GraphicsPath())
+        {
+            spec.AddEllipse(head.X + hr * 0.34f, head.Y + hr * 0.30f, hr * 0.62f, hr * 0.62f);
+            using var sb = new PathGradientBrush(spec)
+            {
+                CenterColor = Color.FromArgb(A(215), 255, 255, 255),
+                SurroundColors = [Color.FromArgb(0, 255, 255, 255)],
+            };
+            g.FillPath(sb, spec);
+        }
+
+        // a cool rim light along the bottom-right edge - the bounce that tells you the far side is round
+        using (var rim = new Pen(Color.FromArgb(A(70), 255, 255, 255), Math.Max(0.7f, hr * 0.11f)))
+            g.DrawArc(rim, head.X + 0.6f, head.Y + 0.6f, head.Width - 1.2f, head.Height - 1.2f, 20f, 130f);
+    }
+
     internal static void DrawPushpin(Graphics g, RectangleF r, bool pinned, float hover, float a,
         bool recordable = false, float holdT = 0f)
     {
@@ -2178,49 +2532,24 @@ internal sealed class NotchController
             // glance rather than by remembering which colour meant what.
             // When it is ALSO pinned the needle goes a muted amber instead of white, or the two settings
             // collapse into one picture and tapping to unpin appears to do nothing at all.
-            var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
+            var amber = Color.FromArgb(255, 255, 200, 92);
             if (pinned)
             {
-                using var nb = new SolidBrush(Color.FromArgb((int)(150 * a), 255, 200, 92));
-                g.FillPath(nb, needle);
+                // slate needle under an amber head: both settings are on, and they stay two readable
+                // objects instead of collapsing into one picture
+                Sphere(g, head, hr, needle, a, amber, Slate);
             }
             else
             {
-                using var pen = new Pen(Color.FromArgb((int)((122 + 78 * hover) * a), 255, 255, 255), 1.7f * u)
-                { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round };
-                g.DrawPath(pen, needle);
+                using (var pen = new Pen(Color.FromArgb((int)((122 + 78 * hover) * a), 255, 255, 255), 1.7f * u)
+                       { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawPath(pen, needle);
+                Sphere(g, head, hr, null, a, amber);
             }
-            using (var hp = new GraphicsPath())
-            {
-                hp.AddEllipse(head);
-                using var pgb = new PathGradientBrush(hp)
-                {
-                    CenterPoint = new PointF(head.X + hr * 0.62f, head.Y + hr * 0.62f),
-                    CenterColor = Color.FromArgb((int)(255 * a), 255, 236, 182),
-                    SurroundColors = new[] { amber },
-                };
-                g.FillPath(pgb, hp);
-            }
-            using var gloss = new SolidBrush(Color.FromArgb((int)(115 * a), 255, 255, 255));
-            g.FillEllipse(gloss, head.X + hr * 0.28f, head.Y + hr * 0.26f, hr * 0.8f, hr * 0.8f);
         }
         else if (pinned)
         {
-            var amber = Color.FromArgb((int)(255 * a), 255, 200, 92);
-            using (var nb = new SolidBrush(amber)) g.FillPath(nb, needle);
-            using (var hp = new GraphicsPath())
-            {
-                hp.AddEllipse(head);         // glossy head: bright top-left → amber, like a lit dome
-                using var pgb = new PathGradientBrush(hp)
-                {
-                    CenterPoint = new PointF(head.X + hr * 0.62f, head.Y + hr * 0.62f),
-                    CenterColor = Color.FromArgb((int)(255 * a), 255, 236, 182),
-                    SurroundColors = new[] { amber },
-                };
-                g.FillPath(pgb, hp);
-            }
-            using var gloss = new SolidBrush(Color.FromArgb((int)(115 * a), 255, 255, 255));
-            g.FillEllipse(gloss, head.X + hr * 0.28f, head.Y + hr * 0.26f, hr * 0.8f, hr * 0.8f);
+            Sphere(g, head, hr, needle, a, Slate);
         }
         else
         {
@@ -2317,6 +2646,7 @@ internal sealed class NotchController
     // thread (WndProc), same as OnTick. ponytail: temp PNGs live in %TEMP%, which Windows reaps itself.
     private void OnClipboardImage(Bitmap shot, bool isScreenshot)
     {
+        if (!Alert("clipboard")) return;
         string path = "";
         try
         {
@@ -2356,7 +2686,8 @@ internal sealed class NotchController
             }
             // same window + real change = Alt+Shift. But Windows applies a per-app input language a beat
             // AFTER focus lands, which looks identical to an in-window switch — ignore the first ~600ms.
-            if (_lastLangId != 0 && lang != _lastLangId && now - _langFgSince > 600) ShowLanguageNotif(lang);
+            if (_lastLangId != 0 && lang != _lastLangId && now - _langFgSince > 600 && Alert("language"))
+                ShowLanguageNotif(lang);
             _lastLangId = lang;
         }
         catch { }
@@ -2464,17 +2795,52 @@ internal sealed class NotchController
     {
         try { if (float.TryParse(System.IO.File.ReadAllText(OffsetPath), System.Globalization.CultureInfo.InvariantCulture, out var v)) _offsetX = v; }
         catch { }
-        try { _pinned = System.IO.File.ReadAllText(PinPath).Trim() == "1"; } catch { }
+        // settings.json is the authority; the loose `pinned` file is only read when the setting has never
+        // been written, so an install that predates the panel keeps the pin it had.
+        try
+        {
+            string legacy = System.IO.File.Exists(PinPath) && System.IO.File.ReadAllText(PinPath).Trim() == "1"
+                ? "on" : "off";
+            _pinned = _settings.Current.Bool(Halo.Settings.SettingsKeys.OverFullscreen, legacy == "on");
+        }
+        catch { }
+    }
+
+    // The panel's "Reset position" rewrites this file, and nothing here was reading it after startup - so
+    // the button appeared to do nothing until Halo was restarted. Timestamped rather than read every
+    // second, and SaveOffset records its own write so the pill does not react to itself.
+    private DateTime _offsetStamp;
+
+    private void ReloadOffset()
+    {
+        try
+        {
+            var stamp = System.IO.File.GetLastWriteTimeUtc(OffsetPath);
+            if (stamp == _offsetStamp) return;
+            _offsetStamp = stamp;
+            if (float.TryParse(System.IO.File.ReadAllText(OffsetPath),
+                    System.Globalization.CultureInfo.InvariantCulture, out var v) && v != _offsetX)
+                _offsetX = v;
+        }
+        catch { }
     }
 
     private void SaveOffset()
     {
-        try { System.IO.File.WriteAllText(OffsetPath, _offsetX.ToString(System.Globalization.CultureInfo.InvariantCulture)); } catch { }
+        try
+        {
+            System.IO.File.WriteAllText(OffsetPath, _offsetX.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            _offsetStamp = System.IO.File.GetLastWriteTimeUtc(OffsetPath);
+        }
+        catch { }
     }
 
+    // Through the settings file as well as the loose one, because the pill and the panel are two windows
+    // onto one setting: tapping the pushpin has to leave the panel's switch showing what actually happened.
     private void SavePin()
     {
         try { System.IO.File.WriteAllText(PinPath, _pinned ? "1" : "0"); } catch { }
+        try { _settings.Set(Halo.Settings.SettingsKeys.OverFullscreen, _pinned ? "on" : "off"); } catch { }
     }
 
     // Off by default, which is the whole point: the common case keeps the cheap screen-DC glass. Turn it on
@@ -2485,12 +2851,19 @@ internal sealed class NotchController
 
     private void LoadRecordable()
     {
-        try { _recordable = System.IO.File.ReadAllText(RecordablePath).Trim() == "1"; } catch { }
+        try
+        {
+            bool legacy = System.IO.File.Exists(RecordablePath)
+                && System.IO.File.ReadAllText(RecordablePath).Trim() == "1";
+            _recordable = _settings.Current.Bool(Halo.Settings.SettingsKeys.InCaptures, legacy);
+        }
+        catch { }
     }
 
     private void SaveRecordable()
     {
         try { System.IO.File.WriteAllText(RecordablePath, _recordable ? "1" : "0"); } catch { }
+        try { _settings.Set(Halo.Settings.SettingsKeys.InCaptures, _recordable ? "on" : "off"); } catch { }
     }
 
     // press-and-hold ~3s on the pill → collapse + follow the cursor; release drops it; parked near the

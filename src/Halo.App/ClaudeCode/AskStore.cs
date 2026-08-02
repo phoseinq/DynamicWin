@@ -202,17 +202,20 @@ internal sealed class AskStore
         return true;
     }
 
-    // Words of your own, into the box's own free-text field.
+    // Words of your own, one row PAST the last option - so the way in is to walk down off the end of the
+    // list. Established by driving a live box and reading back what came out, not from any documentation of
+    // the key map.
     //
-    // The field is real - the tool's own description calls it "a skip button and a free-text input box for
-    // custom answers" - but nothing reaches it by typing: letters sent while an option is highlighted go
-    // nowhere and Enter just takes the highlight. It sits one row PAST the last option, so the way in is to
-    // walk down off the end of the list. Established by driving a live box and reading back what came out
-    // (the answer arrived as "halo typed this"), not from any documentation of the key map.
+    // What that row IS has changed under us. It used to be a bare free-text field you could type straight
+    // into; the box now puts "Chat about this" there, a row that has to be activated before anything is
+    // listening, and activating it cancels the question and hands the words to the prompt instead. Hence
+    // the Enter before the text: without it the letters were going into a highlighted row that ignores
+    // them, and the trailing Enter then triggered the row with nothing typed - the question just vanished.
+    // Harmless in the old shape too, where Enter on the field did nothing worth avoiding.
     //
     // The walk is done here and now, because its result is what tells the caller whether the banner may
-    // come down; the typing and the Enter follow on the pool, since the box needs a moment to swap fields
-    // and a quarter-second of sleeps on the render thread is a visible stutter.
+    // come down; everything after it runs on the pool, since the box needs a moment between each step and
+    // half a second of sleeps on the render thread is a visible stutter.
     private static bool Write(PendingAsk ask, string text)
     {
         int pid = ask.Pid, rows = ask.Options.Count;
@@ -223,6 +226,8 @@ internal sealed class AskStore
             try
             {
                 System.Threading.Thread.Sleep(140);
+                if (!Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkEnter)) return;
+                System.Threading.Thread.Sleep(180);   // the box tears down and the prompt takes focus
                 if (!Interop.ConsoleRead.Type(pid, text)) return;
                 System.Threading.Thread.Sleep(140);
                 Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkEnter);

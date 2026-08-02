@@ -1,5 +1,235 @@
 # Halo — progress
 
+## 2026-08-02 (later): the pill stops queueing at boot, and a dead question stops haunting the banner
+
+**Release 0/0, 591 tests pass. Deployed** — `Halo.Hooks` published self-contained and its four files
+copied over `%LOCALAPPDATA%\Programs\Halo`, `Halo.App.dll` hot-swapped and the pill relaunched. Not
+pushed yet, and the installer change has not been through `build.ps1`.
+
+**Halo came up last on every boot, and nothing about Halo was slow.** Root cause: autostart was a
+shortcut in the user's Startup folder, and Explorer does not launch those when it finds them — it holds
+them until the desktop has settled and then releases them one at a time with I/O priority knocked down.
+On this machine there are seventeen other entries in `HKCU\...\Run` sharing that queue. Replaced with a
+logon-triggered scheduled task, `src/Halo.Hooks/Autostart.cs`, driven by three new argv commands
+(`install-autostart <exe>` / `uninstall-autostart` / `query-autostart`, the last answering through its
+exit code) so the installer, the uninstaller and the settings panel all mean the same thing by "start
+with Windows". Registered through `schtasks /Create /XML` — already on every box, no elevation needed for
+a task that runs as the calling user, no new dependency. The four settings that each cost somebody a
+boot: `Delay PT0S` (the UI's default is a *randomised* delay), `Priority 4` (tasks default to 7, below
+normal, which hands straight back the sluggishness this fixes), `ExecutionTimeLimit PT0S` (the default is
+three days, after which the scheduler would kill a healthy pill), and `DisallowStartIfOnBatteries false`
+(defaults true, i.e. silently never starts on a laptop). `Halo.iss` calls it from `[Run]` under the
+existing `startup` task, calls `uninstall-autostart` when that box is *unticked* so an upgrade can turn it
+off, and drops the Startup shortcut — including deleting the legacy one, so this is fixed on every
+machine that takes the update and not just the one it was noticed on. Verified by registering it here and
+reading the XML back out of the scheduler: `Priority 4`, `PT0S`, `IgnoreNew`, state Ready. Worth noting,
+because it was a surprise: Halo was in *no* autostart location on this machine — not the Startup folder,
+not either Run key — so the current install's autostart had gone missing at some point.
+
+**A question answered with "Chat about this" left its banner up for half an hour.** Root cause: the only
+thing that took a mirrored question down was the `tool-done` (PostToolUse) hook, and picking "Chat about
+this" — or Esc — *rejects* the call, and a rejected call never reaches PostToolUse. So the ask file
+survived, and the pill went on mirroring a question nobody was being asked until the 30-minute backstop
+expired it. `Halo.Hooks/Program.cs` now clears on `prompt` and `stop` as well; both fire on that path and
+both mean the same thing — this agent is doing something else now. Verified live by planting a synthetic
+ask and watching `stop` take it away.
+
+**The pending count only ever climbed.** Flicking a toggle off and straight back on left "2 changes
+waiting" for a draft that would have written nothing. Root cause: `Store.Set` compared the new value
+against the value on *disk*, and a row nobody has ever changed has no saved value at all — so it compared
+`"on"` against `""`, decided they differed, and recorded a no-op. What a row *started* as is the saved
+value if there is one and the catalog's default if there is not, which is what every reader in that class
+already did; `Set` was the one place that did not, so it now takes the fallback as a parameter. Verified
+with a new `roundtrip` render mode that sets a row and puts it straight back: the footer is gone and the
+page flows down into the space it had.
+
+**The alert thresholds are numbers you set, not constants.** CPU (`50/70/85/95`), RAM (`70/85/95`),
+battery (`20/10`), context (`0.80`) and usage limits (`0.80`) were all hardcoded. Five sliders now, and
+the design question was what a single number should do to a ladder that escalates: the chosen value
+becomes the FIRST rung and the fixed rungs above it survive, so picking 80 for CPU gives 80/85/95 and
+picking 60 gives 60/70/85/95. Rungs below the choice are dropped rather than the whole ladder being
+replaced — "warn me later" must not silently also mean "and then never escalate". Battery is the
+descending case, so the user's value is "low", the 10% critical rung is kept beneath it, and a low set at
+or under 10 collapses to one warning instead of firing twice at the same instant. `ContextWarnAt` stopped
+being a `const`, because the banner and the agent ring both key on it and a setting one honoured and the
+other did not would be worse than no setting. Seven tests pin the ladder logic (598 total, was 591) —
+that is the part with behaviour in it; reading a number out of a file is not.
+
+`--render-page <png> <page> bottom` came out of the same work: the detail pane is a ScrollViewer, so a
+render showed only what was above the fold and the rows added at the end of a long page were
+unreviewable.
+
+**The API got the deep surface it was asked for**, across `Api/IHaloHost.cs` and
+`Shell/NotchController.Api.cs`. Reads: `/health`, `/state` (expanded, pinned, scale, offset, mic and
+camera in use, every active widget and which is primary, the banner and the question on screen),
+`/media` (per slot: app, title, artist, playing, progress), `/agents` (Claude and Codex sessions plus
+usage), `/tray`, `/settings`. Writes: `/notify` (now with a duration, a 2FA code and a file to open),
+`/ask`, `/media` (play, pause, toggle, next, previous), `/pill` (expand, collapse, pin, unpin, recenter),
+`/tray` (add files), and `PATCH /settings` — which is every switch in the panel, reachable from code.
+
+An interface rather than the ten delegates the first version was heading for, and split on a rule the
+comments spell out: reads run on the listener's thread and only touch things already published for other
+threads, because a status read that took the render lock would let any local program stall the pill by
+polling it; anything that *changes* something goes through `Post`, drained at the top of `Frame()`, since
+the window, its GDI surfaces and the widget array belong to that thread. Sixteen items per frame, so a
+caller in a loop cannot starve the frame it is running inside. `_apiHold` is a fourth reason for the pill
+to be open rather than a faked hover — hover is recomputed from the real cursor every 8ms and would
+overwrite it. Capabilities are five groups, not one switch per URL, and `control` and `settings` default
+off: one is a program pressing buttons on your desktop, the other is a program rewriting how Halo behaves.
+`/health` answers whatever is switched off, so a caller can tell "Halo is not listening" from "Halo is
+listening and will not do that for you".
+
+Caught while testing rather than by reading: `/agents` was reporting `claudeWeeklyPct: -100`. `Limits`
+carries `-1` for "not known yet" and it was being multiplied by 100 into a confident minus-hundred
+percent. Null now — the same rule the pill keeps on its own surfaces. All of it verified against the
+running pill with curl: health, state, media, agents, a pill held open and released, a real pause and
+resume of Spotify, a non-existent tray path reported as `{"added":0,"skipped":1}`, and a settings PATCH
+written and reverted. Left switched off afterwards, which is the shipping default.
+
+**A track with no cover kept the app's logo for its whole duration.** Root cause: Spotify hands SMTC the
+track's text as soon as playback starts and fetches the artwork afterwards, so the first
+`TryGetMediaPropertiesAsync` after a track change routinely returns an empty thumbnail — and `RefreshProps`
+asked exactly once. `ChaseArt` re-asks on a widening delay (350ms → 6s, six attempts), stopping the instant
+art lands, the track moves on, or the session goes; a track that genuinely has no artwork costs six cheap
+property reads over fifteen seconds and then nothing. `_trackEpoch` is the cancellation, so a chase started
+for the song before last cannot staple its cover onto whatever is playing now. `EnsureArt` decodes once per
+`_trackKey`, which would have ignored art arriving for a track it had already decoded without — hence
+`_artStale`. Verified on `--render-widget media` against a live Spotify session: real cover, not the logo.
+
+**The subtitle button is VLC and mpv only now.** `C` toggles captions on YouTube and nowhere else — on any
+other site, in any other tab, or in a video with no track, the key lands in the page and does nothing,
+while the pill went on offering a subtitle button for it. VLC and mpv genuinely toggle on `V` and keep it.
+Same rule as the SMTC playback-rate control: hide what the underlying app cannot honour.
+
+**Halo has its own local API** (`src/Halo.App/Api/HaloApi.cs`) and a panel page for it: post a
+notification, ask a question, read what is on screen. `TcpListener` with a hand-written HTTP/1.1 reader
+rather than `HttpListener` — the latter goes through http.sys and needs a `netsh http add urlacl`
+reservation for any prefix an unelevated process wants, which means an admin step at install time for an
+app that deliberately never asks for elevation. Binding a loopback port needs nothing. Bound to
+`127.0.0.1` explicitly, so the token protects against other programs on this machine rather than against
+a network that cannot reach it either way.
+
+`/ask` was the part worth designing rather than writing. It drops an envelope into the directory
+`AskStore` already watches, in the format it already parses, with `tool: "HaloApi"` — and that one field
+is what makes it work: a *question* is answered by typing a number into an agent's terminal, which an HTTP
+caller has not got, whereas anything else is answered by writing `answer-{nonce}.json`, which is exactly
+the file the caller then polls. Zero changes to the pill's ask machinery. The token generates itself the
+first time the API is switched on rather than shipping as a default, because a default token is the same
+token on every install. Verified end to end against the running pill: 401 without a token, `{"ok":true}`
+for a notification, 403 for a capability left off, an `ack-` file appearing on disk within the second
+(the pill saw the question), the answer round-tripping as `{"answered":true,"choice":"Ship it"}`, and the
+socket refusing connections again once the setting went back off. Left off — it is opt-in, and a listening
+socket is not something to leave behind after a test.
+
+**A burst of identical toasts folds into one banner.** Chrome held six claude.ai notifications while it
+was closed and released them all in the same second, and the pill played six banners in a row — the
+report was "when I open the browser it attacks". Faithful mirroring is right; six copies of one thing is
+not six things. Same AUMID *and* same title inside the queue fold together, the newest body wins, the
+banner's eyebrow reads `TELEGRAM  +5 MORE` so the count is visible rather than five banners silently
+disappearing, and the dwell grows 1.5s per fold to a 12s ceiling. `--render-notif` carries a stacked
+sample now, which is where you check the count does not run into the timestamp.
+
+**The settings panel was decorative — nothing in the pill read a single one of its rows.** `SettingsFile`,
+`SettingsStore` (watcher + 1s poll) and `FeatureCatalog` all existed and had *no callers anywhere in
+`Halo.App`*. Now every key in the panel's catalog is consumed, and that is checked rather than claimed:
+a script pulls every key out of `Catalog.cs` and greps the app for it, and the run is clean.
+
+The chokepoints, one per kind. Widget visibility became `Live(i)` — `IsActive && the feature is switched
+on` — because "has this got something to say" and "has the user left it on" are different questions the
+pill was asking in six places; `FeatureOf()` maps widget type to switch, with the media family two classes
+under one switch, since turning off Media means all of it and not "all of it except VLC". Alerts became
+`Alert("name")`, and the *check* is skipped rather than the banner, or an episode that came and went while
+an alert was off would fire the moment it was switched back on — the latches are edge-triggered and would
+see the whole episode as one edge. Same reasoning drains the toast queue when mirroring is off instead of
+just not reading it. `appearance.motion` is one multiplier on the open/close time constants rather than a
+second set of them (the eases are the design; only their duration is negotiable) and Reduced is 0.35 rather
+than zero, because a pill that teleports reads as a glitch. `appearance.glass` moves the tint, not the
+blur — the blur is DWM's and has one knob.
+
+Three settings had two homes and disagreed. `pinned`, `capturable` and `scale` were loose files the pill
+wrote and the panel never saw, so tapping the pushpin left the panel's switch lying. settings.json is the
+authority now, the loose files stay as a fallback for installs that predate the panel, and the pill writes
+*through* the store when it changes one itself. This machine had `general.capture: off` in settings.json
+and `capturable: 1` on disk — they have been disagreeing for a while, and the live value won.
+
+`general.startup` is not a value anything reads but a scheduled task that exists or does not, reconciled
+from `SyncSettings` through Halo.Hooks so a hand-edited settings.json still ends up telling the truth about
+the machine. `notifications.silence` was worse than unwired: `NotifSource` called `BannerGate.Enable()`
+unconditionally, so the pill rewrote every app's `ShowBanner` on first run while the panel's switch — which
+defaults to *off* — sat there saying it had not. It is driven from the setting now, both ways. And "Reset
+position" wrote a file nothing re-read after startup, so it appeared to do nothing until Halo was
+restarted; the pill watches the offset file's timestamp and records its own writes so it does not react to
+itself.
+
+Verified live rather than by inspection: with the pill running, `general.capture` was flipped in
+settings.json by hand and `%LOCALAPPDATA%\Halo\capturable` went to `1` within the second, no restart. The
+Bluetooth widget is absent from the strip on this machine, which is `feature.bluetooth: off` doing its job.
+
+**Halo has a tray icon** (`Shell/TrayIcon.cs`), which is the first handle on it that is not the pill:
+until now settings could only be reached by clicking the shortcut a second time and quitting meant Task
+Manager. Left click opens the panel, right click adds restart and quit. Hand-written `Shell_NotifyIcon`
+on a `HWND_MESSAGE` window rather than WinForms' `NotifyIcon` — one icon is not worth
+`System.Windows.Forms`, and its pump is not the one this app runs. Three details that are each a known
+way to get this wrong: it re-adds itself on the `TaskbarCreated` broadcast, or an Explorer restart makes
+it vanish until Halo is; `NIM_SETVERSION` to v4, without which the callback does not carry the cursor and
+the menu lands on the wrong monitor; and `SetForegroundWindow` before `TrackPopupMenuEx` plus a `WM_NULL`
+after, or the menu will not dismiss on an outside click. `Program.Restart` releases the single-instance
+mutex *before* spawning the replacement, or the new pill finds the name taken and opens settings instead.
+Verified through `HKCU\Control Panel\NotifyIconSettings`, which now carries a Halo entry.
+
+**The pushpin is a grey sphere, not a yellow sticker.** Pinned was amber — the brightest thing on a dark
+pill, for a setting you turn on once and forget. It is slate now, and amber is left to mean only "this
+shows up in captures", so the two states stop having to be told apart by remembering which yellow was
+which. The art itself was a flat disc with a white blob: `Sphere()` gives it a terminator at ~55% of the
+base colour, a contact shadow so it rests on the pill instead of floating, a tight specular, a bottom-right
+rim light, and a needle shaded across its width from the same light direction. Eyeballed on `--render-pin`.
+
+**The File Tray pins the pill by itself while it holds files, and hides the pin button while it does.**
+The tray is the one surface that is a place you *put* something rather than a readout, and losing sight of
+it mid-drag is how a file gets dropped on the wrong window. `FileTray.Holding` drives a new
+`NotchController.Pinned(userPin)` that every topmost decision now goes through; `_pinned` itself is never
+written, so the user's own setting survives a file passing through. The button is hidden *and* disarmed by
+the same condition — hiding it alone would have left an invisible control in the corner that still toggled.
+Its header also sat about seven pixels off the dashed box, because the drop zone started at `HeaderH - 8`
+and reached up into the header; added `--render-widget <png> tray` to see it, since the empty drop zone
+only exists mid-drag over a window that cannot be screenshotted.
+
+**The settings panel had never once opened from the shortcut, on any install.** Root cause: clicking the
+icon while Halo runs hits the single-instance mutex and calls `OpenSettingsPanel`, which looks for
+`Halo.Settings.exe` beside `Halo.App.exe` and returns silently when it is missing — and `build.ps1`
+published only `Halo.App` and `Halo.Hooks`, so it was always missing. Added to the publish list, the sign
+list and the installer's kill list. Found the adjacent one while there: `Halo.iss` killed `Halo.exe`,
+which is not a process this product has ever had, so every upgrade was copying over a live locked pill.
+
+**Panel chrome, four fixes, all verified on a render.** The minimise/maximise/close buttons did nothing:
+`WindowChrome.UseAeroCaptionButtons` was `False`, and since DWM draws those three regardless, all three
+were visible and dead. Set true with `CaptionHeight=44`, which also hands dragging and
+double-click-to-maximise back to the system and retires the hand-wired `DragMove`. The title-bar mark was
+a hand-drawn ring at x=31 while the nav glyphs below it sit at x=41 — a second, slightly different Halo
+mark, ten pixels out of column, in the one place users compare against the taskbar; it is the real
+`halo.ico` now, centred on 41. The scrollbar was 7px of bright furniture down a pane of glass and is a
+3px hairline that lifts on hover. The rail's rows were flat transparent, which made the selected one the
+only object in the rail; they are glass like everything else, with selection keeping the accent bar via a
+`3,1,1,1` border. Dead `Caption`/`CloseCaption` styles deleted with the buttons they drew.
+
+**Every section heading carries an icon** (`Section.Glyph`), tinted with the page's accent so a page
+reads as one colour rather than the accent living only in the rail. Code points picked off a
+`--render-fluent` sheet of 32 candidates first — none tofu.
+
+**`Halo.Settings --render-page <png> [page]`**, the panel's equivalent of Halo.App's `--render-*` hooks.
+The window is never shown: the visual tree is measured, arranged and rendered straight to a bitmap over a
+stand-in gradient backdrop, because translucent surfaces cannot be judged against nothing. It replaces a
+screenshot script that drove the real cursor — moving the pointer onto a nav row, clicking it and grabbing
+the screen — which fought the user for their own mouse and still captured whatever the window manager put
+on top.
+
+**The banner's fourth row was promising something the terminal no longer offers.** It read "Something
+else / type your own answer", from when the row past the options was a bare free-text field. That box now
+puts "Chat about this" there: a row that must be *activated*, which cancels the question and hands the
+words to the prompt. The keystrokes still land in the right place, so only the label was a lie — renamed
+in `AskBanner.Other`, and `AskStore.Write` now presses Enter before typing, without which the letters
+went into a highlighted row that ignores them and the trailing Enter fired the row with nothing typed.
+
 ## 2026-08-02: the compacting figure is real, one tile per alert, and the greeting actually shows up
 
 **Release 0/0, 552 tests pass (was 523). Deployed** — `dist\app` published self-contained and copied

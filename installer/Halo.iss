@@ -50,24 +50,36 @@ Source: "..\dist\app\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs c
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
-; autostart = a shortcut in the user's Startup folder (matches how the app expects to be launched)
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
+; NOT a Startup-folder shortcut any more. Explorer holds those back until the desktop has settled and
+; then releases them one at a time at reduced priority, so the pill was arriving last on every boot.
+; install-autostart registers a logon-triggered scheduled task instead (see Halo.Hooks\Autostart.cs) and
+; deletes the old shortcut on upgrade, so this is fixed for everyone, not just on the machine it was
+; noticed on.
 
 [Run]
+Filename: "{app}\Halo.Hooks.exe"; Parameters: "install-autostart ""{app}\{#AppExe}"""; StatusMsg: "Setting Halo to start with Windows..."; Tasks: startup; Flags: runhidden waituntilterminated
+; unticking the box on an upgrade has to actually take the task away — otherwise the old one keeps
+; launching Halo and the tick looks like it did nothing
+Filename: "{app}\Halo.Hooks.exe"; Parameters: "uninstall-autostart"; Tasks: not startup; Flags: runhidden waituntilterminated
 Filename: "{app}\Halo.Hooks.exe"; Parameters: "install-codex-hooks ""{app}\Halo.Hooks.exe"""; StatusMsg: "Configuring Codex integration..."; Tasks: codexhooks; Flags: runhidden waituntilterminated
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName} now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{app}\Halo.Hooks.exe"; Parameters: "uninstall-autostart"; Flags: runhidden waituntilterminated; RunOnceId: "HaloAutostart"
 Filename: "{app}\Halo.Hooks.exe"; Parameters: "uninstall-codex-hooks"; Flags: runhidden waituntilterminated; RunOnceId: "HaloCodexHooks"
 
 [Code]
 // Halo is a layered-window tool with no normal window, so the Restart Manager can't close it.
 // Kill any running instance before copying files (so updates don't hit locked exes).
+// This named Halo.exe, which is not a process this product has ever had — the pill is Halo.App.exe — so
+// upgrades were copying over a live, locked executable. Halo.Settings.exe holds the same lock when the
+// panel happens to be open.
 procedure KillHalo;
 var rc: Integer;
 begin
-  Exec('taskkill.exe', '/f /im Halo.exe',      '', SW_HIDE, ewWaitUntilTerminated, rc);
-  Exec('taskkill.exe', '/f /im Halo.Hooks.exe', '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Exec('taskkill.exe', '/f /im {#AppExe}',         '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Exec('taskkill.exe', '/f /im Halo.Hooks.exe',    '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Exec('taskkill.exe', '/f /im Halo.Settings.exe', '', SW_HIDE, ewWaitUntilTerminated, rc);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

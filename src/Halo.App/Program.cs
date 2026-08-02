@@ -268,7 +268,9 @@ internal static class Program
         // clicking the shortcut, the Start tile or the taskbar icon DOES, and the only thing the user can
         // have meant by it is "show me Halo". The pill is always on screen already, so the useful answer
         // is the settings panel.
-        using var mutex = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
+        // static rather than `using`, because Restart has to hand the name over to the incoming process
+        // before this one exits, and a local would still be held while the new pill was starting up
+        _instance = new System.Threading.Mutex(true, "Halo.Notch.SingleInstance", out bool created);
         if (!created) { OpenSettingsPanel(); return; }
         if (args.Contains("--settings", StringComparer.OrdinalIgnoreCase)) OpenSettingsPanel();
 
@@ -281,6 +283,7 @@ internal static class Program
             Halo.ClaudeCode.NetMon.Poke();  // start the connectivity heartbeat (ring goes red on outage)
             Halo.Codex.CodexNetMon.Poke();  // prefetch the independent OpenAI connectivity heartbeat
             _ = new NotchController(notch);
+            _tray = new Halo.Shell.TrayIcon();   // the only handle on Halo that is not the pill
             Win32.RunMessageLoop();
         }
         catch (Exception ex)
@@ -746,6 +749,9 @@ internal static class Program
                 App = "Telegram",
                 Title = "\u0633\u0644\u0627\u0645",
                 Body = "\u0628\u0632\u0646 \u0628\u0631\u06cc\u0645",
+                // a folded burst: the eyebrow has to admit how many it stands for, and this is the one
+                // place to check that the count does not run into the timestamp on the right
+                Stacked = 5,
             }, 0f, false);
 
             // Third: the DETAIL state on a mixed-direction body — a Persian sentence followed by a block of
@@ -1118,6 +1124,19 @@ internal static class Program
     // The panel is its own executable, shipped beside this one. Separate on purpose: it is a WPF window
     // with a compositor backdrop and this process is a layered GDI+ surface that must never block, and a
     // settings window that cannot take the pill down with it is worth one more exe.
+    private static IWidget Tray()
+    {
+        var tray = new FileTray();
+        FileTray.SetDragActive(true);   // the drop zone is only drawn mid-drag
+        return tray;
+    }
+
+    private static System.Threading.Mutex? _instance;
+    private static Halo.Shell.TrayIcon? _tray;
+
+    // Silent when the exe is not beside us, which hid a packaging bug for the whole life of the panel:
+    // build.ps1 published Halo.App and Halo.Hooks and not Halo.Settings, so this returned here every
+    // single time and clicking the icon appeared to do nothing at all.
     private static void OpenSettingsPanel()
     {
         try
@@ -1127,6 +1146,38 @@ internal static class Program
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
         }
         catch { }
+    }
+
+    internal static void OpenSettings() => OpenSettingsPanel();
+
+    // The tray icon has to come down by hand. Letting the process die with it still registered leaves a
+    // ghost in the overflow that only disappears once the pointer happens to pass over it.
+    private static void Teardown()
+    {
+        try { _tray?.Dispose(); _tray = null; } catch { }
+        try { _instance?.ReleaseMutex(); } catch { }
+        try { _instance?.Dispose(); _instance = null; } catch { }
+    }
+
+    internal static void Quit()
+    {
+        Teardown();
+        Environment.Exit(0);
+    }
+
+    // Order matters: the name has to be free before the replacement starts, or the new process finds the
+    // mutex still taken, decides Halo is already running, and opens the settings panel instead of a pill.
+    internal static void Restart()
+    {
+        string exe = Environment.ProcessPath ?? "";
+        Teardown();
+        try
+        {
+            if (exe.Length > 0)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = true });
+        }
+        catch { }
+        Environment.Exit(0);
     }
 
     // dev-only: a labelled sheet of Segoe Fluent Icons code points. Either a contiguous block
@@ -1277,6 +1328,10 @@ internal static class Program
                     Halo.Codex.CodexSurface.Cli, () => { }, observeLimits: _ => { }),
                 "codex" => new CodexWidget(new Halo.Codex.CodexStatusStore(), Halo.Codex.CodexSurface.Cli, () => { }),
                 "download" => new DownloadWidget(),
+                // the empty drop zone, which is the state nobody can screenshot: it only exists while a
+                // drag is in flight over an uncapturable window, so the header/box spacing was being
+                // tuned blind
+                "tray" => Tray(),
                 _ => new MediaWidget(new MediaSessions(), 0),
             };
             for (int i = 0; i < 100 && !w.IsActive; i++)

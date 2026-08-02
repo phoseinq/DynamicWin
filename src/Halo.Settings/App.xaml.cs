@@ -20,6 +20,14 @@ public partial class App : Application
     // to something as easy to double-press as a taskbar button.
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Length >= 2 && e.Args[0] == "--render-page")
+        {
+            Preview.Render(e.Args[1], e.Args.Length >= 3 ? e.Args[2] : "home",
+                e.Args.Length >= 4 ? e.Args[3] : "");
+            Shutdown();
+            return;
+        }
+
         _instance = new Mutex(true, "Halo.Settings.SingleInstance", out bool created);
         if (!created)
         {

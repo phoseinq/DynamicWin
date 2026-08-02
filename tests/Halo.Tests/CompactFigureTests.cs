@@ -80,6 +80,54 @@ public class CompactFigureTests
     public void ThePercentageOnlyAppearsOnceThereIsSomethingRealToDivideBy(int percent, int tokens, string expected)
         => Assert.Equal(expected, CompactProgress.Caption(percent, tokens));
 
+    // Reported live: a compact cancelled at 40% was still reading 40% when the NEXT one started. Two
+    // causes, both here. The reader keyed itself on the pid, but a second /compact in the same terminal
+    // is the same pid - so nothing said "different compact". And the branch that clears the figure ran
+    // only while a token reading was on screen, which the bar path deliberately never leaves.
+    [Fact]
+    public void ASecondCompactInTheSameTerminalStartsFromNothing()
+    {
+        CompactProgress.Track(4242, "2026-08-02T10:00:00Z");
+        CompactProgress.Percent = 40;
+        Assert.True(CompactProgress.Track(4242, "2026-08-02T10:05:00Z"));
+        Assert.Equal(-1, CompactProgress.Percent);
+        CompactProgress.Done();
+    }
+
+    [Fact]
+    public void TheSameCompactKeepsItsFigureAcrossTicks()
+    {
+        CompactProgress.Track(4242, "2026-08-02T10:00:00Z");
+        CompactProgress.Percent = 40;
+        Assert.False(CompactProgress.Track(4242, "2026-08-02T10:00:00Z"));
+        Assert.Equal(40, CompactProgress.Percent);
+        CompactProgress.Done();
+    }
+
+    // the bar path sets Tokens to -1 on purpose, so "is there a reading to clear" cannot be asked of it
+    [Fact]
+    public void TheEndOfACompactClearsABarOnlyReading()
+    {
+        CompactProgress.Track(4242, "2026-08-02T10:00:00Z");
+        CompactProgress.Percent = 40;
+        CompactProgress.Tokens = -1;
+        CompactProgress.Done();
+        Assert.Equal(-1, CompactProgress.Percent);
+        Assert.Equal("", CompactProgress.Caption());
+    }
+
+    // Done() is called on every tick that has no compact running, which is nearly all of them; it must
+    // not bump the version and repaint the pill forever.
+    [Fact]
+    public void NothingToClearIsNotAChange()
+    {
+        CompactProgress.Done();
+        int version = CompactProgress.Version;
+        CompactProgress.Done();
+        CompactProgress.Done();
+        Assert.Equal(version, CompactProgress.Version);
+    }
+
     // While a compact runs the pill carries both the progress and the clock, and what is left is the
     // verb's budget. With "2m 0s" beside it the mood arrived cut mid-word ("big histo..."); with the
     // seconds gone the same line fits whole. Seconds under a minute stay - that is the whole reading then.

@@ -51,6 +51,29 @@ internal sealed class SettingsStore : IDisposable
         get { lock (_gate) return _current; }
     }
 
+    // The one the widgets read. A widget is constructed before the controller has anything to hand it and
+    // is drawn from a static context, so threading a store through eight constructors would have meant
+    // eight constructors changed for one boolean. Null until the controller is up - and null means "on",
+    // because a widget must draw normally in the render hooks, which build a widget with no controller at
+    // all.
+    internal static SettingsStore? Shared { get; set; }
+
+    internal static bool On(string key, bool fallback = true)
+        => Shared?.Current.Bool(key, fallback) ?? fallback;
+
+    // Percentages are stored the way the panel shows them - "80%" - because the panel's slider stops are
+    // display strings and round-tripping them through a number would mean two spellings of one value in
+    // one file. The trailing sign is simply dropped here.
+    internal static int Percent(string key, int fallback)
+    {
+        try
+        {
+            string text = (Shared?.Current.Text(key, "") ?? "").TrimEnd('%', ' ');
+            return int.TryParse(text, out var value) && value is >= 0 and <= 100 ? value : fallback;
+        }
+        catch { return fallback; }
+    }
+
     internal int Version => Volatile.Read(ref _version);
 
     internal event Action<SettingsFile>? Changed;

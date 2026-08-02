@@ -57,14 +57,19 @@ internal static class AskBanner
     // hook: the hook forwards the tool's options untouched, and this one is the pill's, so inventing it
     // there would put a choice in the payload that Claude never offered. Reference identity is how the
     // click handler tells it apart - the label is display text and a real option could carry the same one.
-    internal static readonly AskOption Other = new("Something else", "type your own answer");
+    //
+    // It said "Something else / type your own answer", which is what the row past the options USED to be.
+    // The box does not have a free-text field there any more - it has "Chat about this", which cancels the
+    // question and drops the words into the prompt instead. The keystrokes never changed and still land in
+    // the right place (see AskStore.Write); only the promise on the row was stale, and a row that names a
+    // different thing than the terminal is offering is how you get someone answering the wrong question.
+    internal static readonly AskOption Other = new("Chat about this", "say it in your own words");
 
     internal static bool IsOther(AskOption option) => ReferenceEquals(option, Other);
 
-    // Back on. It was off for exactly as long as it took to find the way into the box's own free-text
-    // field - one row past the last option, reachable only by walking down off the end of the list (see
-    // AskStore.Write). The row is Halo's, not Claude's: the hook never invents an option Claude did not
-    // offer, and this one is appended by the banner and delivered as words rather than as a number.
+    // Reachable only by walking down off the end of the list (see AskStore.Write). The row is Halo's, not
+    // Claude's: the hook never invents an option Claude did not offer, and this one is appended by the
+    // banner and delivered as words rather than as a number.
     private static bool HasOther(PendingAsk ask) => ask.IsQuestion;
 
     // Layout is separate from painting so the hit-test and the drawing cannot disagree - a row you can see

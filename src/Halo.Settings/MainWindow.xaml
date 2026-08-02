@@ -2,16 +2,19 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="Halo settings" Height="580" Width="880" MinHeight="470" MinWidth="720"
+        Title="Halo settings" Height="640" Width="840" MinHeight="520" MinWidth="760"
         WindowStartupLocation="CenterScreen" Background="Transparent"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True"
         FontFamily="Segoe UI Variable Text, Segoe UI">
     <!-- GlassFrameThickness -1 extends the frame on all four sides, which is the whole difference
          between a window sitting ON the acrylic and one with a bright inset down its left edge.
-         CaptionHeight 0 because the title bar below is ours; the drag is wired by hand. -->
+         CaptionHeight matches the title row, and UseAeroCaptionButtons stays TRUE: it was False, and
+         since DWM draws minimise/maximise/close whether or not WPF hit-tests them, all three were
+         visible and none of them did anything. With the real caption in place, dragging and
+         double-click-to-maximise are the system's job again and the hand-wired DragMove is gone. -->
     <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="0" CornerRadius="0" GlassFrameThickness="-1"
-                            ResizeBorderThickness="6" UseAeroCaptionButtons="False" />
+        <shell:WindowChrome CaptionHeight="44" CornerRadius="0" GlassFrameThickness="-1"
+                            ResizeBorderThickness="6" UseAeroCaptionButtons="True" />
     </shell:WindowChrome.WindowChrome>
 
     <Grid>
@@ -23,26 +26,29 @@
         <!-- one full-window tint, not a rectangular patch: the preview's grey block was a patch -->
         <Border Grid.RowSpan="2" Background="{StaticResource Obsidian}" IsHitTestVisible="False" />
 
-        <Grid x:Name="TitleBar" MouseLeftButtonDown="TitleBar_Drag" Background="Transparent">
+        <!-- 31px, not 18: the mark has to sit in the same vertical column as the nav glyphs below it, and
+             those land at x=41 (12 rail + 8 item + 10 pad + half of the 22px icon cell). A 20px mark
+             centred on 41 starts at 31, and the ten pixels it was out by read as the whole title bar
+             being skewed left. -->
+        <Grid x:Name="TitleBar" IsHitTestVisible="False" Margin="31,0,150,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
-                <Image Source="pack://application:,,,/halo.ico" Width="20" Height="20"
-                       VerticalAlignment="Center" RenderOptions.BitmapScalingMode="HighQuality" />
-                <TextBlock Text="Halo settings" Foreground="{StaticResource Ink}" Margin="10,0,0,0"
-                           FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
-                           FontSize="13" VerticalAlignment="Center" />
-            </StackPanel>
-
-            <!-- The caption buttons are the SYSTEM's. Drawing our own beside them is what the first run
-                 did, and Windows drew both; the native ones also carry Snap Layouts on hover, which a
-                 hand-drawn pair silently loses. The column below just keeps the title clear of them. -->
-            <Border Grid.Column="2" Width="150" Background="Transparent" IsHitTestVisible="False" />
+            <!-- The product's real icon, which is what the taskbar and alt-tab show; a hand-drawn ring
+                 here was a second, slightly different Halo mark in the one place users compare against
+                 the taskbar. The drawn ring stays on Home, where 84px is past what the .ico holds. -->
+            <Image Source="halo.ico" Width="20" Height="20" VerticalAlignment="Center"
+                   RenderOptions.BitmapScalingMode="HighQuality" />
+            <TextBlock Grid.Column="1" Text="Halo settings" Foreground="{StaticResource Ink}"
+                       FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                       FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0" />
         </Grid>
+
+        <!-- The caption buttons are the SYSTEM's. Drawing our own beside them is what the first run did,
+             and Windows drew both; the native ones also carry Snap Layouts on hover, which a hand-drawn
+             pair silently loses. The title bar's right padding above is what keeps clear of them. -->
 
         <Grid Grid.Row="1" Margin="12,0,12,12">
             <Grid.ColumnDefinitions>
@@ -51,31 +57,89 @@
             </Grid.ColumnDefinitions>
 
             <Border CornerRadius="20" Background="{StaticResource RailFill}"
-                    BorderBrush="{StaticResource FrostEdge}" BorderThickness="1">
+                    BorderBrush="{StaticResource FrostEdge}" BorderThickness="1" Margin="0,0,12,0">
                 <ScrollViewer VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
                               Focusable="False">
                     <StackPanel x:Name="NavPanel" Margin="0,12" />
                 </ScrollViewer>
             </Border>
 
-            <Grid Grid.Column="1" Margin="24,13,6,10">
+            <Grid Grid.Column="1" Margin="24,13,18,10">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="72" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <StackPanel Margin="0,0,0,14">
+                <StackPanel VerticalAlignment="Top">
                     <TextBlock x:Name="PageTitle" Foreground="{StaticResource Ink}"
                                FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
                                FontSize="27" />
                     <TextBlock x:Name="PageDescription" Foreground="{StaticResource Secondary}"
-                               FontSize="12.5" FontWeight="Medium" Margin="0,3,0,0" TextWrapping="Wrap" />
+                               FontSize="12" FontWeight="Medium" Margin="0,3,0,0" TextWrapping="Wrap" />
                 </StackPanel>
                 <ScrollViewer x:Name="DetailScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled" Focusable="False"
                               Background="Transparent">
-                    <StackPanel x:Name="ContentPanel" Margin="0,2,12,10" />
+                    <StackPanel x:Name="ContentPanel" Margin="0,2,7,8" />
                 </ScrollViewer>
+
+                <!-- Collapsed, not disabled, when there is nothing pending: a permanent bar reading "no
+                     changes to apply" is a permanent apology. Collapsed rather than Hidden so the detail
+                     pane gets the height back and the page is not laid out around a gap. -->
+                <Border x:Name="DraftBar" Grid.Row="2" Visibility="Collapsed"
+                        Margin="0,10,7,0" CornerRadius="14" Padding="14,9"
+                        Background="#220F141C" BorderBrush="{StaticResource FrostEdge}" BorderThickness="1">
+                    <Grid>
+                        <TextBlock x:Name="DraftState" VerticalAlignment="Center" FontSize="11.5"
+                                   FontWeight="Medium" Foreground="{StaticResource Quiet}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="ResetButton" Style="{StaticResource Glass}" Content="Reset"
+                                    Width="104" Height="36" HorizontalContentAlignment="Center"
+                                    Click="Reset_Click" />
+                            <Button x:Name="ApplyButton" Style="{StaticResource Glass}" Content="Apply"
+                                    Width="118" Height="36" Margin="9,0,0,0"
+                                    HorizontalContentAlignment="Center" Click="Apply_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
             </Grid>
+        </Grid>
+
+        <!-- A WPF MessageBox here would be a grey 1990s box in the middle of a pane of glass.
+             Clicking the scrim is Keep editing: dismissing a dialog by clicking away from it must never be
+             the destructive answer. -->
+        <Grid x:Name="Guard" Grid.RowSpan="2" Visibility="Collapsed" Background="#99080B11"
+              MouseLeftButtonDown="GuardScrim_Click">
+            <!-- Auto, not a fixed width. It was 392 holding three buttons that came to 404 with the
+                 padding, so the last one ran off into the edge of the card. -->
+            <Border MinWidth="392" MaxWidth="480" CornerRadius="18" Padding="22,20" VerticalAlignment="Center"
+                    HorizontalAlignment="Center" Background="#F20B1119" BorderThickness="1"
+                    MouseLeftButtonDown="GuardCard_Click">
+                <Border.BorderBrush>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#76FFFFFF" Offset="0" />
+                        <GradientStop Color="#24FFFFFF" Offset="0.46" />
+                        <GradientStop Color="#12FFFFFF" Offset="1" />
+                    </LinearGradientBrush>
+                </Border.BorderBrush>
+                <StackPanel>
+                    <TextBlock Text="You have unapplied changes" Foreground="{StaticResource Ink}"
+                               FontFamily="Segoe UI Variable Display, Segoe UI" FontWeight="SemiBold"
+                               FontSize="17" />
+                    <TextBlock x:Name="GuardDetail" Foreground="{StaticResource Secondary}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,7,0,0" />
+                    <!-- Two, not three. "Apply and close" made a decision this dialog has no business
+                         making: applying is a deliberate press on the footer, and offering it on the way
+                         out turns a closing window into a way to commit changes by accident. -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                        <Button Style="{StaticResource Glass}" Content="Keep editing" Width="118" Height="38"
+                                HorizontalContentAlignment="Center" Click="GuardCancel_Click" />
+                        <Button Style="{StaticResource Glass}" Content="Discard and close" Width="152"
+                                Height="38" Margin="9,0,0,0" HorizontalContentAlignment="Center"
+                                Background="#12FF9A8B" BorderBrush="#66FF9A8B" Click="GuardDiscard_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Window>

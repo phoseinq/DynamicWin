@@ -30,6 +30,7 @@ internal sealed class NotifItem
     public Action? OnActivate;          // local banners (e.g. battery) run this on click instead of launching an app
     public string Code = "";              // 2FA / verification code detected in the text (6 or 8 digits) -> a Copy button
     public bool Copied;                  // set once the Copy button is clicked -> the button shows a check
+    public int Stacked;                  // >0: this banner stands for itself plus N more like it
 
     // clicking the banner reproduces the real toast's click: WpnDb digs the toast's launch args out of
     // wpndatabase.db (the listener API hides them), so we jump to the exact message/photo — not just
@@ -121,6 +122,29 @@ internal sealed class NotifSource
 
     public int Version { get { lock (_lock) { return _version; } } }
 
+    // Chrome held six claude.ai notifications while it was closed and released all of them in the same
+    // second; the pill then played six banners one after another, which is the report "when I open the
+    // browser it attacks". Faithful mirroring is right, but six copies of one thing is not six things.
+    //
+    // Folded into the banner already waiting rather than deduped away: the count is shown, so nothing is
+    // hidden, and the newest body wins because that is the one worth reading. Same app AND same title
+    // only - two different messages from one app are two messages.
+    private bool Stack(NotifItem item)
+    {
+        foreach (var queued in _pending)
+        {
+            if (!string.Equals(queued.Aumid, item.Aumid, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(queued.Title, item.Title, StringComparison.Ordinal)) continue;
+            queued.Stacked++;
+            queued.Body = item.Body;
+            queued.Time = item.Time;
+            // more to read means more time to read it, up to a point
+            queued.Duration = Math.Min(12, queued.Duration + 1.5);
+            return true;
+        }
+        return false;
+    }
+
     public NotifItem? Dequeue()
     {
         lock (_lock) { return _pending.Count > 0 ? _pending.Dequeue() : null; }
@@ -183,7 +207,10 @@ internal sealed class NotifSource
             Log($"access = {access}");
             if (access != UserNotificationListenerAccessStatus.Allowed) return;
             LoadSeen(); // resume from the last-seen id so a restart never re-banners old toasts
-            BannerGate.Enable(); // Halo owns notifications now → per-app native banner off (listener still delivers)
+            // Not unconditional any more: silencing the native banner is a setting, and it defaults to
+            // OFF. Enabling it here regardless meant the pill quietly rewrote every app's ShowBanner on
+            // first run while the panel's switch sat there saying it had not. NotchController drives it
+            // from settings now, both ways, so the switch and the registry agree.
             await Refresh(); // tries to baseline existing toasts; if the platform isn't up yet, the poll baselines instead
             // NotificationChanged is unreliable for unpackaged apps — poll as the real driver
             try { _listener.NotificationChanged += (s, e) => { _ = Refresh(); }; }
@@ -229,6 +256,7 @@ internal sealed class NotifSource
                     if (item != null)
                     {
                         BannerGate.SuppressApp(item.Aumid); // kill this app's native banner going forward (we mirror it)
+                        if (Stack(item)) continue;          // folded into the one already queued
                         _pending.Enqueue(item);
                         // "block": we own this toast now — yank it so Windows' banner/action center
                         // don't double-show it (best effort; the OS banner may flash briefly)

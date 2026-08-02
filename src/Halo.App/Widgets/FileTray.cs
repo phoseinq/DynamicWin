@@ -45,6 +45,12 @@ internal sealed class FileTray : IWidget
     public string Icon => ((char)0xE7B8).ToString(); // MDL2 tray/inbox in the strip circle; real file icon in the pill tile
 
     public bool IsActive { get { lock (_lock) return DragActive || _paths.Count > 0; } }
+
+    // Files parked here are the one thing in the pill that is not a live readout but a place you PUT
+    // something, and losing sight of the thing you are mid-way through moving is how a drag gets dropped
+    // on the wrong window. So while the tray is holding anything the pill stays on top by itself - see
+    // NotchController.Pinned - and the pin button is hidden rather than shown doing nothing.
+    public static bool Holding { get { lock (_lock) return _paths.Count > 0; } }
     public int Version => _version + (DragActive ? (int)(Environment.TickCount64 / 60) : 0); // breathe while dragging
     public bool Animating => DragActive || !_settled; // keep frames coming while cards glide to new slots
 
@@ -160,6 +166,9 @@ internal sealed class FileTray : IWidget
 
     // deleted-on-disk files silently leave the shelf (a dead entry can't be opened, copied or dragged);
     // checked at most every 2s — Snapshot runs per frame
+    // the same snapshot the drawing code takes, exposed for the local API's GET /tray
+    public static string[] Paths() => Snapshot();
+
     private static string[] Snapshot()
     {
         lock (_lock)
@@ -276,7 +285,7 @@ internal sealed class FileTray : IWidget
         using var title = new Font("Segoe UI Semibold", 21f, GraphicsUnit.Pixel);
         using var body = new Font("Segoe UI", 14f, GraphicsUnit.Pixel);
         using (var tb = new SolidBrush(Mul(White, fade)))
-            g.DrawString("File Tray", title, tb, Pad + 20, 14); // clear the top-left pin (matches other widgets)
+            g.DrawString("File Tray", title, tb, Pad + 20, 10); // clear the top-left pin (matches other widgets)
 
         int sel = SelectedCount;
         if (sel > 0) DrawRemoveChip(g, w, fade, sel);
@@ -363,7 +372,9 @@ internal sealed class FileTray : IWidget
 
     private void DrawDropZone(Graphics g, int w, int h, float fade)
     {
-        var box = new RectangleF(Pad, HeaderH - 8, w - Pad * 2, h - (HeaderH - 8) - Pad + 6);
+        // the box used to start at HeaderH - 8, reaching up INTO the header, which left about seven pixels
+        // between the title's descenders and the dashed edge and read as the two touching
+        var box = new RectangleF(Pad, HeaderH - 2, w - Pad * 2, h - (HeaderH - 2) - Pad + 6);
         bool active = DragActive;
         float pulse = 0.5f + 0.5f * MathF.Sin(Environment.TickCount64 / 600f);
         float border = fade * (active ? 0.75f + 0.25f * pulse : 0.5f);
