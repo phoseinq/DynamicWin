@@ -519,6 +519,22 @@ internal sealed partial class NotchController
     // changed the cadence while the eye was tracking a moving edge. So the morph is decided here, per
     // frame, and always wins - it is short, and it is the one moment smoothness is actually being judged.
     // The settled panel still holds 60: that is the measured glass cost, not a guess.
+    // The reported dark flash mid-morph, and it was never the glass. The collapsed preview melted away by
+    // t=0.35 while the expanded content did not begin until t=0.45, so a tenth of the morph drew NEITHER -
+    // an empty tinted pill, which is a dark rectangle. It was easy to miss because it is brief, and because
+    // the geometry rides EaseOutBack and so is already near full size by then: the hole is at its largest
+    // exactly when nothing is in it. They overlap now, and MorphHasContent is the property that says so.
+    // A real crossfade window, not a handoff that merely touches. Closing the gap to zero still left the
+    // sum of the two dipping to ~0.12 right where they met, which is a dimming rather than a flash but is
+    // the same fault. Widened until the faintest moment of the morph is ~0.38 of full ink.
+    internal const float MiniOut = 0.50f, ContentIn = 0.20f;
+    internal static float ContentFade(float t) => Math.Clamp((t - ContentIn) / (1f - ContentIn), 0f, 1f);
+    internal static float MiniFade(float t) => Math.Clamp(1f - t / MiniOut, 0f, 1f);
+
+    // At no point in the morph may both be dark. Stated as a property rather than as two constants,
+    // because the constants are what someone will nudge later.
+    internal static bool MorphHasContent(float t) => ContentFade(t) + MiniFade(t) > 0.3f;
+
     internal static int CadenceFps(bool morphing, int tier) => morphing ? 120 : tier;
     internal static int IntervalMs(int fps) => fps >= 120 ? 8 : fps >= 60 ? 16 : 33;
 
@@ -2088,8 +2104,8 @@ internal sealed partial class NotchController
         // to the eye but still a live OLE hit-target, so a dragged file wakes the tray at the notch home.
         if (_empty && !Privacy.Active)
             tint = (int)Lerp(tint, EmptyCatchAlpha, SmoothStep(_shrink));
-        float fade = Math.Clamp((t - 0.45f) / 0.55f, 0f, 1f);
-        float mini = Math.Clamp(1f - t / 0.35f, 0f, 1f); // collapsed preview: full when collapsed, gone by t=0.35
+        float fade = ContentFade(t);
+        float mini = MiniFade(t);
         // the answerable banner uses the same morph; a toast wins the slot, so this runs only when there
         // is no toast and folds away on its own when the question is answered or expires
         if (_notif == null && _ask != null && _askT > 0f)
@@ -2099,11 +2115,11 @@ internal sealed partial class NotchController
             h = (int)Lerp(h, _askH, ea);
             r = (int)Lerp(r, 26, ea);
             tint = (int)Lerp(cT, glass ? TintAskApp : TintAskDesk, _askT);
-            fade = Math.Clamp((_askT - 0.45f) / 0.55f, 0f, 1f);
+            fade = ContentFade(_askT);
             // the same melt the toast branch does. Without it the collapsed pill keeps drawing straight
             // through the banner - reported as the agent's icon and "cogitating..." sitting on top of the
             // question, which is exactly what it was.
-            mini *= Math.Clamp(1f - _askT / 0.35f, 0f, 1f);
+            mini *= MiniFade(_askT);
         }
         if (_notif != null && _notifT > 0f) // pill → banner morph rides on top of whatever size it had
         {
@@ -2113,8 +2129,8 @@ internal sealed partial class NotchController
             h = (int)Lerp(h, nh, en);
             r = (int)Lerp(r, 26, en);
             tint = (int)Lerp(cT, eT, _notifT);
-            fade = Math.Clamp((_notifT - 0.45f) / 0.55f, 0f, 1f); // banner content fade
-            mini *= Math.Clamp(1f - _notifT / 0.35f, 0f, 1f);     // collapsed preview melts away
+            fade = ContentFade(_notifT);   // banner content fade, same overlap as the hover morph
+            mini *= MiniFade(_notifT);     // collapsed preview melts away
         }
         float arrive = _arrive < 0f ? 1f : 1f - (1f - _arrive) * (1f - _arrive); // easeOutQuad bloom after swap
         mini *= arrive;

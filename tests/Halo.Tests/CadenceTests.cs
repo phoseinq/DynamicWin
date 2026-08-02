@@ -53,4 +53,36 @@ public class CadenceTests
     [Fact]
     public void A_ceiling_above_the_tier_changes_nothing()
         => Assert.Equal(60, NotchController.Capped(60, 120));
+
+    // The dark flash people saw while the pill grew: the collapsed preview was gone by t=0.35 and the
+    // expanded content did not start until t=0.45, so a tenth of the morph drew nothing at all. Swept
+    // rather than spot-checked, because the hole was ten percent wide and a handful of samples walks
+    // straight over it.
+    [Fact]
+    public void Something_is_drawn_at_every_point_of_the_morph()
+    {
+        for (int i = 0; i <= 1000; i++)
+        {
+            float t = i / 1000f;
+            Assert.True(NotchController.MorphHasContent(t),
+                $"nothing drawn at t={t:F3}: content={NotchController.ContentFade(t):F3} "
+                + $"mini={NotchController.MiniFade(t):F3}");
+        }
+    }
+
+    // The two have to overlap, not merely meet: touching at a point is one frame of near-nothing at any
+    // frame rate slow enough to land on it.
+    [Fact]
+    public void The_preview_is_still_up_when_the_content_starts()
+        => Assert.True(NotchController.ContentIn < NotchController.MiniOut,
+            "content must begin before the preview has finished melting");
+
+    [Fact]
+    public void The_ends_are_still_clean()
+    {
+        Assert.Equal(0f, NotchController.ContentFade(0f));
+        Assert.Equal(1f, NotchController.ContentFade(1f));
+        Assert.Equal(1f, NotchController.MiniFade(0f));
+        Assert.Equal(0f, NotchController.MiniFade(1f));
+    }
 }
