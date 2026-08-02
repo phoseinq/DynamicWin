@@ -11,6 +11,10 @@ internal sealed record AskOption(string Label, string Description);
 // A question the hook has parked, waiting for someone to click a chip. Mirrors Halo.Hooks.AskEnvelope;
 // the two projects share no code by design, so the shape is duplicated and the round-trip is pinned by
 // tests on both sides.
+// Which row of the box the click was on. Not derivable from the label: the two rows past the options are
+// Halo's own, and a real option is allowed to carry the same words.
+internal enum AskDelivery { Option, FreeText, Chat }
+
 internal sealed record PendingAsk(
     string Nonce,
     int Pid,
@@ -19,7 +23,13 @@ internal sealed record PendingAsk(
     string? Target,
     string? Question,
     IReadOnlyList<AskOption> Options,
-    DateTimeOffset ExpiresAt)
+    DateTimeOffset ExpiresAt,
+    // Trailing and defaulted so an envelope written by an older hook still deserialises - the hook and the
+    // pill are deployed separately here. Both describe the SHAPE of the box rather than its contents: a
+    // question whose options carry previews is drawn by a different component with no numbered rows past
+    // the options, and multiSelect swaps the list widget underneath.
+    bool MultiSelect = false,
+    bool HasPreview = false)
 {
     internal bool IsQuestion => Tool == "AskUserQuestion";
 }
@@ -145,9 +155,9 @@ internal sealed class AskStore
     // its box, and the pill answers it the way a human at that keyboard would - by typing the number into
     // that terminal. No focus is taken (see ConsoleRead.Type), so answering on the pill does not pull the
     // window forward.
-    internal bool Answer(PendingAsk ask, string label)
+    internal bool Answer(PendingAsk ask, string label, AskDelivery delivery = AskDelivery.Option)
     {
-        if (ask.IsQuestion) return Press(ask, label);
+        if (ask.IsQuestion) return Press(ask, label, delivery);
         try
         {
             string decision = label;
@@ -179,18 +189,21 @@ internal sealed class AskStore
     // would land in whatever DID have focus, and typing a stray digit into someone's editor is a worse
     // failure than the banner simply not working. The banner stays up in that case, because the question
     // in the terminal is still standing too.
-    private bool Press(PendingAsk ask, string label)
+    private bool Press(PendingAsk ask, string label, AskDelivery delivery)
     {
         if (ask.Pid <= 0) { Trace($"no pid for {ask.Nonce}"); return false; }
         int index = -1;
-        for (int i = 0; i < ask.Options.Count && index < 0; i++)
-            if (string.Equals(ask.Options[i].Label, label, StringComparison.Ordinal)) index = i;
+        // the caller says which kind of row was clicked; matching a built-in by its label would let a real
+        // option carrying the same words be delivered as one
+        if (delivery == AskDelivery.Option)
+            for (int i = 0; i < ask.Options.Count && index < 0; i++)
+                if (string.Equals(ask.Options[i].Label, label, StringComparison.Ordinal)) index = i;
 
         bool sent = index >= 0 && index < 9
             // the box numbers its rows from one, and beyond nine there is no single key to send
             ? Interop.ConsoleRead.Type(ask.Pid, (index + 1).ToString())
-            : Write(ask, label);
-        Trace($"{(index >= 0 ? "row " + (index + 1) : "words")} -> pid {ask.Pid} = {sent}");
+            : Write(ask, label, delivery);
+        Trace($"{(index >= 0 ? "row " + (index + 1) : delivery.ToString())} -> pid {ask.Pid} = {sent}");
         if (!sent) return false;
 
         // Dropped locally the moment it is sent rather than waiting for the hook's PostToolUse sweep: the
@@ -202,32 +215,42 @@ internal sealed class AskStore
         return true;
     }
 
-    // Words of your own, one row PAST the last option - so the way in is to walk down off the end of the
-    // list. Established by driving a live box and reading back what came out, not from any documentation of
-    // the key map.
+    // The two rows past the options. Both carry a number and typing it selects them, exactly like an
+    // option - read out of Claude Code's own bundle, where the free-text row sits in the list at N+1 and
+    // the chat row prints its own "N+2." below the list.
     //
-    // What that row IS has changed under us. It used to be a bare free-text field you could type straight
-    // into; the box now puts "Chat about this" there, a row that has to be activated before anything is
-    // listening, and activating it cancels the question and hands the words to the prompt instead. Hence
-    // the Enter before the text: without it the letters were going into a highlighted row that ignores
-    // them, and the trailing Enter then triggered the row with nothing typed - the question just vanished.
-    // Harmless in the old shape too, where Enter on the field did nothing worth avoiding.
+    // This used to walk: Down, Options.Count times, then Enter. That had no safe failure mode. The list
+    // wraps at the bottom, so a count that was one too large did not overshoot harmlessly - it came back
+    // around onto a real option and answered the question with it. And there is only one count to be
+    // right about, while there are two rows, so the walk reached the free-text row while the banner had
+    // labelled it "Chat about this".
     //
-    // The walk is done here and now, because its result is what tells the caller whether the banner may
-    // come down; everything after it runs on the pool, since the box needs a moment between each step and
-    // half a second of sleeps on the render thread is a visible stutter.
-    private static bool Write(PendingAsk ask, string text)
+    // The digit is sent here and now, because whether it went is what tells the caller the banner may come
+    // down; the words run on the pool, since the box needs a moment between steps and half a second of
+    // sleeps on the render thread is a visible stutter.
+    internal static int RowNumber(int optionCount, AskDelivery delivery) => delivery switch
     {
-        int pid = ask.Pid, rows = ask.Options.Count;
-        if (rows <= 0 || string.IsNullOrWhiteSpace(text)) return false;
-        if (!Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkDown, rows)) return false;
+        AskDelivery.FreeText => optionCount + 1,
+        AskDelivery.Chat => optionCount + 2,
+        _ => 0,
+    };
+
+    private static bool Write(PendingAsk ask, string text, AskDelivery delivery)
+    {
+        int pid = ask.Pid;
+        int row = RowNumber(ask.Options.Count, delivery);
+        // one keystroke is one digit, and the wrong digit is a real option being answered with
+        if (row is <= 0 or > 9) return false;
+        // the chat row takes no words - selecting it IS the answer, and the question goes to the prompt
+        if (delivery == AskDelivery.FreeText && string.IsNullOrWhiteSpace(text)) return false;
+        if (!Interop.ConsoleRead.Type(pid, row.ToString())) return false;
+        if (delivery != AskDelivery.FreeText) return true;
         System.Threading.ThreadPool.QueueUserWorkItem(_ =>
         {
             try
             {
+                // the digit selects the row; the field then has to be listening before the letters arrive
                 System.Threading.Thread.Sleep(140);
-                if (!Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkEnter)) return;
-                System.Threading.Thread.Sleep(180);   // the box tears down and the prompt takes focus
                 if (!Interop.ConsoleRead.Type(pid, text)) return;
                 System.Threading.Thread.Sleep(140);
                 Interop.ConsoleRead.Press(pid, Interop.ConsoleRead.VkEnter);
@@ -286,7 +309,11 @@ internal sealed class AskStore
                 o["target"]?.GetValue<string>(),
                 o["question"]?.GetValue<string>(),
                 options,
-                expires);
+                expires,
+                // absent in an envelope from an older hook, and false is the shape the banner has always
+                // assumed, so an un-upgraded pair keeps working rather than drawing nothing
+                o["multiSelect"] is JsonValue mv && mv.TryGetValue<bool>(out var multi) && multi,
+                o["hasPreview"] is JsonValue hv && hv.TryGetValue<bool>(out var prev) && prev);
         }
         catch { return null; }
     }

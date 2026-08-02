@@ -20,7 +20,14 @@ internal sealed record AskEnvelope(
     string? Target,
     string? Question,
     IReadOnlyList<AskOption> Options,
-    DateTimeOffset ExpiresAt)
+    DateTimeOffset ExpiresAt,
+    // The shape of the box, not its contents. The banner draws two rows past the options that Claude Code
+    // draws too - but a question whose options carry previews is rendered by a different component that has
+    // neither of them, and multiSelect swaps the list widget. The pill cannot see either from the options
+    // alone, so the hook forwards them. Trailing and defaulted: an older pill ignores them, and a newer
+    // pill reading an older envelope gets false, which is the shape it always assumed.
+    bool MultiSelect = false,
+    bool HasPreview = false)
 {
     internal bool IsExpired(DateTimeOffset now) => now >= ExpiresAt;
 
@@ -42,6 +49,8 @@ internal sealed record AskEnvelope(
             ["question"] = Question,
             ["options"] = options,
             ["expiresAt"] = ExpiresAt.ToString("o"),
+            ["multiSelect"] = MultiSelect,
+            ["hasPreview"] = HasPreview,
         }.ToJsonString();
     }
 
@@ -74,7 +83,9 @@ internal sealed record AskEnvelope(
                 o["target"]?.GetValue<string>(),
                 o["question"]?.GetValue<string>(),
                 options,
-                expires);
+                expires,
+                o["multiSelect"] is JsonValue mv && mv.TryGetValue<bool>(out var multi) && multi,
+                o["hasPreview"] is JsonValue hv && hv.TryGetValue<bool>(out var prev) && prev);
         }
         catch { return null; }
     }

@@ -1,6 +1,38 @@
 # Halo — progress
 
-## 2026-08-02 (latest): the About page said 1.0.0, and the morph never ran at 120
+## 2026-08-02 (latest): the ask banner had one row standing in for two, and it typed into the wrong one
+
+**Release 0/0, 614 tests pass (8 new). Not deployed, not pushed.** Source-only in
+`.worktrees/claude-master`.
+
+**Reported from a screenshot: the banner showed "Chat about this" where the terminal offered both
+"Type something" and "Chat about this", and the row it drew had a caret and "enter to send" on it
+even though clicking it sent nothing.** Root cause was one `AskOption` appended for what the box
+renders as two different kinds of row.
+
+The rule was not guessed at. Claude Code ships as a Bun-compiled binary with its JS readable inside,
+so the question component was read directly (`%APPDATA%\npm\...\claude-code\bin\claude.exe`, 2.1.220,
+~offset 255258000). What it says: `__other__` is `type:"input"` and appended unconditionally;
+`__chat__` is `type:"text"` and, in an ordinary terminal, rendered *below* the list printing its own
+number `MMr = options.length + 2`. The `qZe` that gates it is Ink's accessibility mode
+(`createContext(!1)`), so it is off by default - which is why the earlier reading of that one branch
+was misleading. A question whose options carry `preview` is a different component again: a Notes
+field, no numbered rows past the options.
+
+Three changes followed. `AskBanner` now has `FreeText` and `Chat` with `BuiltInsFor(ask)` deciding
+presence, and only the free-text row can become the typing field. `AskStore` stopped walking: it used
+to send `Down` × `Options.Count` then `Enter`, which had no safe failure mode, because the list wraps
+- a count one too large came back around and answered with a real option. `RowNumber(count, delivery)`
+types the row's digit instead, refusing above 9 where there is no single key. And `AskEnvelope` gained
+`MultiSelect` / `HasPreview`, which `AskFlow` was already holding in `toolInput` and discarding; both
+are trailing and defaulted so the separately-deployed hook and pill keep working across the change.
+
+Verified: `--render-ask` shows a question with rows 4 and 5 as the two built-ins in order, the typing
+state putting the caret on row 4 while row 5 stays a plain row, and a permission ask with neither.
+**Not yet verified live** - that the digit selects the row the bundle says it does, and that a preview
+question really renders without numbered rows, are still claims read rather than watched.
+
+## 2026-08-02 (earlier today): the About page said 1.0.0, and the morph never ran at 120
 
 **Release 0/0, 606 tests pass (6 new). Not deployed, not pushed** — source-only so far in
 `.worktrees/claude-master`; the running install still has the old numbers.

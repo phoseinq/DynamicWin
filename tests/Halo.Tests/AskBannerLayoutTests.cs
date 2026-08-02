@@ -112,18 +112,60 @@ public class AskBannerLayoutTests
     // decision is a word, not a sentence), and always last, because the number of options is exactly how
     // far the pill has to walk down to reach the field.
     [Fact]
-    public void A_question_gets_a_write_your_own_row_appended_last()
+    public void A_question_gets_both_rows_appended_after_the_options()
     {
         var rows = AskBanner.Layout(Ask(new AskOption("one", "a"), new AskOption("two", "b")),
             AskBanner.W).Rows;
 
-        Assert.Equal(3, rows.Count);
-        Assert.True(AskBanner.IsOther(rows[^1].Option));
-        Assert.False(AskBanner.IsOther(rows[0].Option));
+        Assert.Equal(4, rows.Count);
+        Assert.True(AskBanner.IsFreeText(rows[2].Option));
+        Assert.True(AskBanner.IsChat(rows[3].Option));
+        Assert.False(AskBanner.IsBuiltIn(rows[0].Option));
+    }
+
+    // The order is the box's, and it is what the row numbers are derived from - free text at N+1, chat at
+    // N+2. Swapping them here would send every answer to the wrong row without failing a single assertion
+    // about counts.
+    [Fact]
+    public void The_free_text_row_comes_before_the_chat_row()
+    {
+        var rows = AskBanner.Layout(Ask(new AskOption("one", "a")), AskBanner.W).Rows;
+
+        Assert.True(AskBanner.IsFreeText(rows[1].Option));
+        Assert.True(AskBanner.IsChat(rows[2].Option));
+    }
+
+    // Reference identity, not the words: a real option is allowed to say the same thing, and delivering it
+    // as a built-in would answer with a row the user did not pick.
+    [Fact]
+    public void An_option_that_copies_a_built_in_label_is_still_an_option()
+    {
+        var impostor = new AskOption("Chat about this", "say it in your own words");
+
+        Assert.False(AskBanner.IsChat(impostor));
+        Assert.False(AskBanner.IsBuiltIn(impostor));
+        Assert.True(AskBanner.IsBuiltIn(AskBanner.Chat));
+        Assert.True(AskBanner.IsBuiltIn(AskBanner.FreeText));
+    }
+
+    // A question whose options carry previews is drawn by a different component in the box - a Notes field
+    // and no numbered rows past the options - so appending them would be inventing rows that are not there,
+    // and every number after them would be wrong.
+    [Fact]
+    public void A_question_with_previews_gets_no_built_in_rows()
+    {
+        var withPreview = new PendingAsk("n", 1, "s", "AskUserQuestion", null, "pick one",
+            [new AskOption("a", ""), new AskOption("b", "")],
+            DateTimeOffset.UtcNow.AddMinutes(10), MultiSelect: false, HasPreview: true);
+
+        var rows = AskBanner.Layout(withPreview, AskBanner.W).Rows;
+
+        Assert.Equal(2, rows.Count);
+        Assert.DoesNotContain(rows, r => AskBanner.IsBuiltIn(r.Option));
     }
 
     [Fact]
-    public void A_permission_ask_gets_no_write_your_own_row()
+    public void A_permission_ask_gets_no_built_in_rows()
     {
         var permission = new PendingAsk("n", 1, "s", "Bash", "git push", null,
             [new AskOption("allow", "run it"), new AskOption("deny", "skip it")],
@@ -132,7 +174,7 @@ public class AskBannerLayoutTests
         var rows = AskBanner.Layout(permission, AskBanner.W).Rows;
 
         Assert.Equal(2, rows.Count);
-        Assert.DoesNotContain(rows, r => AskBanner.IsOther(r.Option));
+        Assert.DoesNotContain(rows, r => AskBanner.IsBuiltIn(r.Option));
     }
 
     [Fact]

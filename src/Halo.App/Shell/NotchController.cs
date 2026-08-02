@@ -1829,13 +1829,16 @@ internal sealed partial class NotchController
                 {
                     hitRow = true;
                     // the write-your-own row opens a field instead of answering; every other row is its
-                    // own answer, which is the whole point of the banner
-                    if (AskBanner.IsOther(_askChips[i].Option)) BeginTyping();
+                    // own answer, which is the whole point of the banner. "Chat about this" is one of
+                    // those - a plain choice in the box, not a field, and drawing a caret on it promised
+                    // something it could not do.
+                    if (AskBanner.IsFreeText(_askChips[i].Option)) BeginTyping();
                     // A question is answered by typing into the agent's terminal, which can fail (the
                     // session is gone, the console will not attach). The banner only comes down if the
                     // answer actually went somewhere - otherwise the question is still standing over
                     // there, and taking the banner away would be a lie about having answered it.
-                    else if (_asks.Answer(ask, _askChips[i].Option.Label))
+                    else if (_asks.Answer(ask, _askChips[i].Option.Label,
+                        AskBanner.IsChat(_askChips[i].Option) ? AskDelivery.Chat : AskDelivery.Option))
                     {
                         EndTyping();
                         ClearDraft();
@@ -2273,7 +2276,8 @@ internal sealed partial class NotchController
             // a choice was made
             if (answer.Length > 0 && _ask is { } ask)
             {
-                _asks.Answer(ask, answer);
+                // only one row types, so the words can only be the free-text row's
+                _asks.Answer(ask, answer, AskDelivery.FreeText);
                 _ask = null;
                 _askHover = -1;
                 EndTyping();

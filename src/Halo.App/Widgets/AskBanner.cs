@@ -52,25 +52,32 @@ internal static class AskBanner
 
     private static bool HasTarget(PendingAsk ask) => !ask.IsQuestion && !string.IsNullOrEmpty(ask.Target);
 
-    // Claude Code's own question UI always lets you ignore the options and write something, and a banner
-    // that only offered the four canned answers quietly removed that. Appended rather than sent by the
-    // hook: the hook forwards the tool's options untouched, and this one is the pill's, so inventing it
-    // there would put a choice in the payload that Claude never offered. Reference identity is how the
-    // click handler tells it apart - the label is display text and a real option could carry the same one.
+    // Claude Code's own question UI always lets you ignore the options, and a banner that only offered the
+    // canned answers quietly removed that. Appended rather than sent by the hook: the hook forwards the
+    // tool's options untouched, and these are the pill's, so inventing them there would put choices in the
+    // payload that Claude never offered. Reference identity is how the click handler tells them apart - the
+    // label is display text and a real option could carry the same one.
     //
-    // It said "Something else / type your own answer", which is what the row past the options USED to be.
-    // The box does not have a free-text field there any more - it has "Chat about this", which cancels the
-    // question and drops the words into the prompt instead. The keystrokes never changed and still land in
-    // the right place (see AskStore.Write); only the promise on the row was stale, and a row that names a
-    // different thing than the terminal is offering is how you get someone answering the wrong question.
-    internal static readonly AskOption Other = new("Chat about this", "say it in your own words");
+    // What sits past the options has changed under us twice, and both times one row was made to stand for
+    // it. It was a bare free-text field ("Something else / type your own answer"); then the box grew a
+    // "Chat about this" row and this one was renamed to match. The box has BOTH now, and they are not the
+    // same kind of thing: read out of Claude Code's own bundle, __other__ is type:"input" and __chat__ is
+    // type:"text". So the single row was wrong three ways at once - it hid the free-text choice, it put a
+    // caret and "enter to send" on a row that takes no words, and its keystroke reached neither reliably.
+    internal static readonly AskOption FreeText = new("Type something", "answer in your own words");
+    internal static readonly AskOption Chat = new("Chat about this", "leave the question and talk instead");
 
-    internal static bool IsOther(AskOption option) => ReferenceEquals(option, Other);
+    internal static bool IsFreeText(AskOption option) => ReferenceEquals(option, FreeText);
+    internal static bool IsChat(AskOption option) => ReferenceEquals(option, Chat);
+    internal static bool IsBuiltIn(AskOption option) => IsFreeText(option) || IsChat(option);
 
-    // Reachable only by walking down off the end of the list (see AskStore.Write). The row is Halo's, not
-    // Claude's: the hook never invents an option Claude did not offer, and this one is appended by the
-    // banner and delivered as words rather than as a number.
-    private static bool HasOther(PendingAsk ask) => ask.IsQuestion;
+    // Both rows are Halo's, not Claude's: the hook never invents an option Claude did not offer. In an
+    // ordinary terminal the box shows both - __other__ unconditionally, and the chat row whenever Ink's
+    // accessibility mode is off, which is its default. The one shape that differs is a question whose
+    // options carry previews: that renders a different component with a Notes field and no numbered rows
+    // at all, which is why the pill needs to be told (see AskEnvelope.HasPreview).
+    internal static IReadOnlyList<AskOption> BuiltInsFor(PendingAsk ask)
+        => ask.IsQuestion && !ask.HasPreview ? [FreeText, Chat] : [];
 
     // Layout is separate from painting so the hit-test and the drawing cannot disagree - a row you can see
     // but not click is the worst bug available to a surface whose only job is to be clicked.
@@ -121,7 +128,7 @@ internal static class AskBanner
         using var df = new Font("Segoe UI", DescPx, GraphicsUnit.Pixel);
         var rows = new List<AskRow>();
         var options = new List<AskOption>(ask.Options);
-        if (HasOther(ask)) options.Add(Other);
+        options.AddRange(BuiltInsFor(ask));
         foreach (var option in options)
         {
             float labelH = Lines(option.Label, lf, textW, LabelMaxLines) * LabelLineH;
@@ -208,7 +215,9 @@ internal static class AskBanner
         for (int i = 0; i < layout.Rows.Count; i++)
         {
             var row = layout.Rows[i];
-            bool typing = typed != null && IsOther(row.Option);
+            // only the free-text row becomes a field. The chat row is a plain choice in the box - drawing a
+            // caret and "enter to send" on it promised something it cannot do, and clicking it sent nothing.
+            bool typing = typed != null && IsFreeText(row.Option);
             DrawRow(g, row, i + 1, a, typing || i == hover, Accent(ask, row.Option.Label), seeThrough,
                 typing ? typed : null);
         }

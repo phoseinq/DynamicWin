@@ -86,15 +86,23 @@ internal static class AskFlow
     {
         var options = new List<AskOption>();
         string? question = null;
+        bool multiSelect = false, hasPreview = false;
 
         if (tool == "AskUserQuestion" && toolInput["questions"] is JsonArray qs && qs.Count == 1
             && qs[0] is JsonObject q)
         {
             question = q["question"]?.GetValue<string>();
+            // both were sitting right here unread. The banner draws rows past the options that only exist
+            // on some shapes of the box, and it cannot tell which shape it is from labels alone.
+            multiSelect = q["multiSelect"] is JsonValue mv && mv.TryGetValue<bool>(out var m) && m;
             if (q["options"] is JsonArray opts)
                 foreach (var n in opts)
                     if (n is JsonObject o && o["label"]?.GetValue<string>() is { Length: > 0 } label)
+                    {
                         options.Add(new AskOption(label, o["description"]?.GetValue<string>() ?? ""));
+                        if (o["preview"] is JsonValue pv && pv.TryGetValue<string>(out var p)
+                            && !string.IsNullOrEmpty(p)) hasPreview = true;
+                    }
         }
         else
         {
@@ -109,7 +117,8 @@ internal static class AskFlow
         return new AskEnvelope(
             Guid.NewGuid().ToString("n"), pid, sessionId, tool,
             AskGate.TargetOf(tool, toolInput), question, options,
-            DateTimeOffset.UtcNow.AddMilliseconds(isQuestion ? QuestionMs : AnswerMs));
+            DateTimeOffset.UtcNow.AddMilliseconds(isQuestion ? QuestionMs : AnswerMs),
+            multiSelect, hasPreview);
     }
 
     private static AskAnswer? Wait(string dir, AskEnvelope ask)
