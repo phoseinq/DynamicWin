@@ -1285,15 +1285,21 @@ internal sealed class MediaWidget : IWidget
         return miniR + (14f - miniR) * MorphT(h);
     }
 
-    internal const int FlipMs = 460;
+    internal const int FlipMs = 560;
     private Bitmap? _prevArt;      // the outgoing cover, alive only for the flip
     private long _flipAt = long.MinValue;
     private bool Flipping => Environment.TickCount64 - _flipAt < FlipMs;
 
-    // the card's pose at clock t in 0..1: horizontal squeeze |cos(pi t)| (1 -> 0 -> 1) and which face is
-    // showing. The floor keeps GDI+ from a degenerate zero-width transform at the crossing.
+    // the card's pose at clock t in 0..1: horizontal squeeze |cos(angle)| (1 -> 0 -> 1) and which face is
+    // showing. The angle rides a smoothstep rather than t itself - at constant angular speed the card
+    // slams into the turn and out of it, which is what "it doesn't turn smoothly" looked like; eased, it
+    // winds up, turns, and settles. smoothstep(0.5) = 0.5, so the face still swaps exactly at the
+    // narrowest instant. The floor keeps GDI+ from a degenerate zero-width transform at the crossing.
     internal static (float sx, bool front) FlipPose(float t)
-        => (Math.Max(MathF.Abs(MathF.Cos(t * MathF.PI)), 0.001f), t < 0.5f);
+    {
+        float e = t * t * (3f - 2f * t);
+        return (Math.Max(MathF.Abs(MathF.Cos(e * MathF.PI)), 0.001f), t < 0.5f);
+    }
 
     private void DrawArt(Graphics g, float x, float y, float size, float fade, float radius = 14f)
     {
@@ -1384,6 +1390,10 @@ internal sealed class MediaWidget : IWidget
         get { lock (_lock) { return _title != null && (_playing || _animatedArt || _marqueeScrolling || Flipping); } }
     }
 
+    // the flip is the one moment on this widget the eye tracks a moving edge, same as the shell's morph -
+    // it gets morph treatment from the controller (full cadence, no collapsed frame-skip) for its 560ms
+    public bool Sprinting => Flipping;
+
     // ring around the collapsed album-art circle = playback position (like the download %). Only when a
     // real duration exists (live streams have none → no ring). Extrapolated each frame so it glides.
     public Color? Ring
@@ -1466,6 +1476,9 @@ internal sealed class MediaWidget : IWidget
         string? title; bool playing;
         lock (_lock) { title = _title; playing = _playing; }
         if (title == null) return;
+        // the marquee lives on the open panel's title row; a panel closed mid-scroll must not leave the
+        // flag latched, or a paused long-titled track keeps requesting frames with nothing moving
+        _marqueeScrolling = false;
         EnsureArt();
         var art = ArtRect(h);
         float sz = art.Width, x = art.X, y = art.Y;
@@ -1641,18 +1654,18 @@ internal sealed class MediaWidget : IWidget
 
     // A title too long to fit used to be an ellipsis unless the pointer was on it - "a permanently
     // crawling title is tiring" was the reasoning - and the user's verdict on that was that a film name
-    // you cannot read without reaching for the mouse is not a title at all. So: while the track PLAYS an
-    // overflowing title scrolls on its own (the playing pill is animating anyway, so this costs no extra
-    // frames), resting a long beat between laps so it is glanceable rather than a crawl; hover still
-    // means "now", with the short hold. A PAUSED track keeps the old contract - parked ellipsis, scroll
-    // on hover only - because paused is the one state where an idle marquee would be buying frames
-    // (_marqueeScrolling) purely for decoration.
+    // you cannot read without reaching for the mouse is not a title at all. The first fix gated the
+    // self-scroll on _playing and came straight back as "still doesn't work": the pill this was reported
+    // against is a video player sitting PAUSED with the panel open. So: an overflowing title on an open
+    // panel scrolls, full stop - resting a long beat between laps so it is glanceable rather than a
+    // crawl, hover shortening the rest to "now". The frames this buys while paused only exist while the
+    // panel is open (DrawCollapsed clears _marqueeScrolling), and an open panel is already the state
+    // AdaptFrameRate holds at the watching tier for.
     private void DrawScrollingLine(Graphics g, string text, Font f, Brush b, float x, float y, float w,
         bool hovered, float dt)
     {
-        bool playing; lock (_lock) playing = _playing;
         float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
-        if (textW <= w || !(hovered || playing))
+        if (textW <= w)
         {
             // parked: reset so the next pass starts from the beginning rather than mid-word
             _marquee = 0f; _marqueeHold = 0f;

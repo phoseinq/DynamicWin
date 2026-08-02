@@ -1632,7 +1632,9 @@ internal sealed partial class NotchController
         // AdaptFrameRate already holds a solid 60 while the panel is open, so there is nothing to save here.
         bool forceAnim = false;
         bool animating = _widgets[_primary].Animating;
-        if (animating && _progress >= 0.5f) forceAnim = true;                               // open: every frame
+        // a sprinting widget (the cover flip) is a one-shot the eye tracks: every frame, even collapsed
+        bool sprint = animating && _widgets[_primary].Sprinting;
+        if (animating && (_progress >= 0.5f || sprint)) forceAnim = true;                   // open: every frame
         // Milliseconds, not frames — same lesson the glass capture cadence learned at line ~157. "every
         // 4th frame" was ~30fps only at the 120 tier it was sized for; at the 60 tier (any busy machine,
         // or a 60Hz ceiling) it was 15fps, which is where "the download pulse is choppy" and "the bar
@@ -1682,7 +1684,10 @@ internal sealed partial class NotchController
             || _dragHeld >= DragHold;
         // every size that is still easing counts, not just the hover morph: the banner and the ask panel
         // grow through the same Apply(), and the tuck-away shrink is the slowest of the lot
-        bool morphing = next != _progress || _notifT != prevNotifT || _askT != prevAskT || _shrink != prevShrink;
+        // a widget sprint counts as a morph for cadence: the flip lasts half a second and is exactly the
+        // "eye tracks a moving edge" case the morph's full-rate reach exists for
+        bool morphing = next != _progress || _notifT != prevNotifT || _askT != prevAskT || _shrink != prevShrink
+            || sprint;
         if (morphing != _morphing) { _morphing = morphing; RaiseTimer(morphing); ApplyCadence(); }
         // measured on the way out of a morph, which is the only stretch that genuinely asks for the
         // ceiling — a settled pill running at its 60 tier would report 60 and read as a broken setting

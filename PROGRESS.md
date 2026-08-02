@@ -1,5 +1,24 @@
 # Halo — progress
 
+## 2026-08-03 (later): flip smoothness + marquee, both re-reported and re-fixed
+
+**Release 0/0, 680 tests pass. Deployed (hot-swap, pid verified), not pushed at time of writing.**
+
+**The flip "doesn't turn smoothly / high fps".** Two changes. (a) `FlipPose` now runs the angle
+through a smoothstep instead of raw t — at constant angular speed the card slams into and out of the
+turn; eased, it winds up, turns, settles. Swap still lands exactly at the narrowest instant because
+smoothstep(0.5)=0.5. 460→560ms. (b) New `IWidget.Sprinting` (default false): a short one-shot the eye
+tracks. The controller treats a sprint like a morph — `morphing || sprint` reaches the full cadence
+ceiling and bypasses the collapsed 16ms anim gate, so the flip runs at the display's own rate, in the
+small pill too (it always drew there via `DrawArt`; at 60fps/26px it just didn't read).
+
+**Marquee re-reported as "still doesn't work".** The first fix gated the self-scroll on `_playing`;
+the pill it was reported against is a video player sitting PAUSED with the panel open. Overflow on an
+open panel now scrolls unconditionally (hover just shortens the rest to 0.35s). The frames this buys
+while paused exist only while the panel is open: `DrawCollapsed` clears `_marqueeScrolling`, closing
+the pre-existing latch where a panel closed mid-scroll left `Animating` true forever on a paused
+track.
+
 ## 2026-08-03: five media/download reports fixed in one pass (queue items 1, 2, 3+8, 9, 10)
 
 **Release 0/0, 680 tests pass (9 new). Deployed (hot-swapped `Halo.App.dll`, pid verified alive, no

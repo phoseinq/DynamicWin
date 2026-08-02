@@ -26,6 +26,11 @@ internal interface IWidget
     // True when the widget wants continuous frames (e.g. an animated preview). Drives re-render.
     bool Animating => false;
 
+    // True while the widget is playing a short one-shot animation the eye actually tracks (the cover
+    // flip). The controller treats it like a morph: full-rate cadence and no collapsed frame-skipping,
+    // for the half second it lasts. Keep it rare and brief - this is the expensive kind of frame.
+    bool Sprinting => false;
+
     // Status ring colour for this widget's circle in the strip (null = no ring). Mirrors the
     // collapsed pill's ring (green working, red failed, white idle...).
     Color? Ring => null;
