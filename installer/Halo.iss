@@ -3,7 +3,7 @@
 ; ponytail: per-user install (no UAC), Inno's stock wizard = the UI, one optional autostart task.
 
 #define AppName "Halo"
-#define AppVersion "3.1.7"
+#define AppVersion "3.2.0"
 #define AppPublisher "phoseinq"
 #define AppExe "Halo.App.exe"
 
