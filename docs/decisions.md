@@ -41,6 +41,18 @@
 - `ponytail: per-frame GDI+ redraw + ULW is cheap for this small bitmap; if it ever stutters, cache
   static states and only redraw during the ~0.28s transition.`
 
+## Bug reports (agreed 2026-08-03, design in [bug-reports.md](bug-reports.md))
+- **Opt-in upload, replacing unit D's "no automatic upload".** Nothing leaves the machine without a
+  press; the preview shows the exact bytes that will be sent; no credentials in the payload; no
+  background upload and no retry queue.
+- **The payload is an ALLOWLIST, not a scrubbed dump.** Halo mirrors other people's notifications, media
+  titles, tray filenames and agent transcripts, so a blacklist fails open and every new widget becomes a
+  new leak. Stack-trace paths are reduced to file names — the full path carries the user's account name.
+- **Email is not a transport.** SMTP needs a secret in a binary anyone can download, and `mailto:` cannot
+  carry an attachment reliably. Save-to-file plus the user's own mail client is the same outcome without
+  the secret. Copy / save / prefilled GitHub issue always work with no server; the user's own HTTPS
+  endpoint is optional and holds any key server-side.
+
 ## Open / to refine
 - **Account usage-limit %** (5h / weekly) has no clean public API. It's the one *best-effort* data
   source — estimated from transcript/cost. Context % is solid; ship that first, refine limit later.

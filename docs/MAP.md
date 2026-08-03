@@ -14,6 +14,7 @@ Each doc is small and self-contained. Don't load them all. Use this table to jum
 | [07-build-phases.md](07-build-phases.md) | P0→P6 order + done-criteria per phase | "Where are we / what's next" |
 | [08-config-packaging.md](08-config-packaging.md) | Config file, autostart, single-instance, packaging, comment-strip-before-push | P6, or shipping |
 | [09-reference-dynamicwin.md](09-reference-dynamicwin.md) | DynamicWin findings: why it's low-res (Skia), widget model, media done right, verified toolchain | Before P5 media, or "why WinUI not Skia" |
+| [bug-reports.md](bug-reports.md) | Crash + manual report delivery: the allowlisted payload, why email is not the transport, opt-in send | Touching crash handling, or anything that leaves the machine |
 
 ## Plans (executable, step-by-step)
 | Plan | Covers |
