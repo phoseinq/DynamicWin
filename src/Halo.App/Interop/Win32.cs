@@ -523,6 +523,19 @@ internal static class Win32
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
 
+    // posting a synthetic click into another app's window needs CLIENT coordinates, and the offset from
+    // screen space is not the window rect's corner - borders, caption and per-monitor dpi all move it.
+    // ScreenToClient is the only transform that gets it right; a minimized window answers with a
+    // ~-32000 origin, which is why callers bounds-check the result against GetClientRect.
+    [DllImport("user32.dll")]
+    public static extern bool ScreenToClient(IntPtr hwnd, ref POINT p);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hwnd, out RECT r);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hwnd);
+
     [DllImport("gdi32.dll")]
     public static extern bool SetWindowOrgEx(IntPtr hdc, int x, int y, IntPtr prev);
 

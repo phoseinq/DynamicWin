@@ -138,10 +138,48 @@ internal static class Program
                 Halo.Widgets.TelegramPlayer.Poke();
                 System.Threading.Thread.Sleep(1000);
                 var (tpos, tdur) = Halo.Widgets.TelegramPlayer.Read();
-                Console.WriteLine($"{i}s live={Halo.Widgets.TelegramPlayer.Live} pos={tpos} dur={(tdur?.ToString() ?? "-")} debug={Halo.Widgets.TelegramPlayer.Debug ?? "-"}");
+                Console.WriteLine($"{i}s live={Halo.Widgets.TelegramPlayer.Live} video={Halo.Widgets.TelegramPlayer.VideoSource} pos={tpos} dur={(tdur?.ToString() ?? "-")} title={Halo.Widgets.TelegramPlayer.Title ?? "-"} debug={Halo.Widgets.TelegramPlayer.Debug ?? "-"} vdebug={Halo.Widgets.TelegramPlayer.VideoDebug ?? "-"}");
             }
             return;
         }
+        // dev hook: `Halo.App --seek-tg <0..1>` - drive TelegramPlayer.SeekTo once and print the strip's
+        // own slider value before and after, which is the only proof the posted click landed. UIA
+        // SetValue on that slider is accepted and ignored, so "it returned true" means nothing here.
+        if (args.Length >= 2 && args[0] == "--seek-tg"
+            && double.TryParse(args[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double target))
+        {
+            Halo.Widgets.TelegramPlayer.Poke();
+            System.Threading.Thread.Sleep(1200);
+            var (p0, d0) = Halo.Widgets.TelegramPlayer.Read();
+            Console.WriteLine($"before  pos={p0} dur={(d0?.ToString() ?? "-")} title={Halo.Widgets.TelegramPlayer.Title ?? "-"}");
+            Console.WriteLine($"seek({target}) -> {Halo.Widgets.TelegramPlayer.SeekTo(target)} debug={Halo.Widgets.TelegramPlayer.Debug ?? "-"}");
+            for (int i = 0; i < 4; i++)
+            {
+                Halo.Widgets.TelegramPlayer.Poke();
+                System.Threading.Thread.Sleep(1000);
+                var (p, d) = Halo.Widgets.TelegramPlayer.Read();
+                Console.WriteLine($"after {i}s pos={p} dur={(d?.ToString() ?? "-")}");
+            }
+            return;
+        }
+        // dev hook: `Halo.App --speed-tg` - read telegram's playback speed, toggle it, read it back. The
+        // button's own name carries the value, so this prints what the app actually did rather than what
+        // was asked of it. A click is a TOGGLE (1x <-> whatever telegram's menu last chose).
+        if (args.Length >= 1 && args[0] == "--speed-tg")
+        {
+            Halo.Widgets.TelegramPlayer.Poke();
+            System.Threading.Thread.Sleep(2600);
+            Console.WriteLine($"speed before: {Halo.Widgets.TelegramPlayer.Speed ?? "-"}");
+            Console.WriteLine($"toggle -> {Halo.Widgets.TelegramPlayer.ToggleSpeed()}");
+            Console.WriteLine($"speed after:  {Halo.Widgets.TelegramPlayer.Speed ?? "-"} debug={Halo.Widgets.TelegramPlayer.Debug ?? "-"}");
+            return;
+        }
+        // dev hook: `Halo.App --probe-tg-tree` - every visible telegram window with each slider, its
+        // value and every text under it. --probe-tg only ever looks at the music strip; this is what
+        // answers whether a playing VIDEO exposes a timeline anywhere at all, which decides whether the
+        // pill can ever draw one for it. Run it while a video is playing.
+        if (args.Length >= 1 && args[0] == "--probe-tg-tree") { Halo.Widgets.TelegramPlayer.DumpTree(Console.Out); return; }
         // dev hook: `Halo.App --probe-size "<title>"` — the file-size lookup on its own, without needing a
         // player to be open. It is a match against the shell's Recent shortcuts, so it is worth being able to
         // ask it directly rather than only through a live session.

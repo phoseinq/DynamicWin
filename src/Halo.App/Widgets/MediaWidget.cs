@@ -268,6 +268,7 @@ internal sealed class MediaWidget : IWidget
                     _trackEpoch++;
                     _wallBase = TimeSpan.Zero;
                     _wallAt = _playing ? DateTime.UtcNow : default;
+                    if (_tgTimeline) TelegramPlayer.Reset(); // the settled duration was the OLD track's
                     _tgTimeline = false;   // next track re-earns its numbers from the strip
                 }
                 _version++;
@@ -501,32 +502,53 @@ internal sealed class MediaWidget : IWidget
     // Telegram publishes an EMPTY smtc timeline for the whole track (measured: end=pos=0, canSeek
     // false), but its own player strip carries the numbers - so they are read from there and fed into
     // the same fields smtc would have filled. The bar, the ring, the timestamps and the extrapolation
-    // all light up through the ordinary pipeline; no drawing code knows the difference. Scrubbing
-    // stays off: smtc still says the session cannot seek, and that gate is untouched.
+    // all light up through the ordinary pipeline; no drawing code knows the difference. Scrubbing is
+    // re-enabled on top of this by posting a click onto that same strip (TelegramPlayer.SeekTo), even
+    // though smtc still reports the session as unseekable.
     private void TelegramTimeline()
     {
-        bool want;
+        bool want; string? smtcTitle;
         lock (_lock)
+        {
             want = _title != null && (_end <= _start || _tgTimeline)
                 && _appId?.Contains("telegram", StringComparison.OrdinalIgnoreCase) == true;
+            smtcTitle = _title;
+        }
         if (!want) return;
         TelegramPlayer.Poke();
         var (pos, dur) = TelegramPlayer.Read();
-        if (TelegramPlayer.Live && dur is { } d && d > TimeSpan.Zero)
+        // The music strip describes ONE item, and telegram leaves it standing while a video plays over
+        // it - so its numbers are only ours when its label is the track smtc is naming. Without this a
+        // paused song's 3:45 was printed under a playing video. The video player is its own surface and
+        // needs no such check: if it is up, it IS what is playing.
+        bool mine = TelegramPlayer.VideoSource
+            || TelegramPlayer.TitleMatches(TelegramPlayer.Title, smtcTitle);
+        if (mine && TelegramPlayer.Live && dur is { } d && d > TimeSpan.Zero)
         {
             lock (_lock)
             {
                 if (!_tgTimeline && _end > _start) return;   // real smtc numbers arrived - they win
                 _tgTimeline = true;
-                _start = TimeSpan.Zero; _end = d;
-                _pos = pos; _posAt = DateTime.UtcNow;
-                _version++;
+                _start = TimeSpan.Zero;
+                bool moved = _end != d;
+                _end = d;
+                // the strip's text is whole seconds; re-stamping every lap yanked the extrapolated bar
+                // back a fraction of a second, once a second - the reported jitter. only correct DRIFT:
+                // the extrapolation is already tracking real time between strip reads.
+                var cur = _playing ? _pos + (DateTime.UtcNow - _posAt) : _pos;
+                if ((pos - cur).Duration() > TimeSpan.FromSeconds(1.2))
+                {
+                    _pos = pos; _posAt = DateTime.UtcNow;
+                    moved = true;
+                }
+                if (moved) _version++;
             }
         }
-        else if (Environment.TickCount64 - TelegramPlayer.LastLiveAt > 5000)
+        else if (!mine || Environment.TickCount64 - TelegramPlayer.LastLiveAt > 5000)
         {
-            // strip gone (player closed, window shut to tray) - stop extrapolating into a pinned bar;
-            // the honest no-timeline states (sweep + stopwatch) take back over
+            // strip gone (player closed, window shut to tray), or it moved on to describing something
+            // else - stop extrapolating into a pinned bar; the honest no-timeline states (sweep +
+            // stopwatch) take back over
             lock (_lock)
             {
                 if (!_tgTimeline) return;
@@ -688,10 +710,26 @@ internal sealed class MediaWidget : IWidget
     // the bar's fraction is of the SEEKABLE span, which is where it starts, not necessarily zero
     private void Seek(float f)
     {
+        f = Math.Clamp(f, 0f, 1f);
+        bool tg; TimeSpan start, end;
+        lock (_lock) { tg = _tgTimeline; start = _start; end = _end; }
+        if (end <= start) return;
+        if (tg)
+        {
+            // optimistic: the bar lands where the finger left it, and telegram is asked through its own
+            // slider (TelegramPlayer.SeekTo posts the click). the next 1s strip read corrects a miss.
+            lock (_lock)
+            {
+                _pos = start + TimeSpan.FromTicks((long)(f * (end - start).Ticks));
+                _posAt = DateTime.UtcNow;
+                _version++;
+            }
+            _ = Task.Run(() => TelegramPlayer.SeekTo(f));
+            return;
+        }
         var s = Cur();
-        TimeSpan start, end; lock (_lock) { start = _start; end = _end; }
-        if (s == null || end <= start) return;
-        SeekTo(s, start + TimeSpan.FromTicks((long)(Math.Clamp(f, 0f, 1f) * (end - start).Ticks)));
+        if (s == null) return;
+        SeekTo(s, start + TimeSpan.FromTicks((long)(f * (end - start).Ticks)));
     }
 
     private static (RectangleF bar, RectangleF mute) VolLayout(int w) => (new RectangleF(62, 178, 96, 20), new RectangleF(24, 172, 32, 32));
@@ -1056,7 +1094,9 @@ internal sealed class MediaWidget : IWidget
         var seek = SeekRect(w);
         var seekHit = seek; seekHit.Inflate(6f, 10f);
         bool onSeek = WidgetInput.Over && seekHit.Contains(WidgetInput.Mouse);
-        bool seekable; lock (_lock) seekable = _seekEnabled;
+        // telegram seeks through its own strip rather than smtc, but only while that has been observed
+        // to work - see TelegramPlayer.Seekable
+        bool seekable; lock (_lock) seekable = _seekEnabled || (_tgTimeline && TelegramPlayer.Seekable);
         if (WidgetInput.Down && !_wasDown && onSeek && seekable) _scrubbing = true;
         if (_scrubbing)
         {
@@ -1531,12 +1571,36 @@ internal sealed class MediaWidget : IWidget
     // real duration exists (live streams have none → no ring). Extrapolated each frame so it glides.
     public Color? Ring
     {
-        get { lock (_lock) return _title != null && _end > TimeSpan.Zero ? _accent : (Color?)null; }
+        get
+        {
+            PokeTelegram();
+            lock (_lock) return _title != null && _end > TimeSpan.Zero ? _accent : (Color?)null;
+        }
     }
+
+    // The ring is often the ONLY place telegram's timeline is drawn - the pill collapsed, or the media
+    // widget sitting in the strip while something else is primary. In that state neither DrawContent nor
+    // DrawCollapsed runs, so nothing called PollTimeline, so nothing poked the uia reader: it parked
+    // itself 15s after the last poke and the widget withdrew the timeline 5s later. That is why the bar
+    // only ever filled in while the panel was open and froze as soon as it was not.
+    //
+    // Not an unconditional poll, because EaseRings reads Ring for EVERY widget on EVERY frame. Gated on
+    // "this is the telegram case" so the cross-process UIA cost only exists while it is being asked for;
+    // PollTimeline's own 200ms throttle bounds the rest.
+    private void PokeTelegram()
+    {
+        bool want;
+        lock (_lock)
+            want = _title != null && (_end <= _start || _tgTimeline)
+                && _appId?.Contains("telegram", StringComparison.OrdinalIgnoreCase) == true;
+        if (want) PollTimeline();
+    }
+
     public float RingProgress
     {
         get
         {
+            PokeTelegram();
             TimeSpan pos, end, start; bool playing; DateTime at; string? t;
             lock (_lock) { pos = _pos; end = _end; start = _start; playing = _playing; at = _posAt; t = _title; }
             if (t == null || end <= start) return -1f;
