@@ -33,6 +33,14 @@ internal static class AskBanner
     // The row's hit-test still covers it: clicking the number is clicking the option.
     private const float NumD = 32f, NumGap = 11f, NumPx = 16f;
     private const float BottomPad = 20f;
+    // The way out that is not an answer. The banner deliberately ignored every click that was not a row,
+    // so the only exits were answering and waiting out the deadline - fine over an app, where the banner is
+    // in the way of what you were doing anyway, and wrong on the desktop where it just sits there. A
+    // deliberate target in the corner is not a gesture you can make by brushing past, which was the whole
+    // objection. It does NOT answer: the question stays standing in the terminal, this takes the banner off
+    // the screen.
+    private const float CloseD = 24f;
+    internal static RectangleF CloseRect(int w) => new(w - Pad - CloseD, EyebrowTop - 4f, CloseD, CloseD);
     private const float LabelPx = 15f, DescPx = 12.5f;
     // Own line heights rather than the font's: MeasureString is asked only how many lines the text takes,
     // and the rhythm between label and description stays a decision here instead of a font metric.
@@ -190,7 +198,7 @@ internal static class AskBanner
     // rather than held here because the keystrokes arrive at the window, and a widget that owned input
     // state would have to be told about focus, cancellation and the banner closing under it.
     internal static void Draw(Graphics g, int w, int h, float a, PendingAsk ask, int hover,
-        int tint = DeskTint, string? typed = null)
+        int tint = DeskTint, string? typed = null, bool closeHover = false)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
         // AntiAlias, not AntiAliasGridFit, and only here. GridFit snaps stems to whole pixels, which is
@@ -202,6 +210,7 @@ internal static class AskBanner
         bool seeThrough = tint < DeskTint;
         var layout = Layout(ask, w);
         DrawEyebrow(g, w, a, ask, seeThrough);
+        DrawClose(g, CloseRect(w), a, closeHover, seeThrough);
 
         using (var tf = new Font("Segoe UI Semibold", TitlePx, GraphicsUnit.Pixel))
         using (var sf = Wrap(StringAlignment.Center))
@@ -427,6 +436,30 @@ internal static class AskBanner
             Color.FromArgb((int)(a * (hover ? 92 : 56)), 255, 255, 255), 90f);
         using var rim = new Pen(rimBrush, 0.7f);
         g.DrawEllipse(rim, box);
+    }
+
+    // A bead like the option numbers wear, with a cross instead of a digit. Same empty-glass rule, so it
+    // reads as part of the panel rather than a chrome button bolted onto it. The strokes carry the same
+    // four-pass halo every other mark here does - at these tints the panel guarantees no contrast.
+    private static void DrawClose(Graphics g, RectangleF box, float a, bool hover, bool seeThrough)
+    {
+        DrawBead(g, box, a, hover, seeThrough);
+        float m = box.Width * 0.32f;
+        float x0 = box.X + m, x1 = box.Right - m, y0 = box.Y + m, y1 = box.Bottom - m;
+        if (seeThrough)
+        {
+            using var halo = new Pen(Color.FromArgb((int)(a * 105), 0, 0, 0), 1.7f)
+            { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            foreach (var d in Halo)
+            {
+                g.DrawLine(halo, x0 + d.X, y0 + d.Y, x1 + d.X, y1 + d.Y);
+                g.DrawLine(halo, x1 + d.X, y0 + d.Y, x0 + d.X, y1 + d.Y);
+            }
+        }
+        using var pen = new Pen(Color.FromArgb((int)(a * (hover ? 240 : 186)), 255, 255, 255), 1.7f)
+        { StartCap = LineCap.Round, EndCap = LineCap.Round };
+        g.DrawLine(pen, x0, y0, x1, y1);
+        g.DrawLine(pen, x1, y0, x0, y1);
     }
 
     // Centred on the glyph's real ink box, not on its advance width and line box. A digit carries side

@@ -73,6 +73,23 @@ parked itself 15s after the last poke and the widget withdrew the timeline 5s la
 now poke it, gated on "this is the telegram case" because `EaseRings` reads `Ring` for EVERY widget on
 EVERY frame and an unconditional poll there would run cross-process UIA forever.
 
+**The ask banner is readable on the desktop, and can be put away.** Two reports, one picture. (1) On the
+desktop the panel was unreadable - wallpaper text read straight through it and competed with the
+question. `TintAskDesk` was 60 on the theory that the window's own acrylic supplies the contrast there;
+against a busy wallpaper it does not. Now 150. Over an APP the captured backdrop really is doing that
+job, so `TintAskApp` stays 34 and only the desktop value moved. Removing the glass was the other option
+and was rejected by the user: what was wrong was the contrast, not the material. (2) The banner had no
+exit that was not an answer - by design, since a stray click must never send one - so on the desktop it
+just sat there until the 20s deadline. Added a close bead top-right (same empty-glass vessel the option
+numbers wear, cross instead of a digit) and a swipe up from the bottom edge. Neither ANSWERS: they file
+the question's nonce in `_askDismissed` and drop the banner, because the ask is still pending in
+`AskStore` and without remembering which one was dismissed the banner reopens on the very next frame.
+The swipe may only start in the 26px strip under the last row - an answer is sent on the PRESS, so a
+drag that could begin anywhere would have already answered before it moved - and it completes while the
+button is still held rather than on release. Verified with `--render-ask` (the hook pulls the real tint
+constants, so it cannot answer for a tint the app has stopped shipping); the swipe is behavioural and
+only build-verified. 738 tests green, 0/0. Deployed; not pushed.
+
 **Settings panel no longer writes its stale snapshot back over the pill.** `Store` snapshots the file
 when the window opens and Apply merged the draft onto THAT, so a panel left sitting open wrote its old
 copy back over anything the pill had written meanwhile - drag the pill to park a new scale, or let the

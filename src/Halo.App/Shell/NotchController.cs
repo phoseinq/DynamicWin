@@ -145,7 +145,15 @@ internal sealed partial class NotchController
     // rows do not have a black background of their own, they were inheriting the notch's. Everything drawn
     // on top brings its own contrast (lit capsule rims, a shadow under every line of text), so the wash is
     // only here to stop a busy backdrop turning the banner into noise.
-    internal const int TintAskDesk = 60, TintAskApp = 34;
+    // TintAskDesk was 60, on the theory quoted above that the window's own acrylic supplies the contrast on
+    // the desktop. Against a busy wallpaper it does not: reported live, with a picture - wallpaper text read
+    // straight through the panel and competed with the question. Over an APP the captured backdrop really is
+    // doing that job, which is why only the desktop value moves. Removing the glass was the other option and
+    // was rejected: what was wrong was the contrast, not the material.
+    internal const int TintAskDesk = 150, TintAskApp = 34;
+    // The swipe-to-put-away gesture: how deep the grab strip at the bottom edge is, and how far up the drag
+    // has to travel before it counts. Far enough that a twitch while reading is not a dismissal.
+    private const int AskSwipeStrip = 26, AskSwipeDist = 30;
     // How much of LayeredNotch's frost squeeze a banner opts out of. The squeeze exists so a bright band
     // behind the WIDGET panel cannot read as a shape inside the pill; a banner has the opposite job, and
     // at full squeeze every backdrop - white bar, dark editor, colourful game - composited to the same
@@ -254,6 +262,14 @@ internal sealed partial class NotchController
     private float _askT;
     private int _askH = 120;
     private int _askHover = -1;
+    private bool _askCloseHover;
+    // The question this pill has been told to stop showing. It is a NONCE and not a bool because the ask is
+    // still pending over in the terminal - AskStore keeps handing it back, and without remembering which one
+    // was dismissed the banner reopens on the very next frame. Cleared implicitly: a new question has a new
+    // nonce, so nothing has to reset this.
+    private string? _askDismissed;
+    // Where an upward drag on the banner started, or null when no drag is in flight.
+    private float? _askSwipeY;
     private System.Collections.Generic.List<(RectangleF Rect, Halo.ClaudeCode.AskOption Option)> _askChips = [];
     // non-null while a free-text answer is being composed. The question's own options answer with their
     // label; this one answers with whatever is in here, which the hook passes through verbatim.
@@ -1469,6 +1485,8 @@ internal sealed partial class NotchController
         float prevAskT = _askT;
         int prevAskHover = _askHover;
         var pendingAsk = _notif == null && _settings.Current.Bool("claude.ask", true) ? _asks.Pending : null;
+        // dismissed by the close button or a swipe: still pending over there, just not on screen here
+        if (pendingAsk != null && pendingAsk.Nonce == _askDismissed) pendingAsk = null;
         if (pendingAsk?.Nonce != _ask?.Nonce)
         {
             EndTyping();   // before _ask moves, so the draft is filed against the question it was written for
@@ -1494,9 +1512,14 @@ internal sealed partial class NotchController
         if (_ask != null)
         {
             _askHover = -1;
+            _askCloseHover = false;
             if (InRect(p, NotifLeft(), _ct, Sc(_curW), Sc(_curH)))
-                for (int i = 0; i < _askChips.Count; i++)
-                    if (InChip(p, _askChips[i].Rect)) { _askHover = i; break; }
+            {
+                _askCloseHover = InChip(p, AskBanner.CloseRect(AskBanner.W));
+                if (!_askCloseHover)
+                    for (int i = 0; i < _askChips.Count; i++)
+                        if (InChip(p, _askChips[i].Rect)) { _askHover = i; break; }
+            }
         }
 
         float prevNotifT = _notifT, prevNotifDetail = _notifDetail;
@@ -2011,12 +2034,31 @@ internal sealed partial class NotchController
         if (_moving) { _lastMouseDown = down; return; } // dragging the pill — swallow clicks
         if (UpdatePinGesture(p, down)) { _lastMouseDown = down; return; }
         if (UpdateStripGesture(p, down)) { _lastMouseDown = down; return; }
+        // Tracked while the button is held rather than on release, so the banner leaves the moment the drag
+        // has gone far enough - waiting for the mouse-up made it feel like the gesture had not worked.
+        if (_askSwipeY is { } swipeFrom && _ask is { } swiping)
+        {
+            if (!down) _askSwipeY = null;
+            else if (swipeFrom - p.Y >= Sc(AskSwipeDist)) DismissAsk(swiping);
+        }
         // The chip click IS the answer, so it is handled before anything else can treat it as a click on
         // the pill. A click anywhere else on this banner does NOTHING on purpose: dismissing a question by
         // brushing past it would silently send it back to the terminal, and the 20s deadline already ends
         // it without needing a gesture that can be made by accident.
         if (down && !_lastMouseDown && !_resizing && _notif == null && _ask is { } ask && _askT > 0.5f)
         {
+            // the corner button, before the rows: it overlaps nothing, but a question that cannot be put
+            // away is the complaint this answers, so it gets first refusal on the click
+            if (InChip(p, AskBanner.CloseRect(AskBanner.W)))
+            {
+                DismissAsk(ask);
+                _lastMouseDown = down;
+                return;
+            }
+            // The swipe may only START in the strip under the last row. An answer is sent on the PRESS, so
+            // a drag that could begin anywhere would have already answered before it moved - and the band
+            // below the options is the one part of this banner that is not one.
+            if (p.Y >= _ct + Sc(_curH) - Sc(AskSwipeStrip)) _askSwipeY = p.Y;
             bool hitRow = false;
             for (int i = 0; i < _askChips.Count; i++)
                 if (InChip(p, _askChips[i].Rect))
@@ -2374,7 +2416,7 @@ internal sealed partial class NotchController
         Action<Graphics, int, int, float> content = _greet != GreetingKind.None
             ? (g, cw, ch, f) => DrawGreeting(g, cw, ch)
             : _notif == null && _ask is { } q && _askT > 0f
-            ? (g, cw, ch, f) => AskBanner.Draw(g, cw, ch, f, q, _askHover, tint, _askTyped)
+            ? (g, cw, ch, f) => AskBanner.Draw(g, cw, ch, f, q, _askHover, tint, _askTyped, _askCloseHover)
             : _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
             : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
@@ -2418,6 +2460,20 @@ internal sealed partial class NotchController
         if (f.LineAlpha > 0.004f)
             Greeting.DrawLine(g, Greeting.Lines[f.LineIndex], box, f.LineWritten, f.LineAlpha, Color.White,
                 _greet == GreetingKind.Install ? 9f : 11f);
+    }
+
+    // Putting the banner away is NOT answering it. The question is still standing in the terminal and its
+    // own 20s deadline still governs it - which is why this files the nonce instead of calling Answer, and
+    // why nothing is sent anywhere. The draft is left filed: if the same question somehow comes back the
+    // words are still there.
+    private void DismissAsk(PendingAsk ask)
+    {
+        EndTyping();
+        _askDismissed = ask.Nonce;
+        _ask = null;
+        _askHover = -1;
+        _askCloseHover = false;
+        _askSwipeY = null;
     }
 
     private void BeginTyping()

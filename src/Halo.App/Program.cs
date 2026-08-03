@@ -846,8 +846,10 @@ internal static class Program
                 Halo.Widgets.AskBanner.Draw(g, W, h1, 1f, question, hover: 1, tints[i], typed);
                 g.TranslateTransform(0, h1 + pad);
             }
+            // the last one carries the close button LIT, since its resting and hover states are the two
+            // things about it worth looking at and only one of them can be on screen at a time
             new Halo.Shell.LayeredNotch().DrawShape(g, W, h2, 26, tints[^1], glass: false);
-            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1, tints[^1]);
+            Halo.Widgets.AskBanner.Draw(g, W, h2, 1f, permission, hover: -1, tints[^1], closeHover: true);
         }
         bmp.Save(outPath, System.Drawing.Imaging.ImageFormat.Png);
     }
