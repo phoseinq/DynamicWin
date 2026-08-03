@@ -73,6 +73,26 @@ parked itself 15s after the last poke and the widget withdrew the timeline 5s la
 now poke it, gated on "this is the telegram case" because `EaseRings` reads `Ring` for EVERY widget on
 EVERY frame and an unconditional poll there would run cross-process UIA forever.
 
+**A dash inside Persian text ate the space on one side of itself, and the banner had no fold-out.** Both
+reported from a live banner with a screenshot. (1) The collapse: `_askT` already eased down over 0.30s when
+a question left, but the size morph AND the content branch were both gated on `_ask != null` as well - so
+the frame the question went, the pill snapped to a collapsed pill with nothing on it and the ease had
+nothing to ease. Answering had always done this too; nobody had noticed because answering is followed by
+looking at the terminal. `_askGhost` holds the question for exactly the length of the fade, and clicks are
+NOT routed to it - a banner mid-dismiss must not answer. (2) The dash: "mi-bini SP EMDASH SP tirgi" drew
+the dash welded to the following word. Not our code - `Title()` passes the string through untouched and
+`CleanText` is only NFKC - the dash is a bidi NEUTRAL, and resolving the neutral run swallows the
+whitespace at the direction change. Four candidates were rendered side by side in an isolated harness with
+the banner's own font and format: an ascii hyphen has no problem at all, NBSP both sides does NOT help, an
+RLM after the dash does NOT help, and an RLM on BOTH sides restores both spaces. `Fx.PinRtlDashes` does
+that, display-only and only for text already RTL, and is used by the banner's RTL path and by `Marquee`
+(where "artist - title" is the commonest case, pinned once above the measure so measure and draw agree).
+Left alone deliberately: the free-text field, whose caret arithmetic runs on the same string. Nine tests
+pin the helper - RLM is invisible, so the assertions are the only readable record of what it emits, and
+the test file is GENERATED with unicode escapes because every editor here resolves them straight back into
+real characters. `--render-ask` now carries the reported Persian title with the em dash in it, so this
+cannot regress unseen. 747 tests green, 0/0. Deployed; pushed.
+
 **The ask banner is readable on the desktop, and can be put away.** Two reports, one picture. (1) On the
 desktop the panel was unreadable - wallpaper text read straight through it and competed with the
 question. `TintAskDesk` was 60 on the theory that the window's own acrylic supplies the contrast there;
