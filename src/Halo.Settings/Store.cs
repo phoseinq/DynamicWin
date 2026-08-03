@@ -72,10 +72,16 @@ internal sealed class Store
         return _saved.TryGetValue(key, out var v) && v.Length > 0 ? v : fallback;
     }
 
+    // The draft is merged onto what is on disk NOW, not onto the snapshot this window opened with. The
+    // pill writes this same file - dragging it parks a new scale, the pushpin writes over-fullscreen, the
+    // api hands itself a token - so a panel left open across any of those used to write its stale copy
+    // back over them, silently undoing a change the user had just made by hand. Re-reading costs one file
+    // read per Apply and makes the panel a merge rather than an overwrite.
     internal void Apply()
     {
         if (!IsDirty) return;
         if (_resetPending) { _saved.Clear(); _resetPending = false; }
+        else { _saved.Clear(); Load(); }
         foreach (var (key, value) in _draft) _saved[key] = value;
         _draft.Clear();
         Save();

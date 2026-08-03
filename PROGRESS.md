@@ -1,5 +1,120 @@
 # Halo — progress
 
+## 2026-08-03 (later still 6): telegram scrubbing, video as its own surface, and three bugs the bar had
+
+**Release 0/0, 722 tests pass (10 new). Deployed (hot-swapped `Halo.App.dll`, pid alive, no crash log),
+not pushed.**
+
+**Scrubbing telegram — a posted click, and the minimized case is the one that matters.** UIA
+`ValuePattern.SetValue` on the strip's slider is accepted and then ignored by Qt (measured: value
+unchanged across the call), and the strip exposes no InvokePattern that seeks. What works is a POSTED
+`WM_LBUTTONDOWN/UP` carrying its own client coordinates — no cursor moves, no focus is taken.
+Two transforms, chosen by window state: `ScreenToClient` whenever the window is really on screen
+(borders, caption and dpi all shift the client origin), but a MINIMIZED window answers from a ~-32000
+origin, so there the point is taken relative to the window element's own uia rect, which stays in
+restored space. Verified live both ways: minimized telegram seeked 11% -> 61%, and through the app's own
+path `--seek-tg 0.15` moved 02:26 -> 00:34 of 3:39. Minimized is the important case — the pill exists so
+telegram can stay out of the way. Whether Qt honours the click is not assumed: `SeekTo` records where it
+aimed and the next strip samples judge it (`JudgeSeek`); if the slider did not go there within 6s,
+`Seekable` latches false and the media widget takes the scrub handle away, because a control the app
+cannot honour must not sit on screen doing nothing.
+
+**Video is a DIFFERENT surface, and it labels both ends.** The music strip is `Media::Player::Widget` +
+`Ui::FilledSlider` in the main window. A playing video is its own top-level window with
+`Ui::MediaSlider` — two of them, the wide one the seek bar and the narrow one volume (363px vs 75px
+measured) — and two labels: elapsed `00:00` and REMAINING `-00:19`. That second label is the whole
+feature: elapsed + remaining is the EXACT duration, so video needs none of the elapsed-vs-total guessing
+`Infer` does for music. Found by leaving `--probe-tg-tree` sampling on a loop until a video appeared;
+a single still would never have shown it, since nothing about the music strip hints the video surface
+exists. Six captured samples of one 19s video agree exactly - 00:03/-00:16, 00:09/-00:10, 00:18/-00:01,
+each summing to 19s, with the slider tracking elapsed/duration. Video wins when present, because playing
+one pauses the music - EXCEPT once it has finished: the same capture caught the music strip back at 92%
+with the ended video's window still standing beside it, so a video with nothing left to play is not the
+source and the music takes back over.
+
+**Bug 0 - video read everything correctly and still never claimed: a MINUS SIGN.** Telegram labels the
+remaining time with U+2212 MINUS SIGN, not an ascii hyphen, so `name.StartsWith('-')` was false, the
+label fell through to the elapsed branch and `left` stayed null. Four rounds of "video still is not
+supported" were this one character. It was not findable by reading code or by any probe run after the
+fact, because the video window only exists while one is playing - what found it was making the PILL
+itself log why it bailed, to `%LOCALAPPDATA%\Halo	g-debug.txt` (the notif-debug.txt convention), and
+then reading the code point straight out of that file: `[00:03][U+2212 00:16], elapsed=00:00:03 left=-`.
+`VideoClock` (pure, tested) now accepts the minus sign and the dash family, and the test fixture builds
+the character from its code point so this cannot silently regress.
+
+**Bug 0b - the video scan starved music detection.** `SampleVideo` did a descendants search per telegram
+window every second, and telegram's main window is the thousands-of-element message list the strip
+reader deliberately avoids by scoping to its own subtree and caching. That walk ate the 1Hz budget and
+music stopped being detected at all. Windows that answer "no media sliders" are now remembered and not
+re-asked for 60s; a video always arrives as a NEW window handle, which is never in that set, so
+detection stays instant while the expensive walk becomes rare.
+
+**Bug 1 — a paused song's numbers printed under a playing video.** Telegram leaves the music strip
+standing while a video plays, so the strip described one item and smtc another, and the song's 3:45 was
+injected under the video's title. `TitleMatches` (pure, tested) now gates adoption: the strip's label and
+smtc's title are compared by containment, because the strip writes "performer - title" as one line while
+smtc splits the two, and an untagged file shows as its filename on both sides. On a mismatch the timeline
+is withdrawn rather than left frozen. The video surface needs no such check — if its window is up, it IS
+what is playing.
+
+**Bug 2 — the bar sat at 100% for the rest of the track after watching a video.** Self-inflicted, same
+session: the first pass at damping the end-time jitter treated "the strip handed us its text as the
+total" as ground truth and PINNED it. But that inference ("constant text under a moving slider") misfires
+when two samples land inside the same wall-clock second, which is exactly what resuming music after a
+video does — so one bad read pinned the duration to an elapsed value and every later correction was
+refused. `Settle` (pure, tested) replaces it: hysteresis so a candidate within 3s never moves a settled
+duration (the jitter fix, now covering all three Infer branches rather than only the elapsed one), plus
+the invariant that a duration the position has walked PAST was simply wrong and is dropped to re-settle.
+
+**Bug 3 — the bar only updated while the panel was open.** `PollTimeline` is what pokes the UIA reader,
+and it was only called from `DrawContent` and `DrawCollapsed`. In the ring state — pill collapsed, or the
+media widget in the strip while something else is primary — neither runs, so nothing poked the reader; it
+parked itself 15s after the last poke and the widget withdrew the timeline 5s later. `Ring`/`RingProgress`
+now poke it, gated on "this is the telegram case" because `EaseRings` reads `Ring` for EVERY widget on
+EVERY frame and an unconditional poll there would run cross-process UIA forever.
+
+**Settings panel no longer writes its stale snapshot back over the pill.** `Store` snapshots the file
+when the window opens and Apply merged the draft onto THAT, so a panel left sitting open wrote its old
+copy back over anything the pill had written meanwhile - drag the pill to park a new scale, or let the
+api hand itself a token, then press Apply on an unrelated row and the change was silently gone. Apply
+now re-reads the file and merges onto what is on disk NOW; reset still clears, because defaults are the
+absence of values rather than a set of them. Pinned by `SettingsStoreTests` - Halo.Settings gained the
+same `InternalsVisibleTo("Halo.Tests")` the other two projects already had, and `Store`'s constructor
+already took a path, so the tests run against a temp file. Verified by REVERTING the fix: the two
+regression tests fail without it (`Apply_does_not_clobber_a_row_the_pill_wrote_while_the_panel_was_open`,
+`Apply_keeps_a_row_that_appeared_after_the_panel_opened`) and pass with it. 738 tests green, 0/0.
+Panel DLL deployed; not pushed.
+
+**Playback speed: readable, reliably; clickable, not.** Telegram's strip carries
+`class Media::Player::SpeedButton`, and its accessible NAME is the value - "Playback speed: 1x" - so the
+speed can be READ out of the app rather than assumed (`ParseSpeed`, pure, tested). Toggling it is the
+part that does not hold up. A click on it is a TOGGLE between 1x and whatever telegram's own menu last
+chose (measured: 1x -> 0.5x -> 1x), and a posted click DID work by hand three times - then stopped
+working, from the app and from the same standalone script that had just succeeded. The difference is
+hover: qt only accepts a press on a widget it already considers hovered, and it worked only while the
+real cursor happened to be over telegram. The seek slider is immune because it handles the press
+straight off the message. So `ToggleSpeed` fires exactly one click (a retry is a second toggle, which
+lands back where it started and leaves the speed somewhere nobody asked for) and then waits for the
+button's own label to confirm - it reports failure honestly rather than lying. No speed CONTROL is
+surfaced on the pill yet, because a button that works only when the cursor is already over telegram is
+the silent no-op `docs/decisions.md` forbids. The reliable route is moving the real cursor, which is a
+decision to raise rather than take.
+
+**Also.** `FindStrip` now tries every visible telegram window instead of the first — telegram keeps other
+visible top-levels around (four `WindowShadow` windows and a 10x1460 sliver turned up mid-session), and
+picking the first made the whole timeline vanish depending on what else was open. New dev hooks:
+`--seek-tg <0..1>` (prints the strip's value before and after, the only proof a posted click landed) and
+`--probe-tg-tree` (every visible telegram window, its sliders and clock-shaped texts — this is what found
+the video surface).
+
+**Settings "Apply does nothing" — not reproduced; the pill applies live.** Measured on the running build:
+writing `general.capture: off` into settings.json had the pill rewrite its `capturable` side-effect file
+within 4s, and restoring it flipped back. `SettingsStore` watches the file AND polls it at 1Hz, so no
+restart is needed by design. One real defect found while reading the panel: `Halo.Settings.Store` loads
+settings.json once at construction and `Apply()` writes its whole `_saved` map back — so a panel left
+open across a pill-side write (pin, scale drag, api token) silently reverts it. Not yet fixed.
+
+
 ## 2026-08-03 (later still 5): telegram gets a REAL bar — read out of its own UI over UIA
 
 **Release 0/0, 712 tests pass (10 new). Deployed (hot-swapped `Halo.App.dll`, pid 21252 alive, no
