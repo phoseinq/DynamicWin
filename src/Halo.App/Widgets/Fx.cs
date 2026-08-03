@@ -38,6 +38,36 @@ internal static class Fx
         return false;
     }
 
+    // A dash inside Persian text loses the space on ONE side. Reported from a live banner, and reproduced
+    // with the same font and format the banner uses: "...mi-bini SP EMDASH SP tirgi..." draws the dash
+    // welded to the following word. The dash is a bidi NEUTRAL, and resolving the neutral run swallows the
+    // whitespace at the direction change. Four fixes were rendered side by side before this one: an ascii
+    // hyphen does not have the problem at all, NBSP on both sides does NOT help, an RLM after the dash does
+    // NOT help, and an RLM on BOTH sides restores both spaces - so the dash gets pinned into the RTL run
+    // from either side. RLM is zero-width, so nothing that measured the original string moves.
+    //
+    // Display only, and only for text that is already RTL: this is the last step before drawing, never
+    // something written back to whatever the string came from.
+    public static string PinRtlDashes(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return s ?? "";
+        if (s.IndexOf(EmDash) < 0 && s.IndexOf(EnDash) < 0) return s;
+        if (!IsRtl(s)) return s;   // latin text lays the same dash out correctly on its own
+        var sb = new System.Text.StringBuilder(s.Length + 8);
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c != EmDash && c != EnDash) { sb.Append(c); continue; }
+            if (i == 0 || s[i - 1] != Rlm) sb.Append(Rlm);
+            sb.Append(c);
+            if (i + 1 >= s.Length || s[i + 1] != Rlm) sb.Append(Rlm);
+        }
+        return sb.ToString();
+    }
+
+    // escapes, not the characters: RLM is INVISIBLE, and a literal one sitting in source is unreviewable
+    private const char EmDash = '\u2014', EnDash = '\u2013', Rlm = '\u200F';
+
     private static readonly ConditionalWeakTable<Bitmap, object> AccentCache = new();
 
     // cached accent of an icon bitmap; near-white/grey icons yield White (callers skip the glow)

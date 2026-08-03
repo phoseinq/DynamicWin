@@ -270,6 +270,12 @@ internal sealed partial class NotchController
     private string? _askDismissed;
     // Where an upward drag on the banner started, or null when no drag is in flight.
     private float? _askSwipeY;
+    // The banner that is on its way OUT. _askT already eases down over 0.30s when the question goes, but
+    // both the size morph and the content branch were gated on `_ask != null` as well - so the frame the
+    // question left, the pill snapped back to a collapsed pill with nothing drawn on it and the ease had
+    // nothing to ease. Reported as "no collapse animation, it just goes". The question is kept here for
+    // exactly as long as the fade, and clicks are NOT routed to it: a banner mid-dismiss must not answer.
+    private PendingAsk? _askGhost;
     private System.Collections.Generic.List<(RectangleF Rect, Halo.ClaudeCode.AskOption Option)> _askChips = [];
     // non-null while a free-text answer is being composed. The question's own options answer with their
     // label; this one answers with whatever is in here, which the hook passes through verbatim.
@@ -1507,8 +1513,11 @@ internal sealed partial class NotchController
             // taller grab while this is up and hand it back when it closes
             LayeredNotch.WantCaptureHeight(_askH);
         }
-        else if (_notif == null) LayeredNotch.WantCaptureHeight(0);
+        // the taller grab strip stays claimed through the fade as well, or the glass under the collapsing
+        // banner is handed back before the banner has finished drawing on it
+        else if (_notif == null && _askGhost == null) LayeredNotch.WantCaptureHeight(0);
         _askT = Math.Clamp(_askT + (_ask != null ? _dt / 0.24f : -_dt / 0.30f), 0f, 1f);
+        if (_askT <= 0f) _askGhost = null;
         if (_ask != null)
         {
             _askHover = -1;
@@ -2078,6 +2087,7 @@ internal sealed partial class NotchController
                     {
                         EndTyping();
                         ClearDraft();
+                        _askGhost = ask;   // answering snapped away just as hard; it folds now too
                         _ask = null;
                         _askHover = -1;
                     }
@@ -2308,7 +2318,7 @@ internal sealed partial class NotchController
         float mini = MiniFade(t);
         // the answerable banner uses the same morph; a toast wins the slot, so this runs only when there
         // is no toast and folds away on its own when the question is answered or expires
-        if (_notif == null && _ask != null && _askT > 0f)
+        if (_notif == null && (_ask ?? _askGhost) != null && _askT > 0f)
         {
             float ea = EaseOutBack(_askT);
             w = (int)Lerp(w, AskBanner.W, ea);
@@ -2415,14 +2425,15 @@ internal sealed partial class NotchController
         // no active widget → bare glass pill (still visible after boot, just a slim tab)
         Action<Graphics, int, int, float> content = _greet != GreetingKind.None
             ? (g, cw, ch, f) => DrawGreeting(g, cw, ch)
-            : _notif == null && _ask is { } q && _askT > 0f
+            : _notif == null && (_ask ?? _askGhost) is { } q && _askT > 0f
             ? (g, cw, ch, f) => AskBanner.Draw(g, cw, ch, f, q, _askHover, tint, _askTyped, _askCloseHover)
             : _notif is { } toast && _notifT > 0f
             ? (g, cw, ch, f) => NotifBanner.Draw(g, cw, ch, f, toast, SmoothStep(_notifDetail), _notifDetailOn)
             : _empty ? static (_, _, _, _) => { } : _widgets[_primary].DrawContent;
         // ...and no pin button on the tray's own surface: it is pinned regardless there, so the button
         // could only lie about what it does.
-        bool pin = _notif == null && _ask == null && _greet == GreetingKind.None && !TrayFront;
+        bool pin = _notif == null && _ask == null && _askGhost == null
+            && _greet == GreetingKind.None && !TrayFront;
         _curW = w;
         _curH = h;
         _notch.OffsetX = _offsetX; // where the pill is parked (drag-to-move)
@@ -2438,7 +2449,7 @@ internal sealed partial class NotchController
         // the backdrop was never composited: tint over nothing. Not a single trace of the app behind it
         // came through, over any wallpaper, at any tint. The fade is for the invisible drop-catch strip,
         // and a banner is the opposite of that - a full surface, with content on it, asking to be read.
-        bool banner = _notif != null || (_ask != null && _askT > 0f);
+        bool banner = _notif != null || ((_ask ?? _askGhost) != null && _askT > 0f);
         float glassFade = _empty && !Privacy.Active && !banner ? 1f - SmoothStep(_shrink) : 1f;
         _notch.Render(w, h, r, tint, fade, mini, glass, frame,
             (g, cw, ch, f) => { content(g, cw, ch, f); if (pin) DrawPin(g, cw, ch, f); if (holdCue > 0.01f) DrawHoldCue(g, cw, ch); },
@@ -2470,6 +2481,7 @@ internal sealed partial class NotchController
     {
         EndTyping();
         _askDismissed = ask.Nonce;
+        _askGhost = ask;
         _ask = null;
         _askHover = -1;
         _askCloseHover = false;

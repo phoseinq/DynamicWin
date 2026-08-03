@@ -347,7 +347,8 @@ internal static class AskBanner
     {
         if (!Fx.IsRtl(text)) { Ink(g, text, f, r, sf, c, a, seeThrough); return; }
         using var rsf = new StringFormat(sf) { FormatFlags = sf.FormatFlags | StringFormatFlags.DirectionRightToLeft };
-        Ink(g, text, f, r, rsf, c, a, seeThrough);
+        // and a dash in that text needs pinning into the RTL run or it eats the space on one side
+        Ink(g, Fx.PinRtlDashes(text), f, r, rsf, c, a, seeThrough);
     }
 
     private static void Ink(Graphics g, string text, Font f, RectangleF r, StringFormat sf, Color c,

@@ -786,9 +786,20 @@ internal static class Program
         var expires = DateTimeOffset.UtcNow.AddSeconds(20);
         var question = new Halo.ClaudeCode.PendingAsk(
             "n1", 100, "sess", "AskUserQuestion", null,
-            // long enough to wrap: the title and the rows size themselves to their text, and a sample that
-            // always fits on one line proves nothing about the thing being verified
-            "Fix the frame cadence first, or the icon nobody can miss?",
+            // Long enough to wrap: the title and the rows size themselves to their text, and a sample that
+            // always fits on one line proves nothing about the thing being verified. Persian, with an EM
+            // DASH between two RTL runs and a latin parenthetical after it, because that is the construct
+            // that was reported wrong from a live banner - the dash lost the space on one side and glued
+            // itself to the next word. A neutral character between RTL runs is the case bidi gets wrong,
+            // so the hook now carries one. Reads "you are seeing this panel on the desktop - how is the
+            // darkness behind it (tint 150)?"
+            "\u062F\u0627\u0631\u06CC \u0647\u0645\u06CC\u0646 "
+                + "\u067E\u0646\u0644 \u0631\u0627 \u0631\u0648\u06CC "
+                + "\u062F\u0633\u06A9\u062A\u0627\u067E "
+                + "\u0645\u06CC\u200C\u0628\u06CC\u0646\u06CC \u2014 "
+                + "\u062A\u06CC\u0631\u06AF\u06CC \u067E\u0634\u062A\u0634 "
+                + "(tint 150) \u0686\u0637\u0648\u0631 "
+                + "\u0627\u0633\u062A\u061F",
             [new Halo.ClaudeCode.AskOption("Cadence", "the CPU one"),
              new Halo.ClaudeCode.AskOption("Icon", "the visible one"),
              new Halo.ClaudeCode.AskOption("Measure more first",

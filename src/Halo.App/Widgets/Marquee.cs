@@ -42,6 +42,10 @@ internal sealed class Marquee
     public void Draw(Graphics g, string text, Font f, Brush b, float x, float y, float w,
         bool hovered, float dt)
     {
+        // Pinned once, up here, so the measure and every draw below run on the SAME string - a dash in
+        // persian text otherwise eats the space on one side of itself, and "artist - title" is the single
+        // most common thing this control is ever handed. RLM is zero-width, so no width moves.
+        text = Fx.PinRtlDashes(text);
         float textW = g.MeasureString(text, f, int.MaxValue, StringFormat.GenericTypographic).Width;
         if (textW <= w)
         {
