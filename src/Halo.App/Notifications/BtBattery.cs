@@ -18,6 +18,15 @@ internal sealed class BtBattery
     private const string NameKey = "System.ItemNameDisplay";
 
     /// <summary>
+    /// The same physical device under two different APIs. The watcher enumerates association
+    /// endpoints, the battery lives on a PnP device object, and the container id is what says the
+    /// two are the same thing -- which is the only reason a reading can be attributed to a device
+    /// rather than to whatever happens to share its name.
+    /// </summary>
+    private const string AepContainerKey = "System.Devices.Aep.ContainerId";
+    private const string PnpContainerKey = "System.Devices.ContainerId";
+
+    /// <summary>
     /// Battery() runs PnpObject.FindAllAsync, which enumerates every device on the machine.
     /// The timer still ticks every minute, but the work behind it is gated on the widget being
     /// genuinely on screen (see the shouldRefresh callback), so an idle desktop pays nothing at
@@ -55,7 +64,8 @@ internal sealed class BtBattery
         try
         {
             string sel = BluetoothDevice.GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus.Connected);
-            _watcher = DeviceInformation.CreateWatcher(sel, new[] { NameKey }, DeviceInformationKind.AssociationEndpoint);
+            _watcher = DeviceInformation.CreateWatcher(sel, new[] { NameKey, AepContainerKey },
+                DeviceInformationKind.AssociationEndpoint);
             _watcher.Added += OnAdded;
             _watcher.Removed += OnRemoved;
             _watcher.Updated += (_, u) => Log($"updated: {u.Id}");
@@ -106,7 +116,9 @@ internal sealed class BtBattery
             // never appeared at all -- and the app starts with Windows, so that was the normal case.
             bool seeded = !_live;
             string name = info.Name?.Length > 0 ? info.Name : UnnamedDevice;
-            await _coord.Added(new BtDevice(info.Id, name, null), flash: !seeded);
+            info.Properties.TryGetValue(AepContainerKey, out var container);
+            await _coord.Added(new BtDevice(info.Id, name, BtBatteryMatch.Normalize(container)),
+                flash: !seeded);
         }
         catch (Exception ex) { Log("added failed: " + ex.Message); }
     }
@@ -127,24 +139,29 @@ internal sealed class BtBattery
         catch (Exception ex) { Log("refresh failed: " + ex.Message); }
     }
 
+    /// <summary>
+    /// Collects every PnP object that publishes a battery level and lets
+    /// <see cref="BtBatteryMatch"/> decide which one is this device's. The choosing is kept out of
+    /// here on purpose: it is the part with a rule worth testing, and this part needs a machine.
+    /// </summary>
     private static async Task<int> Battery(BtDevice dev)
     {
         try
         {
-            var objs = await PnpObject.FindAllAsync(PnpObjectType.Device, new[] { NameKey, BatteryKey });
-            int best = -1;
+            var objs = await PnpObject.FindAllAsync(PnpObjectType.Device,
+                new[] { NameKey, PnpContainerKey, BatteryKey });
+            var sources = new System.Collections.Generic.List<BtBatterySource>();
             foreach (var o in objs)
             {
                 if (!o.Properties.TryGetValue(BatteryKey, out var bv) || bv == null) continue;
                 int pct = bv switch { byte b => b, int i => i, sbyte sb => sb, _ => -1 };
                 if (pct < 0 || pct > 100) continue;
-                if (!o.Properties.TryGetValue(NameKey, out var nv) || nv is not string s) continue;
-                if (string.Equals(s, dev.Name, StringComparison.OrdinalIgnoreCase)) return pct;
-                if (best < 0 && (dev.Name.Contains(s, StringComparison.OrdinalIgnoreCase)
-                    || s.Contains(dev.Name, StringComparison.OrdinalIgnoreCase))) best = pct;
+                o.Properties.TryGetValue(NameKey, out var nv);
+                o.Properties.TryGetValue(PnpContainerKey, out var cv);
+                sources.Add(new BtBatterySource(BtBatteryMatch.Normalize(cv), nv as string ?? "", pct));
             }
-            return best;
+            return BtBatteryMatch.Resolve(dev, sources);
         }
-        catch { return -1; }
+        catch { return BtBatteryMatch.Unknown; }
     }
 }
