@@ -35,58 +35,56 @@ internal sealed class BtWidget : IWidget
     private int _pct;
     private int _glyph = 0xE702;
     private bool _connected;
+    private bool _pctKnown;
     private long _flashUntilMs;
     private long _readAtMs;
     private int _version;
     private float _fillShown = -1f;
     private long _lastDrawnMs;
+    private long _revisionApplied;
 
     /// <summary>
-    /// Show <paramref name="id"/> as the featured device. The id is the identity: two devices
-    /// reporting the same name are different devices, which is why nothing here matches on name.
-    /// <paramref name="flash"/> is false for devices that were already connected at startup —
-    /// they are shown, but they do not deserve to grab focus as if they had just arrived.
+    /// Adopt a coordinator snapshot as the whole state of the pill. The widget keeps no truth the
+    /// coordinator does not have, so there is nothing here that can drift out of step with it.
+    ///
+    /// Snapshots can arrive out of order -- they are produced by async battery reads finishing on
+    /// thread pool threads -- so anything not newer than what is already on screen is dropped.
+    /// That is the last line of defence behind the coordinator's own ticket rule, and it is what
+    /// makes a late completion harmless rather than a device that never goes away.
     /// </summary>
-    public void Connect(string id, string name, int pct, bool flash)
+    public void Apply(Halo.Notifications.BtSnapshot snap)
     {
         lock (_lock)
         {
-            bool isNewDevice = !_connected || !string.Equals(_id, id, StringComparison.Ordinal);
-            _id = id;
-            _name = name;
-            _pct = Math.Clamp(pct, 0, 100);
+            if (snap.Revision <= _revisionApplied) return;
+            _revisionApplied = snap.Revision;
+
+            if (!snap.Connected)
+            {
+                _connected = false;
+                _flashUntilMs = 0;
+                _id = "";
+                _version++;
+                return;
+            }
+
+            bool isNewDevice = !_connected || !string.Equals(_id, snap.Id, StringComparison.Ordinal);
+            _id = snap.Id;
+            _name = snap.Name;
+            _pct = Math.Clamp(snap.Pct, 0, 100);
+            _pctKnown = snap.PctKnown;
             _readAtMs = Environment.TickCount64;
-            _glyph = GlyphFor(name);
+            _glyph = GlyphFor(snap.Name);
             _connected = true;
-            // 0f, not -1f: DrawCollapsed treats a negative as "jump to the final value", and the
-            // ring is supposed to grow from empty to the real charge when a device appears.
-            if (isNewDevice) _fillShown = 0f;
-            _flashUntilMs = isNewDevice && flash ? Environment.TickCount64 + FlashMs : 0;
-            _version++;
-        }
-    }
-
-    /// <summary>Silent battery-level refresh -- no re-flash. Ignored unless it is the featured device.</summary>
-    public void UpdateBattery(string id, int pct)
-    {
-        lock (_lock)
-        {
-            if (!_connected || !string.Equals(_id, id, StringComparison.Ordinal)) return;
-            _pct = Math.Clamp(pct, 0, 100);
-            _readAtMs = Environment.TickCount64;
-            _version++;
-        }
-    }
-
-    /// <summary>Clears the pill. Ignored unless <paramref name="id"/> is the device being shown.</summary>
-    public void Disconnect(string id)
-    {
-        lock (_lock)
-        {
-            if (!_connected || !string.Equals(_id, id, StringComparison.Ordinal)) return;
-            _connected = false;
-            _flashUntilMs = 0;
-            _id = "";
+            if (isNewDevice)
+            {
+                // 0f, not -1f: DrawCollapsed treats a negative as "jump to the final value", and the
+                // ring is supposed to grow from empty to the real charge when a device appears.
+                _fillShown = 0f;
+                // Only a new device may flash. A silent refresh of the device already on screen
+                // must not restart the focus window, or a long-lived device would keep stealing it.
+                _flashUntilMs = snap.Flash ? Environment.TickCount64 + FlashMs : 0;
+            }
             _version++;
         }
     }
@@ -109,8 +107,12 @@ internal sealed class BtWidget : IWidget
         get { lock (_lock) return _connected && Environment.TickCount64 < _flashUntilMs; }
     }
 
-    /// <summary>Whether the battery reading is recent enough to be worth showing as a number.</summary>
-    private bool PctFresh => Environment.TickCount64 - _readAtMs < StaleAfterMs;
+    /// <summary>
+    /// Whether the battery reading is worth showing as a number: one the coordinator could
+    /// actually resolve, and recent enough to still be true. An unresolved reading and a stale
+    /// one are the same thing on screen — unknown — and neither is worth guessing at.
+    /// </summary>
+    private bool PctFresh => _pctKnown && Environment.TickCount64 - _readAtMs < StaleAfterMs;
 
     /// <summary>Whether a background refresh is worth its cost right now.</summary>
     public bool WorthRefreshing

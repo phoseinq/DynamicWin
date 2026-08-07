@@ -284,9 +284,7 @@ internal sealed class NotchController
         _agentNotices = new AgentNoticeCoordinator(_primary);
 
         _bt = new Halo.Notifications.BtBattery(
-            (id, name, pct, flash) => _btWidget.Connect(id, name, pct, flash),
-            id => _btWidget.Disconnect(id),
-            (id, pct) => _btWidget.UpdateBattery(id, pct),
+            snap => _btWidget.Apply(snap),
             () => _btWidget.WorthRefreshing);
         _testTrigger = new System.Threading.Timer(_ => PollTestNotif(), null, 1000, 1000);
 

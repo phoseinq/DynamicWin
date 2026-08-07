@@ -17,6 +17,10 @@
     <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The coordinators worth testing are internal on purpose: they are implementation, not API. -->
+    <InternalsVisibleTo Include="Halo.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="Assets\claude.png" />
     <EmbeddedResource Include="Assets\openai.png" LogicalName="Halo.Assets.openai.png" />
   </ItemGroup>
