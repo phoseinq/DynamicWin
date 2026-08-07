@@ -128,7 +128,7 @@ public class BtCoordinatorTests
     }
 
     [Fact]
-    public async Task ExhaustedHandoff_CannotClearADeviceFeaturedAfterItStarted()
+    public async Task ExhaustedHandoff_CannotTouchADeviceFeaturedAfterItStarted()
     {
         var (coord, reads, published) = Build();
         await Feature(coord, reads, "B", 70);
@@ -137,14 +137,33 @@ public class BtCoordinatorTests
         var handoff = coord.Removed("A");
         await Feature(coord, reads, "C", 60);
 
-        // The only candidate has no readable battery, so the old handoff runs out of options and
-        // would previously have blanked the pill -- taking C with it, and leaving no way back.
+        // The only candidate has no readable battery, so the old handoff runs out of readings and
+        // would fall through to showing it as unknown -- over C, which arrived later and won.
         reads.Complete("B", -1);
         await handoff;
 
         Assert.Equal("C", coord.FeaturedId);
         Assert.DoesNotContain(published, s => !s.Connected);
         Assert.Equal("C", published[^1].Id);
+    }
+
+    [Fact]
+    public void ClearingThePreview_LeavesADeviceThatSupersededItAlone()
+    {
+        var (coord, reads, published) = Build();
+
+        coord.Preview(Dev("halo:bt-test", "AirPods Pro"), 72);
+        // A real device connects and legitimately takes the pill from the preview.
+        var added = coord.Added(Dev("A"), flash: true);
+        reads.Complete("A", 55);
+        Assert.Equal("A", coord.FeaturedId);
+
+        coord.RemovePreview("halo:bt-test");
+
+        // The preview is gone from the connected set, but it was not what was on screen.
+        Assert.Equal("A", coord.FeaturedId);
+        Assert.True(published[^1].Connected);
+        Assert.True(added.IsCompleted);
     }
 
     [Fact]
@@ -191,7 +210,7 @@ public class BtCoordinatorTests
     }
 
     [Fact]
-    public async Task ADeviceWithNoReadableBattery_IsNotFeatured()
+    public async Task ADeviceWithNoReadableBattery_IsStillFeaturedWithTheNumberWithheld()
     {
         var (coord, reads, published) = Build();
 
@@ -200,8 +219,61 @@ public class BtCoordinatorTests
         reads.Complete("A", -1);      // and the retry
         await added;
 
-        Assert.Null(coord.FeaturedId);
-        Assert.Empty(published);
+        Assert.Equal("A", coord.FeaturedId);
+        Assert.True(published[^1].Connected);
+        Assert.False(published[^1].PctKnown);
+    }
+
+    [Fact]
+    public async Task HandoffPrefersACandidateWhoseBatteryCanBeRead()
+    {
+        var (coord, reads, published) = Build();
+        await Feature(coord, reads, "unreadable", 70);
+        await Feature(coord, reads, "readable", 70);
+        await Feature(coord, reads, "A", 80);
+
+        var handoff = coord.Removed("A");
+        reads.Complete("readable", -1);     // most recent candidate, but no reading
+        reads.Complete("unreadable", 45);   // older candidate, readable
+        await handoff;
+
+        Assert.Equal("unreadable", coord.FeaturedId);
+        Assert.Equal(45, published[^1].Pct);
+    }
+
+    [Fact]
+    public async Task HandoffWithNoReadableCandidate_ShowsTheMostRecentOneAsUnknown()
+    {
+        var (coord, reads, published) = Build();
+        await Feature(coord, reads, "older", 70);
+        await Feature(coord, reads, "newer", 70);
+        await Feature(coord, reads, "A", 80);
+
+        var handoff = coord.Removed("A");
+        reads.Complete("newer", -1);
+        reads.Complete("older", -1);
+        await handoff;
+
+        // Devices are still connected, so blanking the pill would be the bigger lie.
+        Assert.Equal("newer", coord.FeaturedId);
+        Assert.True(published[^1].Connected);
+        Assert.False(published[^1].PctKnown);
+    }
+
+    [Fact]
+    public async Task ARefreshThatCannotRead_KeepsTheNumberItAlreadyHas()
+    {
+        var (coord, reads, published) = Build();
+        await Feature(coord, reads, "A", 80);
+        int before = published.Count;
+
+        var refresh = coord.RefreshFeatured();
+        reads.Complete("A", -1);
+        await refresh;
+
+        // One unlucky read is not evidence the battery is gone; staleness handles that.
+        Assert.Equal(before, published.Count);
+        Assert.Equal(80, published[^1].Pct);
     }
 
     [Fact]

@@ -105,9 +105,13 @@ internal sealed class BtCoordinator
             await _delay(_retryAfter);
             pct = await _readBattery(dev);
         }
-        if (pct < 0) { _log?.Invoke($"no battery reading: {dev.Name}"); return; }
+        if (pct < 0) _log?.Invoke($"no battery reading: {dev.Name}");
 
-        if (Commit(ticket, dev.Id, pct, flash)) _log?.Invoke($"featured: {dev.Name} pct={pct}");
+        // A device we cannot read is still a device that is connected. It is featured with the
+        // battery withheld rather than hidden: the pill's job is to say what is attached, and
+        // dropping a phone from the list because it publishes no percentage answers a question
+        // nobody asked. "Unknown" is a state the widget can draw honestly.
+        if (Commit(ticket, dev.Id, pct, flash)) _log?.Invoke($"featured: {dev.Name} pct={Fmt(pct)}");
     }
 
     /// <summary>
@@ -131,6 +135,8 @@ internal sealed class BtCoordinator
             for (int i = _order.Count - 1; i >= 0; i--) candidates.Add(_devices[_order[i]]);
         }
 
+        // A device whose battery can be read is the better thing to hand over to, so every
+        // candidate is tried for a real reading before any of them is shown without one.
         foreach (var cand in candidates)
         {
             // Bail out as soon as a newer selection has taken the pill: continuing would only
@@ -149,6 +155,18 @@ internal sealed class BtCoordinator
             if (Superseded(ticket)) return;
         }
 
+        // Nobody had a reading. Devices are still connected, so going blank would be a worse lie
+        // than an unknown battery: hand over to the most recent one with the number withheld.
+        foreach (var cand in candidates)
+        {
+            if (Superseded(ticket)) return;
+            if (Commit(ticket, cand.Id, BtBatteryMatch.Unknown, flash: false))
+            {
+                _log?.Invoke($"handoff: {cand.Name} pct=unknown");
+                return;
+            }
+        }
+
         Clear(ticket, id);
     }
 
@@ -163,6 +181,9 @@ internal sealed class BtCoordinator
         {
             if (_featuredId is null || !_devices.TryGetValue(_featuredId, out dev)) return;
         }
+        // A failed refresh is not the same as a device with no battery: we had a number a moment
+        // ago, and one unlucky read is not evidence it is gone. The widget already withholds a
+        // reading once it ages past fifteen minutes, which is the honest way to stop trusting it.
         int pct = await _readBattery(dev);
         if (pct < 0) return;
 
@@ -207,6 +228,9 @@ internal sealed class BtCoordinator
 
     private bool Superseded(long ticket) { lock (_lock) return ticket < _committed; }
 
+    /// <summary>Battery level for the log, where a negative reading reads as unknown.</summary>
+    private static string Fmt(int pct) => pct < 0 ? "unknown" : pct.ToString();
+
     /// <summary>
     /// Publishes <paramref name="id"/> as featured, unless a newer selection got there first or the
     /// device stopped existing while its battery was being read. Returns whether it was published.
@@ -220,7 +244,9 @@ internal sealed class BtCoordinator
             if (!_devices.TryGetValue(id, out var dev)) { _log?.Invoke($"vanished during read: {id}"); return false; }
             _featuredId = id;
             _committed = ticket;
-            snap = new BtSnapshot(++_revision, true, id, dev.Name, pct, flash);
+            // Any negative reading is the one unknown, whatever a reader used to signal it.
+            snap = new BtSnapshot(++_revision, true, id, dev.Name,
+                pct < 0 ? BtBatteryMatch.Unknown : pct, flash);
         }
         _publish(snap);
         return true;
